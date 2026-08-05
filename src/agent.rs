@@ -284,6 +284,7 @@ impl Agent {
             let client = self.client.clone();
             let base_url = self.settings.base_url.clone();
             let model = self.settings.model.clone();
+            let api_key = self.settings.api_key.clone();
             if let Some((before, after)) = compact_if_needed_llm(
                 &mut self.messages,
                 self.settings.context_window,
@@ -293,6 +294,7 @@ impl Agent {
                         client.clone(),
                         base_url.clone(),
                         model.clone(),
+                        api_key.clone(),
                         middle,
                     ))
                 },
@@ -918,6 +920,7 @@ async fn summarize_request(
     client: reqwest::Client,
     base_url: String,
     model: String,
+    api_key: Option<String>,
     middle: Vec<ChatMessage>,
 ) -> Option<String> {
     let prompt = format!(
@@ -943,7 +946,11 @@ async fn summarize_request(
         "stream": false
     });
 
-    let resp = client.post(&url).json(&body).send().await.ok()?;
+    let mut req = client.post(&url).json(&body);
+    if let Some(key) = &api_key {
+        req = req.header("Authorization", format!("Bearer {key}"));
+    }
+    let resp = req.send().await.ok()?;
     if !resp.status().is_success() {
         return None;
     }
