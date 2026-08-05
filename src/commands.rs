@@ -82,6 +82,12 @@ pub fn commands() -> Vec<CommandSpec> {
             summary: "Quit Raven",
             arg_help: None,
         },
+        CommandSpec {
+            name: "undo",
+            aliases: &["u"],
+            summary: "Undo the last commit, keeping changes in the working tree",
+            arg_help: None,
+        },
     ]
 }
 
@@ -212,6 +218,13 @@ mod tests {
         assert_eq!(parse("/stop").unwrap().name, "stop");
         assert_eq!(parse("/s").unwrap().name, "stop");
         assert!(help_text().contains("/stop"), "help should list /stop");
+    }
+
+    #[test]
+    fn undo_command_registered() {
+        assert_eq!(parse("/undo").unwrap().name, "undo");
+        assert_eq!(parse("/u").unwrap().name, "undo");
+        assert!(help_text().contains("/undo"), "help should list /undo");
     }
 
     #[test]

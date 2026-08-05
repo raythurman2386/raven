@@ -438,6 +438,69 @@ impl Sandbox {
         Ok(out)
     }
 
+    // ── Git write tools (mutating) ─────────────────────────────────────
+
+    /// Stage all changes and create a commit. Used by the agent to checkpoint
+    /// its own work. Returns the new HEAD line.
+    pub fn git_commit(&self, message: &str) -> Result<String> {
+        let msg = message.trim();
+        if msg.is_empty() {
+            return Ok("Error: empty commit message".into());
+        }
+        if !self.is_git_repo()? {
+            return Ok("Error: not a git repository (no .git found)".into());
+        }
+        // Check there's something to commit. `run_git` on empty output returns
+        // "exit=0", so a clean tree shows that instead of the porcelain text.
+        let porcelain = self.run_git(&["status", "--porcelain=v1"])?;
+        if porcelain == "exit=0" || porcelain.trim().is_empty() {
+            return Ok("No changes to commit (working tree clean)".into());
+        }
+        let _ = self.run_git(&["add", "-A"])?;
+        let commit_out = self.run_git(&["commit", "-m", msg])?;
+        if commit_out.contains("fatal") || commit_out.contains("Error") {
+            return Ok(commit_out);
+        }
+        self.git_log(1)
+    }
+
+    /// Undo the last commit, keeping changes in the working tree
+    /// (`git reset --soft HEAD~1`). Non-destructive: nothing is lost.
+    pub fn git_undo(&self) -> Result<String> {
+        if !self.is_git_repo()? {
+            return Ok("Error: not a git repository (no .git found)".into());
+        }
+        // `git rev-list --count HEAD` prints "fatal: ..." when there are no
+        // commits, so detect an empty history that way.
+        let count = self.run_git(&["rev-list", "--count", "HEAD"])?;
+        if count.contains("fatal") {
+            return Ok("No commits to undo".into());
+        }
+        let out = self.run_git(&["reset", "--soft", "HEAD~1"])?;
+        if out.contains("fatal") || out.starts_with("exit=") {
+            return Ok(out);
+        }
+        Ok(format!(
+            "Undid the last commit; changes are back in the working tree.\n{}",
+            self.git_status()?
+        ))
+    }
+
+    fn is_git_repo(&self) -> Result<bool> {
+        // `git rev-parse --is-inside-work-tree` is 0 when inside a repo.
+        let mut child = Command::new("git")
+            .args(["rev-parse", "--is-inside-work-tree"])
+            .current_dir(&self.workspace)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .context("spawn git")?;
+        match wait_for_child(&mut child, 30) {
+            Some((status, _, _)) => Ok(status.success()),
+            None => Ok(false),
+        }
+    }
+
     fn run_git(&self, args: &[&str]) -> Result<String> {
         // Git is a blocking subprocess and can hang (credential prompts,
         // network-FS stalls, large history), so bound it with a timeout.
@@ -1144,6 +1207,20 @@ pub fn tool_definitions() -> serde_json::Value {
                     "required": ["query"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "git_commit",
+                "description": "Stage all changes and create a git commit. Use to checkpoint your work when you've finished a coherent unit. Requires a non-empty commit message.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "message": { "type": "string", "description": "Commit message describing the change" }
+                    },
+                    "required": ["message"]
+                }
+            }
         }
     ])
 }
@@ -1323,6 +1400,10 @@ pub fn dispatch(sandbox: &Sandbox, name: &str, args: &serde_json::Value) -> Stri
         "memory_search" => {
             let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
             Ok(crate::memory::search_memory(&sandbox.workspace, query))
+        }
+        "git_commit" => {
+            let message = args.get("message").and_then(|v| v.as_str()).unwrap_or("");
+            sandbox.git_commit(message)
         }
         other => Ok(format!("Unknown tool: {}", other)),
     };
@@ -1967,6 +2048,113 @@ mod tests {
         assert!(
             !plan_names.iter().any(|n| n == "ask_user"),
             "ask_user is interactive and must not be advertised during planning"
+        );
+    }
+
+    /// Initialize a throwaway git repo and return a Sandbox for it.
+    fn git_sandbox() -> (tempfile::TempDir, Sandbox) {
+        let tmp = tempfile::tempdir().unwrap();
+        let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
+        sb.run_shell(
+            "git init -q && git config user.email test@test && git config user.name test",
+            20,
+        )
+        .unwrap();
+        (tmp, sb)
+    }
+
+    #[test]
+    fn git_commit_stages_and_commits_changes() {
+        let (_tmp, sb) = git_sandbox();
+        sb.write_file("a.txt", "v1").unwrap();
+        let out = sb.git_commit("add a.txt").unwrap();
+        assert!(!out.contains("Error"), "commit should succeed: {out}");
+        assert!(!out.contains("No changes"), "should have committed");
+        // Log shows the new commit.
+        let log = sb.git_log(5).unwrap();
+        assert!(log.contains("add a.txt"), "commit in log: {log}");
+    }
+
+    #[test]
+    fn git_commit_no_changes_returns_message() {
+        let (_tmp, sb) = git_sandbox();
+        sb.write_file("a.txt", "v1").unwrap();
+        sb.git_commit("first").unwrap();
+        let out = sb.git_commit("again").unwrap();
+        assert!(out.contains("No changes"), "clean tree: {out}");
+    }
+
+    #[test]
+    fn git_commit_empty_message_errors() {
+        let (_tmp, sb) = git_sandbox();
+        let out = sb.git_commit("   ").unwrap();
+        assert!(out.contains("empty commit message"));
+    }
+
+    #[test]
+    fn git_commit_not_a_repo_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
+        let out = sb.git_commit("msg").unwrap();
+        assert!(out.contains("not a git repository"), "{out}");
+    }
+
+    #[test]
+    fn git_undo_restores_changes_to_working_tree() {
+        let (_tmp, sb) = git_sandbox();
+        // Need a parent commit so HEAD~1 exists.
+        sb.write_file("base.txt", "base").unwrap();
+        sb.git_commit("init").unwrap();
+        sb.write_file("a.txt", "v1").unwrap();
+        sb.git_commit("add a.txt").unwrap();
+        assert!(sb.git_log(5).unwrap().contains("add a.txt"));
+        let out = sb.git_undo().unwrap();
+        assert!(!out.contains("Error"), "undo should succeed: {out}");
+        // Commit gone, file still present in working tree.
+        assert!(!sb.git_log(5).unwrap().contains("add a.txt"));
+        assert!(sb.git_status().unwrap().contains("a.txt"));
+    }
+
+    #[test]
+    fn git_undo_no_commits_returns_message() {
+        let (_tmp, sb) = git_sandbox();
+        let out = sb.git_undo().unwrap();
+        assert!(out.contains("No commits to undo"), "{out}");
+    }
+
+    #[test]
+    fn git_commit_in_full_toolset_not_plan_toolset() {
+        let full = tool_definitions();
+        let full_names: Vec<String> = full
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| {
+                t.get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(|n| n.as_str())
+                    .map(str::to_string)
+            })
+            .collect();
+        assert!(
+            full_names.iter().any(|n| n == "git_commit"),
+            "full toolset should include git_commit, got {full_names:?}"
+        );
+        let plan = plan_tool_definitions();
+        let plan_names: Vec<String> = plan
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| {
+                t.get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(|n| n.as_str())
+                    .map(str::to_string)
+            })
+            .collect();
+        assert!(
+            !plan_names.iter().any(|n| n == "git_commit"),
+            "git_commit is mutating and must not be advertised during planning"
         );
     }
 }

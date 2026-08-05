@@ -211,6 +211,17 @@ Grok Build uses indexed keyword + vector search; a mini harness gets the
 high-value subset with a dependency-light keyword scan of the single memory
 file. Read-only and available during planning.
 
+### Git checkpointing (`git_commit`) and `/undo`
+
+The agent can checkpoint its own work with `git_commit(message)`, which stages
+all changes (`git add -A`) and commits them. It only appears in the **full**
+toolset — never during planning, since it mutates the repo.
+
+To step back from the last commit, use the `/undo` (or `/u`) slash command in
+the TUI. It runs `git reset --soft HEAD~1`, which undoes the commit while
+**keeping all changes in the working tree** — nothing is lost, and you can
+re-commit once the agent's next move is clearer.
+
 ### TUI limitations
 
 - Each submission spawns a **fresh agent** — conversation history is not carried across turns.

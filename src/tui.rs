@@ -1239,6 +1239,15 @@ fn dispatch_slash_command(
         "quit" => {
             *quit = true;
         }
+        "undo" => {
+            // Undo the last commit (non-destructive: `reset --soft HEAD~1`).
+            let sandbox = crate::tools::Sandbox::new(settings.workspace.clone());
+            match sandbox.git_undo() {
+                Ok(out) => log.push(LogEntry::system(out)),
+                Err(e) => log.push(LogEntry::system(format!("undo failed: {e}"))),
+            }
+            *log_dirty = true;
+        }
         _ => {
             // Unknown command — surface a helpful message.
             log.push(LogEntry::system(format!(
