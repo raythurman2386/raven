@@ -260,7 +260,7 @@ correct (one per turn, never per-iteration).
 4. Keep the `rust-llm-agent-harness` skill in lockstep (patch after each phase).
 
 **Phase status:**
-- [ ] Phase 1 — Permission gate + AskUser
+- [x] Phase 1 — Permission gate + AskUser
 - [ ] Phase 2 — Web search + fetch
 - [ ] Phase 3 — Skills system
 - [ ] Phase 4 — Repo symbol map
