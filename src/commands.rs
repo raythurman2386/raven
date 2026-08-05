@@ -65,6 +65,12 @@ pub fn commands() -> Vec<CommandSpec> {
             arg_help: None,
         },
         CommandSpec {
+            name: "stop",
+            aliases: &["s"],
+            summary: "Interrupt the running task",
+            arg_help: None,
+        },
+        CommandSpec {
             name: "model",
             aliases: &["m"],
             summary: "Switch the model for subsequent turns: /model <name>",
@@ -199,6 +205,13 @@ mod tests {
         // /help model works
         let h = command_help("model").expect("/model has help");
         assert!(h.contains("Switch the model"), "help text: {h}");
+    }
+
+    #[test]
+    fn stop_command_registered() {
+        assert_eq!(parse("/stop").unwrap().name, "stop");
+        assert_eq!(parse("/s").unwrap().name, "stop");
+        assert!(help_text().contains("/stop"), "help should list /stop");
     }
 
     #[test]

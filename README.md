@@ -182,7 +182,7 @@ All writes are atomic (temp file + rename). Use `--resume` to continue a previou
 ## Testing
 
 ```bash
-cargo test                    # 119 tests, all offline
+cargo test                    # 121 tests, all offline
 cargo clippy                  # zero warnings
 cargo clippy -- -W clippy::pedantic  # stricter linting
 ```

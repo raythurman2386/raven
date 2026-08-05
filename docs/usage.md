@@ -131,7 +131,18 @@ host. Type one and press `Enter`; `/help` lists everything.
 | `/new` | `/n` | Save the current session and start a fresh one |
 | `/clear` | `/c` | Clear the on-screen log (history preserved) |
 | `/model <name>` | `/m` | Switch the model for subsequent turns |
+| `/stop` | `/s` | Interrupt the running task |
 | `/quit` | `/q`, `/exit` | Quit Raven |
+
+### Interrupting and steering
+
+While a task is running you can still type:
+
+- `/stop` (or `/s`) aborts the current turn immediately.
+- Any non-command text followed by `Enter` **steers**: it interrupts the
+  current turn and starts a new one with that instruction appended to the
+  session, so the agent redirects with full context instead of losing the
+  conversation.
 
 The command registry lives in `src/commands.rs`; adding a command is one
 registry entry plus one TUI dispatch arm, and it auto-appears in `/help`.

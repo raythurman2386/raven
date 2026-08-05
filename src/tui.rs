@@ -459,7 +459,7 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
                             }
                         }
                         KeyCode::Enter => {
-                            if running || input.trim().is_empty() {
+                            if input.trim().is_empty() {
                                 continue;
                             }
                             let text = input.trim().to_string();
@@ -470,8 +470,8 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
                             turn_tool_count = 0;
                             live_tool = None;
 
-                            // Slash commands take precedence over plan-response
-                            // and normal task submission.
+                            // Slash commands take precedence. While a task is
+                            // running they are still honoured (e.g. /stop).
                             if let Some(pc) = commands::parse(&text) {
                                 dispatch_slash_command(
                                     &pc,
@@ -485,10 +485,41 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
                                     &mut agent_state,
                                     &mut status,
                                     &mut assistant_text,
+                                    &mut live_tool,
                                     &mut session_messages,
                                     &store,
                                     &mut session,
+                                    &mut task_handle,
                                     &mut quit,
+                                )?;
+                                continue;
+                            }
+
+                            // If a task is running, non-command text is a
+                            // STEER: interrupt the current turn and start a new
+                            // one with this instruction appended to the session
+                            // so the agent redirects with full context.
+                            if running {
+                                if let Some(handle) = task_handle.take() {
+                                    handle.abort();
+                                }
+                                log.push(LogEntry::system("⏸ interrupted — redirecting…"));
+                                log_dirty = true;
+                                start_task(
+                                    &text,
+                                    plan_first,
+                                    &settings,
+                                    &mut log,
+                                    &mut log_dirty,
+                                    &mut running,
+                                    &mut agent_state,
+                                    &mut status,
+                                    &mut assistant_text,
+                                    &mut session_messages,
+                                    &store,
+                                    &session,
+                                    &mut task_handle,
+                                    tx.clone(),
                                 )?;
                                 continue;
                             }
@@ -1041,9 +1072,11 @@ fn dispatch_slash_command(
     agent_state: &mut AgentState,
     status: &mut String,
     assistant_text: &mut String,
+    live_tool: &mut Option<String>,
     session_messages: &mut Vec<ChatMessage>,
     store: &SessionStore,
     session: &mut crate::session::Session,
+    task_handle: &mut Option<tokio::task::JoinHandle<anyhow::Result<Vec<ChatMessage>>>>,
     quit: &mut bool,
 ) -> Result<bool> {
     match pc.name.as_str() {
@@ -1095,6 +1128,22 @@ fn dispatch_slash_command(
         "clear" => {
             log.clear();
             *log_dirty = true;
+        }
+        "stop" => {
+            // Interrupt the running task by aborting its spawned future.
+            if let Some(handle) = task_handle.take() {
+                handle.abort();
+                log.push(LogEntry::system("⏹ stopped"));
+                *log_dirty = true;
+            } else {
+                log.push(LogEntry::system("nothing running to stop"));
+                *log_dirty = true;
+            }
+            *running = false;
+            *agent_state = AgentState::Idle;
+            *status = "ready".into();
+            assistant_text.clear();
+            *live_tool = None;
         }
         "model" => {
             let name = pc.args.trim();
