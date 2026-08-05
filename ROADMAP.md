@@ -268,4 +268,7 @@ correct (one per turn, never per-iteration).
 - [x] Phase 6 — Git auto-commit + /undo
 - [x] Phase 7 — LLM structured compaction
 - [x] Phase 8 — Auto-lint + reflection
-- [ ] Phase 9 — Session durability + flush-on-stop
+- [x] Phase 9 — Session durability + flush-on-stop
+
+**All 9 phases complete.** The mini-harness rework against Grok Build is done;
+remaining ideas are documented under "Deferred (YAGNI)" above.
