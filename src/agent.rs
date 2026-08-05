@@ -151,6 +151,11 @@ pub struct Agent {
     /// Set for the plan-proposal turn; cleared for execution.
     plan_only: bool,
     client: reqwest::Client,
+    /// Holds lint feedback to surface as a reminder on the *next* request,
+    /// set after a turn that edited files (write_file/search_replace/apply_patch).
+    /// Kept out of `self.messages` so the persisted conversation stays a clean
+    /// `[system, user, assistant, tool, ...]` alternation.
+    pending_lint: Option<String>,
 }
 
 impl Agent {
@@ -201,6 +206,7 @@ impl Agent {
             messages,
             tool_cache: HashMap::new(),
             plan_only: false,
+            pending_lint: None,
             client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(300))
                 .build()
@@ -265,12 +271,17 @@ impl Agent {
         for iter in 0..self.settings.max_iterations {
             let _ = tx.send(AgentEvent::Iteration(iter + 1)).await;
             let t_iter = std::time::Instant::now();
+            // True if this turn's tools edited files, triggering a lint pass.
+            let mut edited = false;
 
             // Reminders for the *next* request only. These are appended to the
             // outgoing request body, NOT to `self.messages`, so the persisted
             // conversation stays a strict `[system, user, assistant, tool, ...]`
             // alternation that compaction and session persistence can rely on.
-            let reminders = compute_reminders(&self.messages, iter);
+            let mut reminders = compute_reminders(&self.messages, iter);
+            if let Some(lint) = self.pending_lint.take() {
+                reminders.push(lint);
+            }
 
             // Compaction: if estimated history tokens exceed the soft limit,
             // summarize the middle turns with the model (falling back to the
@@ -599,6 +610,14 @@ impl Agent {
                 let id = tc.id.clone();
                 let cache_key = format!("{}:{}", name, tc.function.arguments);
 
+                // Track file-editing tools so we can auto-lint after this turn.
+                if matches!(
+                    name.as_str(),
+                    "write_file" | "search_replace" | "apply_patch"
+                ) {
+                    edited = true;
+                }
+
                 // Check cache for read-only tools
                 let is_read_only = matches!(
                     name.as_str(),
@@ -677,6 +696,28 @@ impl Agent {
                     tool_calls: None,
                     tool_call_id: Some(id),
                 });
+            }
+
+            // Auto-lint reflection: if this turn edited files, run the
+            // project's linter (off the blocking pool) and stash the feedback
+            // so the *next* request gets it as an ephemeral reminder — the
+            // model can then self-correct before the user sees the damage.
+            if edited && !self.plan_only {
+                let sandbox = self.sandbox.clone();
+                let lint = tokio::task::spawn_blocking(move || sandbox.run_lint())
+                    .await
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| r.map_err(|e| e.to_string()))
+                    .unwrap_or_else(|e| format!("Error running linter: {e}"));
+                // Only surface as a reflection reminder when lint found problems
+                // (non-zero exit or error text), not on a clean pass.
+                let has_problems =
+                    (lint.contains("exit=") && !lint.contains("exit=0")) || lint.contains("Error");
+                if has_problems {
+                    self.pending_lint = Some(format!(
+                        "Lint found problems after your edits — fix them:\n{lint}"
+                    ));
+                }
             }
             // Loop continues so the model can react to tool results
         }

@@ -619,6 +619,56 @@ impl Sandbox {
             None => Ok("Error: test runner timed out".into()),
         }
     }
+
+    /// Auto-detect and run the project's linter / type checker.
+    ///
+    /// Non-mutating: reports problems without fixing them. Prefers the fastest
+    /// check per ecosystem: `cargo clippy` for Rust, `tsc --noEmit` for
+    /// TypeScript, `eslint` for plain JS, `pytest --collect-only` is avoided
+    /// (that's a test, not a lint) — plain Python uses `python -m py_compile`.
+    pub fn run_lint(&self) -> Result<String> {
+        let has = |name: &str| self.workspace.join(name).exists();
+        let (cmd, args): (&str, Vec<&str>) = if has("Cargo.toml") {
+            (
+                "cargo",
+                vec!["clippy", "--all-targets", "--", "-D", "warnings"],
+            )
+        } else if has("tsconfig.json") {
+            // TypeScript strict type-check (non-emitting).
+            ("npx", vec!["tsc", "--noEmit", "-p", "tsconfig.json"])
+        } else if has("package.json") {
+            // Prefer an npm lint script; else eslint on the dir.
+            ("npx", vec!["eslint", "."])
+        } else if has("pyproject.toml") || has("pytest.ini") || has("setup.py") {
+            // Recursively syntax-check all Python files without executing them.
+            ("python", vec!["-m", "compileall", "-q", "."])
+        } else {
+            return Ok("No linter detected (no Cargo.toml, tsconfig.json, package.json, or Python config found)".into());
+        };
+
+        let mut child = Command::new(cmd)
+            .args(&args)
+            .current_dir(&self.workspace)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .context("spawn linter")?;
+        match wait_for_child(&mut child, 600) {
+            Some((status, stdout, stderr)) => {
+                let mut out = format!(
+                    "--- run_lint ({}) exit={} ---\n",
+                    cmd,
+                    status.code().unwrap_or(-1)
+                );
+                out.push_str(&String::from_utf8_lossy(&stdout));
+                if !stderr.is_empty() {
+                    out.push_str(&String::from_utf8_lossy(&stderr));
+                }
+                Ok(cap_output(out))
+            }
+            None => Ok("Error: linter timed out".into()),
+        }
+    }
 }
 
 /// Truncate output to max chars with a clear marker.
@@ -1221,6 +1271,17 @@ pub fn tool_definitions() -> serde_json::Value {
                     "required": ["message"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "run_lint",
+                "description": "Auto-detect and run the project's linter or type checker (cargo clippy for Rust, tsc for TypeScript, eslint for JS, compileall for Python). Reports problems without fixing them. Run after editing to catch issues.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {}
+                }
+            }
         }
     ])
 }
@@ -1389,6 +1450,7 @@ pub fn dispatch(sandbox: &Sandbox, name: &str, args: &serde_json::Value) -> Stri
             sandbox.apply_patch(patch)
         }
         "run_tests" => sandbox.run_tests(),
+        "run_lint" => sandbox.run_lint(),
         "skill_search" => {
             let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
             Ok(crate::skills::search(&sandbox.workspace, query))
@@ -2156,5 +2218,87 @@ mod tests {
             !plan_names.iter().any(|n| n == "git_commit"),
             "git_commit is mutating and must not be advertised during planning"
         );
+    }
+
+    #[test]
+    fn run_lint_no_project_returns_message() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
+        let out = sb.run_lint().unwrap();
+        assert!(out.contains("No linter detected"), "{out}");
+    }
+
+    #[test]
+    fn run_lint_cargo_project_runs_clippy() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname=\"x\"\nversion=\"0.1.0\"\n",
+        )
+        .unwrap();
+        let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
+        let out = sb.run_lint().unwrap();
+        assert!(
+            out.contains("--- run_lint (cargo)"),
+            "should invoke cargo: {out}"
+        );
+    }
+
+    #[test]
+    fn run_lint_python_project_runs_compileall() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("pyproject.toml"), "[project]\nname=\"x\"\n").unwrap();
+        let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
+        let out = sb.run_lint().unwrap();
+        assert!(
+            out.contains("python"),
+            "should run python compileall: {out}"
+        );
+    }
+
+    #[test]
+    fn run_lint_in_full_toolset() {
+        let full = tool_definitions();
+        let full_names: Vec<String> = full
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| {
+                t.get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(|n| n.as_str())
+                    .map(str::to_string)
+            })
+            .collect();
+        assert!(
+            full_names.iter().any(|n| n == "run_lint"),
+            "full toolset should include run_lint, got {full_names:?}"
+        );
+        // run_lint runs commands — it must NOT be in the read-only plan toolset.
+        let plan = plan_tool_definitions();
+        let plan_names: Vec<String> = plan
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| {
+                t.get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(|n| n.as_str())
+                    .map(str::to_string)
+            })
+            .collect();
+        assert!(
+            !plan_names.iter().any(|n| n == "run_lint"),
+            "run_lint runs commands and must not be advertised during planning"
+        );
+    }
+
+    #[test]
+    fn dispatch_run_lint_on_cargo_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("Cargo.toml"), "[package]\n").unwrap();
+        let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
+        let out = dispatch(&sb, "run_lint", &serde_json::json!({}));
+        assert!(out.contains("--- run_lint (cargo)"), "{out}");
     }
 }

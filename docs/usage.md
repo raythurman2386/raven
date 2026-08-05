@@ -232,6 +232,15 @@ and tool-call/tool-result pairs are never split. If the summarization request
 fails, Raven falls back to the extractive summarizer so compaction always
 proceeds.
 
+### Auto-lint reflection (`run_lint`)
+
+The agent has a `run_lint` tool (auto-detects `cargo clippy` / `tsc` /
+`eslint` / Python `compileall` and reports problems without fixing them). After
+a turn that edited files (`write_file`/`search_replace`/`apply_patch`), Raven
+automatically runs the linter and feeds any errors back to the model as a
+reminder on the *next* request — so the agent self-corrects before you see the
+damage. On a clean lint pass nothing is injected, keeping the loop quiet.
+
 ### TUI limitations
 
 - Each submission spawns a **fresh agent** — conversation history is not carried across turns.

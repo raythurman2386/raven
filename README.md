@@ -11,7 +11,7 @@ A **privacy-first** local coding-agent harness written in Rust for [Ollama](http
 | In scope | Intentionally out of scope |
 |---|---|
 | Streaming agent loop (OpenAI-compatible `/v1/chat/completions`) | MCP server marketplace |
-| 21 tools: `list_dir`, `read_file`, `search_replace`, `write_file`, `grep`, `run_shell`, `search_code`, `todo_write`, `memory_update`, `memory_search`, `git_status`, `git_diff`, `git_log`, `git_commit`, `apply_patch`, `run_tests`, `ask_user`, `web_search`, `web_fetch`, `skill_search`, `skill_load` | MCP server marketplace |
+| 22 tools: `list_dir`, `read_file`, `search_replace`, `write_file`, `grep`, `run_shell`, `search_code`, `todo_write`, `memory_update`, `memory_search`, `git_status`, `git_diff`, `git_log`, `git_commit`, `apply_patch`, `run_tests`, `run_lint`, `ask_user`, `web_search`, `web_fetch`, `skill_search`, `skill_load` | MCP server marketplace |
 | Workspace sandbox (path confinement + dangerous-command filter) | OS-level kernel sandbox (Landlock/seccomp) |
 | Structured plan mode (parse → approve → revise → execute) | Worktree isolation |
 | Skills (`SKILL.md` discovery + `skill_search`/`skill_load`) | Rhai workflow engine |
