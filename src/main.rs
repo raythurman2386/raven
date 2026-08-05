@@ -37,6 +37,7 @@ mod context;
 mod error;
 mod memory;
 mod plan;
+mod repomap;
 mod session;
 mod skills;
 mod tokenizer;

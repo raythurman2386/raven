@@ -193,6 +193,15 @@ description) and load one into context with `skill_load`, which returns the
 body wrapped in a `<skill>` envelope. Both are read-only and available during
 planning.
 
+### Repo symbol map (`<repo_map>`)
+
+For large workspaces (≥50 source files) Raven injects a compact `<repo_map>`
+into the system prompt: a list of `symbol — path:line` declarations extracted
+via per-language regex (fn/struct/enum/impl/class/function/etc.). This lets
+the agent know the codebase structure up front instead of burning turns
+listing and reading files. Small workspaces skip the map, and its output is
+capped at ~2K chars.
+
 ### TUI limitations
 
 - Each submission spawns a **fresh agent** — conversation history is not carried across turns.

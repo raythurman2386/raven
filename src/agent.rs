@@ -167,6 +167,11 @@ impl Agent {
             "\n\nWorkspace root: {}\n",
             settings.workspace.display()
         ));
+        if let Some(map) = crate::repomap::build_map(&settings.workspace) {
+            system.push('\n');
+            system.push_str(&map);
+            system.push('\n');
+        }
         let agents = load_agents_md(&settings.workspace);
         if !agents.is_empty() {
             system.push_str("\n--- Project instructions (AGENTS.md) ---\n");

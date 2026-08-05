@@ -15,7 +15,8 @@ A **privacy-first** local coding-agent harness written in Rust for [Ollama](http
 | Workspace sandbox (path confinement + dangerous-command filter) | OS-level kernel sandbox (Landlock/seccomp) |
 | Structured plan mode (parse → approve → revise → execute) | Worktree isolation |
 | Skills (`SKILL.md` discovery + `skill_search`/`skill_load`) | Rhai workflow engine |
-| Parallel tool execution within a single model turn | GUI / web frontend |
+| Repo symbol map (`<repo_map>` injected for large workspaces) | GUI / web frontend |
+| Parallel tool execution within a single model turn | Telemetry / usage tracking |
 | Pure-Rust BPE tokenizer for accurate token/context counting | Multi-model routing |
 | Context-window inference + automatic compaction (tool-result pruning) | Remote config sync |
 | JSONL session persistence (`--resume`, `--list-sessions`) | Telemetry / usage tracking |
