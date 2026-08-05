@@ -368,6 +368,9 @@ async fn headless_run(
 
     // Collect assistant text for plan parsing
     let mut assistant_text = String::new();
+    // True when the plan-proposal turn ended via exit_plan_mode (PlanReady),
+    // meaning the model signalled completion and we should auto-execute.
+    let mut plan_ready = false;
 
     let runner = tokio::spawn(async move {
         agent.run(&prompt, tx).await?;
@@ -406,6 +409,10 @@ async fn headless_run(
             AgentEvent::Retry { attempt, delay_ms } => {
                 eprintln!("[retry {}/3 in {}ms]", attempt, delay_ms);
             }
+            AgentEvent::PlanReady => {
+                plan_ready = true;
+                break;
+            }
             AgentEvent::Done => break,
             AgentEvent::Error(e) => {
                 eprintln!("\nError: {}", e);
@@ -422,74 +429,85 @@ async fn headless_run(
     if plan_first {
         let plan = plan::parse_plan(&assistant_text);
         println!("\n{}", plan::format_plan(&plan));
-        println!("── Approve? [Y]es / [n]o / [r]evise ──");
 
-        let mut line = String::new();
-        std::io::stdin().read_line(&mut line)?;
-        let low = line.trim().to_lowercase();
-
-        match low.as_str() {
-            "" | "y" | "yes" | "ok" | "approve" => {
-                // Approved — continue with the same conversation (already in memory)
-            }
-            "n" | "no" | "abort" | "q" | "quit" => {
-                println!("Aborted.");
-                return Ok(());
-            }
-            _ => {
-                // Revise — send feedback as a new user message
-                let feedback = format!("Revise the plan based on this feedback:\n{}", line.trim());
-                let mut agent = Agent::with_messages(
-                    settings.clone(),
-                    first_messages.clone().unwrap_or_default(),
-                )?
-                .plan_only();
-
-                // Save the revision prompt
-                let rev_msg = ChatMessage {
-                    role: "user".into(),
-                    content: Some(feedback.clone()),
-                    tool_calls: None,
-                    tool_call_id: None,
-                };
-                store.append_message(&session, &rev_msg)?;
-
-                let (tx2, mut rx2) = mpsc::channel::<AgentEvent>(64);
-                let mut rev_text = String::new();
-                let runner2 = tokio::spawn(async move {
-                    agent.run(&feedback, tx2).await?;
-                    Ok::<_, anyhow::Error>(agent.messages)
-                });
-                while let Some(ev) = rx2.recv().await {
-                    match ev {
-                        AgentEvent::TextDelta(t) => {
-                            rev_text.push_str(&t);
-                            print!("{}", t);
-                            let _ = std::io::Write::flush(&mut std::io::stdout());
-                        }
-                        AgentEvent::Done => break,
-                        AgentEvent::Error(e) => {
-                            eprintln!("\nError: {}", e);
-                            break;
-                        }
-                        _ => {}
-                    }
+        // Model-driven: if the plan turn ended via exit_plan_mode, auto-proceed
+        // to execution without a human gate. Otherwise prompt.
+        if !plan_ready {
+            println!("── Approve? [Y]es / [n]o / [r]evise ──");
+            let mut line = String::new();
+            std::io::stdin().read_line(&mut line)?;
+            let low = line.trim().to_lowercase();
+            match low.as_str() {
+                "" | "y" | "yes" | "ok" | "approve" => {
+                    // Approved — fall through to execution.
                 }
-                let rev_messages = runner2.await.ok().and_then(|r| r.ok());
-                if let Some(ref msgs) = rev_messages {
-                    save_session_messages(&store, &mut session, msgs, task)?;
-                }
-
-                // Show revised plan and ask again
-                let revised = plan::parse_plan(&rev_text);
-                println!("\n{}", plan::format_plan(&revised));
-                println!("── Approve? [Y]es / [n]o ──");
-                let mut line2 = String::new();
-                std::io::stdin().read_line(&mut line2)?;
-                let low2 = line2.trim().to_lowercase();
-                if !(low2.is_empty() || low2 == "y" || low2 == "yes" || low2 == "ok") {
+                "n" | "no" | "abort" | "q" | "quit" => {
                     println!("Aborted.");
                     return Ok(());
+                }
+                _ => {
+                    // Revise — send feedback as a new user message
+                    let feedback =
+                        format!("Revise the plan based on this feedback:\n{}", line.trim());
+                    let mut agent = Agent::with_messages(
+                        settings.clone(),
+                        first_messages.clone().unwrap_or_default(),
+                    )?
+                    .plan_only();
+
+                    // Save the revision prompt
+                    let rev_msg = ChatMessage {
+                        role: "user".into(),
+                        content: Some(feedback.clone()),
+                        tool_calls: None,
+                        tool_call_id: None,
+                    };
+                    store.append_message(&session, &rev_msg)?;
+
+                    let (tx2, mut rx2) = mpsc::channel::<AgentEvent>(64);
+                    let mut rev_text = String::new();
+                    let mut rev_ready = false;
+                    let runner2 = tokio::spawn(async move {
+                        agent.run(&feedback, tx2).await?;
+                        Ok::<_, anyhow::Error>(agent.messages)
+                    });
+                    while let Some(ev) = rx2.recv().await {
+                        match ev {
+                            AgentEvent::TextDelta(t) => {
+                                rev_text.push_str(&t);
+                                print!("{}", t);
+                                let _ = std::io::Write::flush(&mut std::io::stdout());
+                            }
+                            AgentEvent::PlanReady => {
+                                rev_ready = true;
+                                break;
+                            }
+                            AgentEvent::Done => break,
+                            AgentEvent::Error(e) => {
+                                eprintln!("\nError: {}", e);
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                    let rev_messages = runner2.await.ok().and_then(|r| r.ok());
+                    if let Some(ref msgs) = rev_messages {
+                        save_session_messages(&store, &mut session, msgs, task)?;
+                    }
+                    // Show the revised plan; auto-proceed if the model signalled
+                    // completion via exit_plan_mode, else prompt once more.
+                    let revised = plan::parse_plan(&rev_text);
+                    println!("\n{}", plan::format_plan(&revised));
+                    if !rev_ready {
+                        println!("── Approve? [Y]es / [n]o ──");
+                        let mut line2 = String::new();
+                        std::io::stdin().read_line(&mut line2)?;
+                        let low2 = line2.trim().to_lowercase();
+                        if !(low2.is_empty() || low2 == "y" || low2 == "yes" || low2 == "ok") {
+                            println!("Aborted.");
+                            return Ok(());
+                        }
+                    }
                 }
             }
         }

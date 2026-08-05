@@ -1078,10 +1078,27 @@ pub fn plan_tool_definitions() -> serde_json::Value {
         "git_status",
         "git_diff",
         "git_log",
+        "exit_plan_mode",
     ];
 
+    // exit_plan_mode is a signal, not a filesystem/read tool — it isn't in the
+    // static tool_definitions list, so append its schema explicitly.
     let all = tool_definitions();
-    let arr = all.as_array().cloned().unwrap_or_default();
+    let mut arr = all.as_array().cloned().unwrap_or_default();
+    arr.push(serde_json::json!({
+        "type": "function",
+        "function": {
+            "name": "exit_plan_mode",
+            "description": "Signal that the plan is complete and ready to execute. Call this with a short plan summary when your plan is finished.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "summary": { "type": "string", "description": "Short summary of the plan" }
+                },
+                "required": []
+            }
+        }
+    }));
     let filtered: Vec<serde_json::Value> = arr
         .into_iter()
         .filter(|tool| {

@@ -120,6 +120,9 @@ pub enum AgentEvent {
     },
     /// A transient error is being retried after a delay.
     Retry { attempt: usize, delay_ms: u64 },
+    /// The plan-only turn produced a plan and signalled readiness to execute.
+    /// Consumers should auto-proceed to execution (model-driven, no human gate).
+    PlanReady,
     /// The agent finished normally (no more tool calls).
     Done,
     /// An error occurred (HTTP failure, stream error, max iterations).
@@ -371,6 +374,17 @@ impl Agent {
                     function: FunctionCall { name, arguments },
                 });
             }
+
+            // If this is a plan-proposal turn and the model signalled it is
+            // done planning via the exit_plan_mode tool, don't dispatch it as a
+            // real tool — emit PlanReady so the consumer auto-proceeds to
+            // execution (Grok Build-style model-driven transition).
+            if self.plan_only && tcs.iter().any(|tc| tc.function.name == "exit_plan_mode") {
+                self.messages.push(assistant);
+                let _ = tx.send(AgentEvent::PlanReady).await;
+                return Ok(());
+            }
+
             assistant.tool_calls = Some(tcs.clone());
             self.messages.push(assistant);
 

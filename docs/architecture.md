@@ -150,7 +150,7 @@ Each `dispatch` is sync, so `spawn_blocking` moves it off the async runtime. Res
 
 The TUI (`tui.rs`) is intentionally minimal:
 
-- **Heuristic plan approval**: after a plan-prompt completion, the TUI sets `plan_pending` and waits for `yes`/`y`/`approve`/`go`/`execute`/`ok` to execute, or any other text to revise. This is a heuristic, not a structured protocol.
+- **Plan approval is model-driven with a fallback**: during the plan turn the model may call `exit_plan_mode`; when it does the TUI auto-executes the plan without a prompt. If the model finishes without that signal, the TUI sets `plan_pending` and waits for `yes`/`y`/`approve`/`go`/`execute`/`ok` to execute, or any other text to revise.
 - **No multi-line input**: the input box is single-line only.
 
 Conversation history **is** carried across turns via `session_messages` (in-memory) and persisted to `.raven/sessions/`. Scrollback is supported with `↑`/`↓`/`PgUp`/`PgDn` and mouse wheel.

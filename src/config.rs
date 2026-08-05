@@ -353,6 +353,10 @@ max_iterations = 10
 
     #[test]
     fn config_file_missing_returns_defaults() {
+        // Isolate HOME so a real user global config (~/.raven/config.toml)
+        // doesn't leak into this test.
+        let home = tempfile::tempdir().unwrap();
+        std::env::set_var("HOME", home.path());
         let tmp = tempfile::tempdir().unwrap();
         let cfg = load_config_file(tmp.path());
         assert!(cfg.model.is_none());

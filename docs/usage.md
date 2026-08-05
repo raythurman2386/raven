@@ -35,13 +35,14 @@ Output is streamed to stdout: assistant text deltas, tool calls (`→ tool(args)
 
 ## Plan mode
 
-Plan mode asks the model to propose a plan first, then waits for your approval before executing.
+Plan mode asks the model to propose a plan first, then proceeds to execution.
 
 ```bash
 # Plan mode is ON by default
 raven -p "Refactor the auth module"
 
-# The model proposes a plan, then you see:
+# The model proposes a plan. If it signals completion (exit_plan_mode), the
+# harness auto-executes it without prompting. Otherwise you see:
 #   ── Plan ready. Approve? [Y/n] ──
 # Press Enter (or y/yes/ok) to execute; anything else aborts.
 
@@ -53,6 +54,15 @@ raven --yolo -p "Write unit tests for auth"
 ```
 
 `--yolo` implies `--no-plan` (no approval step).
+
+### Model-driven auto-execution
+
+Plan mode transitions out automatically (Grok Build–style): during the
+plan-proposal turn the agent may call the `exit_plan_mode` tool to signal its
+plan is complete. When it does, the harness parses the plan, prints it, and
+immediately proceeds to execution — no human approval prompt blocks the flow.
+If the model finishes without calling `exit_plan_mode` (some models ignore
+tool calls), the harness falls back to prompting you to approve/revise/abort.
 
 ### Plan-mode tool restriction
 

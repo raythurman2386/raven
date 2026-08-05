@@ -500,6 +500,61 @@ pub async fn run_tui(settings: Settings) -> Result<()> {
                     )));
                     log_dirty = true;
                 }
+                AgentEvent::PlanReady => {
+                    // Model signalled the plan is complete. Await the planning
+                    // task, save messages, show the plan, then auto-execute
+                    // without a human approval prompt.
+                    if let Some(handle) = task_handle.take() {
+                        if let Ok(Ok(msgs)) = handle.await {
+                            session_messages = msgs;
+                            messages_dirty = true;
+                            let _ = store.save_all_messages(&session, &session_messages);
+                            let _ = store.update_summary(&mut session, None);
+                        }
+                    }
+
+                    if plan_first && agent_state == AgentState::Planning {
+                        let plan = plan::parse_plan(&assistant_text);
+                        plan_preview = plan::format_plan(&plan)
+                            .lines()
+                            .map(|s| s.to_string())
+                            .collect();
+                        log.push(LogEntry::system(String::new()));
+                        log.push(LogEntry::system("plan ready — auto-executing"));
+                        log_dirty = true;
+
+                        // Auto-approve: run the execution phase directly.
+                        running = true;
+                        agent_state = AgentState::Executing;
+                        status = "executing plan…".into();
+                        let exec_prompt =
+                            "Plan approved. Execute it now using tools as needed.".to_string();
+                        let _ = store.append_message(
+                            &session,
+                            &ChatMessage {
+                                role: "user".into(),
+                                content: Some(exec_prompt.clone()),
+                                tool_calls: None,
+                                tool_call_id: None,
+                            },
+                        );
+                        assistant_text.clear();
+                        let mut agent =
+                            Agent::with_messages(settings.clone(), session_messages.clone())?;
+                        let tx_exec = tx.clone();
+                        task_handle = Some(tokio::spawn(async move {
+                            agent.run(&exec_prompt, tx_exec).await?;
+                            Ok(agent.messages)
+                        }));
+                        plan_preview.clear();
+                    } else {
+                        plan_preview.clear();
+                        status = "ready".into();
+                        agent_state = AgentState::Idle;
+                        running = false;
+                        assistant_text.clear();
+                    }
+                }
                 AgentEvent::Done => {
                     if let Some(handle) = task_handle.take() {
                         if let Ok(Ok(msgs)) = handle.await {
