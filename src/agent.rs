@@ -349,8 +349,34 @@ impl Agent {
             // Results are cached by (name, args) to avoid redundant calls.
             let mut handles = Vec::new();
             for tc in &tcs {
-                let args: Value =
-                    serde_json::from_str(&tc.function.arguments).unwrap_or_else(|_| json!({}));
+                // If the streamed `arguments` JSON is malformed (e.g. a
+                // truncated chunk), surface a clear error to the model instead
+                // of silently dispatching with empty args — a write_file or
+                // run_shell firing on nothing is far worse than a retry.
+                let parsed: Result<Value, serde_json::Error> =
+                    serde_json::from_str(&tc.function.arguments);
+                let args = match parsed {
+                    Ok(v) => v,
+                    Err(e) => {
+                        let result = format!(
+                            "Tool error: arguments for {} are not valid JSON: {}\nRaw: {}",
+                            tc.function.name, e, tc.function.arguments
+                        );
+                        let _ = tx
+                            .send(AgentEvent::ToolEnd {
+                                name: tc.function.name.clone(),
+                                preview: result.chars().take(600).collect(),
+                            })
+                            .await;
+                        self.messages.push(ChatMessage {
+                            role: "tool".into(),
+                            content: Some(result),
+                            tool_calls: None,
+                            tool_call_id: Some(tc.id.clone()),
+                        });
+                        continue;
+                    }
+                };
                 let _ = tx
                     .send(AgentEvent::ToolStart {
                         name: tc.function.name.clone(),
