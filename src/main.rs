@@ -330,13 +330,6 @@ async fn headless_run(
         store.create(&settings.model)?
     };
 
-    // Create agent (with preloaded messages if resuming)
-    let mut agent = if session.messages.is_empty() {
-        Agent::new(settings.clone())?
-    } else {
-        Agent::with_messages(settings.clone(), session.messages.clone())?
-    };
-
     // Save the user's prompt as a message to the session
     let user_msg = ChatMessage {
         role: "user".into(),
@@ -350,9 +343,21 @@ async fn headless_run(
 
     let plan_first = settings.plan_first && !settings.yolo;
 
+    // Create agent (with preloaded messages if resuming). When this turn is a
+    // plan proposal, restrict it to the read-only toolset so it can gather
+    // context but cannot modify the workspace before approval.
+    let mut agent = if session.messages.is_empty() {
+        Agent::new(settings.clone())?
+    } else {
+        Agent::with_messages(settings.clone(), session.messages.clone())?
+    };
+    if plan_first {
+        agent = agent.plan_only();
+    }
+
     let prompt = if plan_first {
         format!(
-            "{}\n\nFirst propose a concise step-by-step plan. Do NOT call any tools yet. Just list the numbered steps.",
+            "{}\n\nFirst propose a concise step-by-step plan. You may use read-only tools (list_dir, read_file, grep, search_code, git_status, git_diff, git_log) to inspect the workspace, but you CANNOT edit files or run shell until the plan is approved. Just list the numbered steps.",
             task
         )
     } else {
@@ -435,7 +440,8 @@ async fn headless_run(
                 let mut agent = Agent::with_messages(
                     settings.clone(),
                     first_messages.clone().unwrap_or_default(),
-                )?;
+                )?
+                .plan_only();
 
                 // Save the revision prompt
                 let rev_msg = ChatMessage {

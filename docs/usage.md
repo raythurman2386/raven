@@ -54,6 +54,14 @@ raven --yolo -p "Write unit tests for auth"
 
 `--yolo` implies `--no-plan` (no approval step).
 
+### Plan-mode tool restriction
+
+During the plan-proposal turn (and any revision turn), the agent is limited to a **read-only toolset** so it can gather context without modifying the workspace before you approve:
+
+- `list_dir`, `read_file`, `grep`, `search_code`, `git_status`, `git_diff`, `git_log`
+
+The mutating and shell tools (`write_file`, `search_replace`, `run_shell`, `todo_write`, `memory_update`, `apply_patch`, `run_tests`) are **not advertised** to the model during planning, so it physically cannot change files or run commands until you approve. Only after approval does the full toolset become available.
+
 ---
 
 ## Parallel sub-agents

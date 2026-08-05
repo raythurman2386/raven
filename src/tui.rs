@@ -735,8 +735,7 @@ fn start_task(
     let mut prompt = text.to_string();
     if plan_first {
         prompt.push_str(
-            "\n\nFirst propose a concise step-by-step plan. \
-             Do NOT call any tools yet. Just list the numbered steps.",
+            "\n\nFirst propose a concise step-by-step plan. You may use read-only tools (list_dir, read_file, grep, search_code, git_status, git_diff, git_log) to inspect the workspace, but you CANNOT edit files or run shell until the plan is approved. Just list the numbered steps.",
         );
         *agent_state = AgentState::Planning;
     }
@@ -751,6 +750,9 @@ fn start_task(
     let _ = store.append_message(session, &user_msg);
 
     let mut agent = Agent::with_messages(settings.clone(), session_messages.clone())?;
+    if plan_first {
+        agent = agent.plan_only();
+    }
     *task_handle = Some(tokio::spawn(async move {
         agent.run(&prompt, tx).await?;
         Ok(agent.messages)
@@ -810,6 +812,10 @@ fn handle_plan_response(
 
     assistant_text.clear();
     let mut agent = Agent::with_messages(settings.clone(), session_messages.clone())?;
+    if !approve {
+        // Revising the plan: keep the model on the read-only toolset.
+        agent = agent.plan_only();
+    }
     *task_handle = Some(tokio::spawn(async move {
         agent.run(&prompt, tx).await?;
         Ok(agent.messages)

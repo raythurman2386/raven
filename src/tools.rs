@@ -1064,6 +1064,37 @@ pub fn tool_definitions() -> serde_json::Value {
     ])
 }
 
+/// The read-only tool subset exposed during plan mode.
+///
+/// These let the model gather context (list/read/search/git-inspect) to
+/// produce a good plan, but exclude every tool that writes to the workspace
+/// or runs shell. Kept in sync with the full [`tool_definitions`] list.
+pub fn plan_tool_definitions() -> serde_json::Value {
+    const PLAN_TOOLS: &[&str] = &[
+        "list_dir",
+        "read_file",
+        "grep",
+        "search_code",
+        "git_status",
+        "git_diff",
+        "git_log",
+    ];
+
+    let all = tool_definitions();
+    let arr = all.as_array().cloned().unwrap_or_default();
+    let filtered: Vec<serde_json::Value> = arr
+        .into_iter()
+        .filter(|tool| {
+            tool.get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+                .map(|name| PLAN_TOOLS.contains(&name))
+                .unwrap_or(false)
+        })
+        .collect();
+    serde_json::Value::Array(filtered)
+}
+
 /// Dispatch a tool call by name, returning the result as a string.
 ///
 /// Unknown tool names return an error string rather than `Err`, so the model
@@ -1729,5 +1760,47 @@ mod tests {
         let result = wait_for_child(&mut child, 5).expect("child should finish");
         assert_eq!(result.0.code(), Some(0));
         assert_eq!(String::from_utf8_lossy(&result.1).trim(), "hi");
+    }
+
+    #[test]
+    fn plan_tool_definitions_are_read_only() {
+        let defs = plan_tool_definitions();
+        let arr = defs.as_array().expect("plan tools should be an array");
+        assert!(!arr.is_empty(), "plan toolset should not be empty");
+
+        let names: Vec<String> = arr
+            .iter()
+            .filter_map(|t| {
+                t.get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(|n| n.as_str())
+                    .map(str::to_string)
+            })
+            .collect();
+
+        // Read-only inspection tools are allowed.
+        for expected in ["list_dir", "read_file", "grep", "search_code", "git_status"] {
+            assert!(
+                names.iter().any(|n| n == expected),
+                "plan toolset should include {expected}, got {names:?}"
+            );
+        }
+
+        // Nothing that writes or runs shell may be advertised during planning.
+        let forbidden = [
+            "write_file",
+            "search_replace",
+            "run_shell",
+            "todo_write",
+            "memory_update",
+            "apply_patch",
+            "run_tests",
+        ];
+        for bad in forbidden {
+            assert!(
+                !names.iter().any(|n| n == bad),
+                "plan toolset must not include {bad}, got {names:?}"
+            );
+        }
     }
 }

@@ -136,6 +136,10 @@ pub struct Agent {
     pub messages: Vec<ChatMessage>,
     /// Cache of tool results keyed by `name:args` to avoid redundant calls.
     tool_cache: HashMap<String, String>,
+    /// When true, the request advertises only read-only tools so the model
+    /// can gather context but physically cannot write files or run shell.
+    /// Set for the plan-proposal turn; cleared for execution.
+    plan_only: bool,
     client: reqwest::Client,
 }
 
@@ -181,11 +185,22 @@ impl Agent {
             sandbox,
             messages,
             tool_cache: HashMap::new(),
+            plan_only: false,
             client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(300))
                 .build()
                 .context("build HTTP client")?,
         })
+    }
+
+    /// Restrict this agent to the read-only toolset for a plan-proposal turn.
+    ///
+    /// The model can still list/read/search/git-inspect to gather context for
+    /// a good plan, but the request advertises no write or shell tools, so it
+    /// physically cannot modify the workspace during planning.
+    pub fn plan_only(mut self) -> Self {
+        self.plan_only = true;
+        self
     }
 
     /// Create an agent with preloaded messages (for session resume).
@@ -202,6 +217,20 @@ impl Agent {
             }
         }
         Ok(agent)
+    }
+
+    /// The tool definitions to advertise in the next request.
+    ///
+    /// Returns the full static set (no clone) during execution, or the
+    /// read-only subset (a fresh filtered array) during a plan-proposal turn
+    /// so the model can gather context but physically cannot write files or
+    /// run shell.
+    fn tools_value(&self) -> serde_json::Value {
+        if self.plan_only {
+            crate::tools::plan_tool_definitions()
+        } else {
+            cached_tool_definitions().clone()
+        }
     }
 
     /// Run one full agent turn (may include multiple tool rounds). Yields events.
@@ -263,7 +292,7 @@ impl Agent {
                 json!({
                     "model": self.settings.model,
                     "messages": &self.messages,
-                    "tools": cached_tool_definitions(),
+                    "tools": self.tools_value(),
                     "tool_choice": "auto",
                     "temperature": self.settings.temperature,
                     "max_tokens": clamped_max,
@@ -282,7 +311,7 @@ impl Agent {
                 json!({
                     "model": self.settings.model,
                     "messages": request_messages,
-                    "tools": cached_tool_definitions(),
+                    "tools": self.tools_value(),
                     "tool_choice": "auto",
                     "temperature": self.settings.temperature,
                     "max_tokens": clamped_max,
