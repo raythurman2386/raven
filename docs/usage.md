@@ -202,6 +202,15 @@ the agent know the codebase structure up front instead of burning turns
 listing and reading files. Small workspaces skip the map, and its output is
 capped at ~2K chars.
 
+### Memory recall (`memory_search`)
+
+The agent can recall past decisions and conventions with `memory_search(query)`,
+which keyword-scans `.raven/MEMORY.md` and returns the matching lines as ranked
+`path:line — content` snippets (lines with more query-token hits rank first).
+Grok Build uses indexed keyword + vector search; a mini harness gets the
+high-value subset with a dependency-light keyword scan of the single memory
+file. Read-only and available during planning.
+
 ### TUI limitations
 
 - Each submission spawns a **fresh agent** — conversation history is not carried across turns.

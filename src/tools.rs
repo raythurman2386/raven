@@ -1130,6 +1130,20 @@ pub fn tool_definitions() -> serde_json::Value {
                     "required": ["name"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "memory_search",
+                "description": "Search project memory (.raven/MEMORY.md) for lines matching a query. Use to recall past decisions, conventions, or context stored in memory.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "Keywords to search for in memory" }
+                    },
+                    "required": ["query"]
+                }
+            }
         }
     ])
 }
@@ -1152,6 +1166,7 @@ pub fn plan_tool_definitions() -> serde_json::Value {
         "web_fetch",
         "skill_search",
         "skill_load",
+        "memory_search",
         "exit_plan_mode",
     ];
 
@@ -1304,6 +1319,10 @@ pub fn dispatch(sandbox: &Sandbox, name: &str, args: &serde_json::Value) -> Stri
         "skill_load" => {
             let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
             Ok(crate::skills::load(&sandbox.workspace, name))
+        }
+        "memory_search" => {
+            let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
+            Ok(crate::memory::search_memory(&sandbox.workspace, query))
         }
         other => Ok(format!("Unknown tool: {}", other)),
     };
@@ -1888,6 +1907,7 @@ mod tests {
             "web_fetch",
             "skill_search",
             "skill_load",
+            "memory_search",
         ] {
             assert!(
                 names.iter().any(|n| n == expected),

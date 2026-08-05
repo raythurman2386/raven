@@ -589,6 +589,7 @@ impl Agent {
                         | "git_log"
                         | "skill_search"
                         | "skill_load"
+                        | "memory_search"
                 );
                 if is_read_only {
                     if let Some(cached) = self.tool_cache.get(&cache_key) {
@@ -636,6 +637,7 @@ impl Agent {
                         | "git_log"
                         | "skill_search"
                         | "skill_load"
+                        | "memory_search"
                 );
                 if is_read_only && !cache_key.is_empty() {
                     self.tool_cache.insert(cache_key, result.clone());
