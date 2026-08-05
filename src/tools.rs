@@ -1074,6 +1074,34 @@ pub fn tool_definitions() -> serde_json::Value {
                     "required": ["question"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "description": "Search the web and return a ranked list of result titles and URLs. No API key required. Use for current, factual, or unfamiliar topics.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "The search query" }
+                    },
+                    "required": ["query"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "web_fetch",
+                "description": "Fetch a URL and return its readable text (HTML stripped). Use to read a page found via web_search or a known URL. Only http/https is allowed.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": { "type": "string", "description": "Absolute http(s) URL to fetch" }
+                    },
+                    "required": ["url"]
+                }
+            }
         }
     ])
 }
@@ -1092,6 +1120,8 @@ pub fn plan_tool_definitions() -> serde_json::Value {
         "git_status",
         "git_diff",
         "git_log",
+        "web_search",
+        "web_fetch",
         "exit_plan_mode",
     ];
 
@@ -1809,8 +1839,16 @@ mod tests {
             })
             .collect();
 
-        // Read-only inspection tools are allowed.
-        for expected in ["list_dir", "read_file", "grep", "search_code", "git_status"] {
+        // Read-only inspection tools are allowed (web tools are read-only too).
+        for expected in [
+            "list_dir",
+            "read_file",
+            "grep",
+            "search_code",
+            "git_status",
+            "web_search",
+            "web_fetch",
+        ] {
             assert!(
                 names.iter().any(|n| n == expected),
                 "plan toolset should include {expected}, got {names:?}"

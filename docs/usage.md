@@ -169,6 +169,15 @@ The same prompt is used as a **shell permission gate**: unless you run with
 allow; anything else (or dismissing) blocks the command and tells the model it
 was declined.
 
+### Web research (`web_search` / `web_fetch`)
+
+The agent can research the web with no API key: `web_search(query)` returns a
+ranked list of result titles and URLs (via DuckDuckGo's HTML endpoint), and
+`web_fetch(url)` retrieves a page and strips the HTML to readable text. Only
+`http`/`https` URLs are allowed — `file://`, `data://`, etc. are rejected so
+the tools can't read local files. Both are read-only and available during
+planning, and their output is capped.
+
 ### TUI limitations
 
 - Each submission spawns a **fresh agent** — conversation history is not carried across turns.

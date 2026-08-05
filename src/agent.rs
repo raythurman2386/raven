@@ -529,6 +529,38 @@ impl Agent {
                     }
                 }
 
+                // Web tools are async HTTP — special-case them like ask_user.
+                if tc.function.name == "web_search" || tc.function.name == "web_fetch" {
+                    let result = if tc.function.name == "web_search" {
+                        let query = args
+                            .get("query")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        crate::web::search(&query).await
+                    } else {
+                        let url = args
+                            .get("url")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        crate::web::fetch_text(&url).await
+                    };
+                    let _ = tx
+                        .send(AgentEvent::ToolEnd {
+                            name: tc.function.name.clone(),
+                            preview: result.chars().take(600).collect(),
+                        })
+                        .await;
+                    self.messages.push(ChatMessage {
+                        role: "tool".into(),
+                        content: Some(result),
+                        tool_calls: None,
+                        tool_call_id: Some(tc.id.clone()),
+                    });
+                    continue;
+                }
+
                 let _ = tx
                     .send(AgentEvent::ToolStart {
                         name: tc.function.name.clone(),

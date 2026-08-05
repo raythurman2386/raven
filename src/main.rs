@@ -41,6 +41,7 @@ mod session;
 mod tokenizer;
 mod tools;
 mod tui;
+mod web;
 
 use anyhow::Result;
 use clap::Parser;
