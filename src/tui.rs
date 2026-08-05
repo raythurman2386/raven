@@ -800,6 +800,15 @@ fn draw_ui(
         0
     };
 
+    // Input box grows with the wrapped line count so long tasks don't clip.
+    // Width available for input = terminal width minus prompt glyph and
+    // borders (left/right padding in the block).
+    let term_w = f.size().width.saturating_sub(4).max(1) as usize;
+    let prompt_chars = 2; // "❯ " / "? "
+    let avail = term_w.saturating_sub(prompt_chars).max(1);
+    let input_h = wrapped_line_count(input, avail).clamp(1, 6) as u16;
+    let input_h = input_h.saturating_add(2); // + top/bottom border rows
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -807,7 +816,7 @@ fn draw_ui(
             Constraint::Min(5),    // log
             Constraint::Length(plan_h),
             Constraint::Length(1), // status
-            Constraint::Length(3), // input
+            Constraint::Length(input_h),
         ])
         .split(f.size());
 
@@ -926,7 +935,7 @@ fn draw_ui(
         ),
         Span::styled(input.to_string(), Style::default().fg(Theme::FG)),
     ]);
-    let input_w = Paragraph::new(input_line).block(
+    let input_w = Paragraph::new(input_line).wrap(Wrap { trim: false }).block(
         Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(if plan_pending {
@@ -937,6 +946,27 @@ fn draw_ui(
             .title(Span::styled(title, Style::default().fg(Theme::DIM))),
     );
     f.render_widget(input_w, chunks[4]);
+}
+
+/// Number of wrapped lines a string occupies at the given width (char count).
+///
+/// A single `\n` forces a new line; a run of chars longer than `width` wraps
+/// to the next line. Used to size the input box so long tasks are visible
+/// instead of clipping.
+fn wrapped_line_count(s: &str, width: usize) -> usize {
+    if s.is_empty() {
+        return 1;
+    }
+    let mut lines = 0usize;
+    for seg in s.split('\n') {
+        let w = width.max(1);
+        if seg.is_empty() {
+            lines += 1;
+        } else {
+            lines += seg.chars().count().div_ceil(w);
+        }
+    }
+    lines
 }
 
 // ── Task / plan helpers (keeps the event loop readable) ──────────────────
