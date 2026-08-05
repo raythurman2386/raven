@@ -45,20 +45,23 @@ use crate::context::history_tokens;
 use crate::plan::{self, AgentState};
 use crate::session::SessionStore;
 
-// ── Theme (Grok Build–ish dark engineering UI) ───────────────────────────
+// ── Theme (Ravenwood emerald-forest) ─────────────────────────────────────
+//
+// Dark-medium Ravenwood palette (see the ravenwood-theme skill). Warm beige
+// foreground, olive-tinged backgrounds, green hero accent, pastel brights.
 
 struct Theme;
 impl Theme {
-    const FG: Color = Color::Rgb(220, 220, 220);
-    const DIM: Color = Color::Rgb(110, 110, 120);
-    const ACCENT: Color = Color::Rgb(120, 200, 255); // cool blue
-    const USER: Color = Color::Rgb(140, 220, 160); // soft green
-    const TOOL: Color = Color::Rgb(230, 190, 100); // amber
-    const SYSTEM: Color = Color::Rgb(130, 130, 145);
-    const ERROR: Color = Color::Rgb(240, 110, 110);
-    const PLAN: Color = Color::Rgb(200, 160, 255); // violet
-    const BORDER: Color = Color::Rgb(55, 55, 65);
-    const STATUS_BG: Color = Color::Rgb(28, 28, 34);
+    const FG: Color = Color::Rgb(0xE8, 0xD5, 0xB7); // fg — warm beige
+    const DIM: Color = Color::Rgb(0x85, 0x92, 0x89); // grey1
+    const ACCENT: Color = Color::Rgb(0x22, 0xD3, 0xEE); // blue
+    const USER: Color = Color::Rgb(0x4A, 0xDE, 0x80); // green — hero
+    const TOOL: Color = Color::Rgb(0xE6, 0x98, 0x75); // orange
+    const SYSTEM: Color = Color::Rgb(0x7F, 0x89, 0x7D); // grey0
+    const ERROR: Color = Color::Rgb(0xE6, 0x7E, 0x80); // red
+    const PLAN: Color = Color::Rgb(0xF4, 0x72, 0xB6); // purple
+    const BORDER: Color = Color::Rgb(0x4A, 0x5A, 0x4D); // bg4
+    const STATUS_BG: Color = Color::Rgb(0x1F, 0x24, 0x1F); // bg1
 }
 
 // ── Log model ────────────────────────────────────────────────────────────
