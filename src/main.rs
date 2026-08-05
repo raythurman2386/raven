@@ -518,7 +518,7 @@ async fn headless_run(
         let exec_messages = first_messages.clone().unwrap_or_default();
         let exec_msg = ChatMessage {
             role: "user".into(),
-            content: Some("Plan approved. Execute it now using tools as needed.".into()),
+            content: Some(plan::EXECUTE_PROMPT.into()),
             tool_calls: None,
             tool_call_id: None,
         };
@@ -527,9 +527,7 @@ async fn headless_run(
         let mut agent = Agent::with_messages(settings, exec_messages)?;
         let (tx, mut rx) = mpsc::channel::<AgentEvent>(64);
         let runner = tokio::spawn(async move {
-            agent
-                .run("Plan approved. Execute it now using tools as needed.", tx)
-                .await?;
+            agent.run(plan::EXECUTE_PROMPT, tx).await?;
             Ok::<_, anyhow::Error>(agent.messages)
         });
         while let Some(ev) = rx.recv().await {

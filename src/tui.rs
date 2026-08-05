@@ -617,8 +617,7 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
                         running = true;
                         agent_state = AgentState::Executing;
                         status = "executing plan…".into();
-                        let exec_prompt =
-                            "Plan approved. Execute it now using tools as needed.".to_string();
+                        let exec_prompt = plan::EXECUTE_PROMPT.to_string();
                         let _ = store.append_message(
                             &session,
                             &ChatMessage {
@@ -942,7 +941,7 @@ fn handle_plan_response(
     let prompt = if approve {
         *agent_state = AgentState::Executing;
         *status = "executing plan…".into();
-        "Plan approved. Execute it now using tools as needed.".to_string()
+        plan::EXECUTE_PROMPT.to_string()
     } else {
         *agent_state = AgentState::Planning;
         *status = "revising plan…".into();

@@ -5,6 +5,18 @@
 
 use serde::{Deserialize, Serialize};
 
+/// The message sent to the model once a plan is approved, to start execution.
+///
+/// Deliberately explicit: it restates that the plan is approved, forbids
+/// proposing *another* plan, and directs the model to start editing. Weak or
+/// fast models (e.g. a flash cloud model) will otherwise keep narrating or
+/// re-planning instead of touching files.
+pub const EXECUTE_PROMPT: &str = "\
+The plan above is APPROVED. Do NOT propose or restate another plan, do NOT \
+re-iterate steps, do NOT summarize what you are about to do. Begin EXECUTING \
+the approved plan now: read what you need, then make the file edits / run the \
+commands the plan calls for, in order. Work until the plan is done.";
+
 /// A structured plan with numbered steps.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Plan {
