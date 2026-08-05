@@ -262,7 +262,7 @@ correct (one per turn, never per-iteration).
 **Phase status:**
 - [x] Phase 1 — Permission gate + AskUser
 - [x] Phase 2 — Web search + fetch
-- [ ] Phase 3 — Skills system
+- [x] Phase 3 — Skills system
 - [ ] Phase 4 — Repo symbol map
 - [ ] Phase 5 — Memory file index + recall
 - [ ] Phase 6 — Git auto-commit + /undo
