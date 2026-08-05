@@ -11,7 +11,7 @@ A **privacy-first** local coding-agent harness written in Rust for [Ollama](http
 | In scope | Intentionally out of scope |
 |---|---|
 | Streaming agent loop (OpenAI-compatible `/v1/chat/completions`) | MCP server marketplace |
-| 14 tools: `list_dir`, `read_file`, `search_replace`, `write_file`, `grep`, `run_shell`, `search_code`, `todo_write`, `memory_update`, `git_status`, `git_diff`, `git_log`, `apply_patch`, `run_tests` | Skills / plugin system |
+| 15 tools: `list_dir`, `read_file`, `search_replace`, `write_file`, `grep`, `run_shell`, `search_code`, `todo_write`, `memory_update`, `git_status`, `git_diff`, `git_log`, `apply_patch`, `run_tests`, `ask_user` | Skills / plugin system |
 | Workspace sandbox (path confinement + dangerous-command filter) | OS-level kernel sandbox (Landlock/seccomp) |
 | Structured plan mode (parse → approve → revise → execute) | Worktree isolation |
 | Lightweight parallel sub-agents (`--parallel`) | Web search / web fetch |

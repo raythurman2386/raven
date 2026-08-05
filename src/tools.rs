@@ -1060,6 +1060,20 @@ pub fn tool_definitions() -> serde_json::Value {
                 "description": "Auto-detect and run the project's test suite (cargo test, npm test, or pytest). Returns output with exit code.",
                 "parameters": { "type": "object", "properties": {} }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "ask_user",
+                "description": "Ask the user a question and wait for their typed answer. Use when you need a decision, clarification, or confirmation you cannot resolve from the workspace. Keep the question concise and specific.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "question": { "type": "string", "description": "The question to ask the user" }
+                    },
+                    "required": ["question"]
+                }
+            }
         }
     ])
 }
@@ -1819,5 +1833,42 @@ mod tests {
                 "plan toolset must not include {bad}, got {names:?}"
             );
         }
+    }
+
+    #[test]
+    fn ask_user_in_full_toolset_not_plan_toolset() {
+        let full = tool_definitions();
+        let full_names: Vec<String> = full
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| {
+                t.get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(|n| n.as_str())
+                    .map(str::to_string)
+            })
+            .collect();
+        assert!(
+            full_names.iter().any(|n| n == "ask_user"),
+            "full toolset should include ask_user, got {full_names:?}"
+        );
+
+        let plan = plan_tool_definitions();
+        let plan_names: Vec<String> = plan
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| {
+                t.get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(|n| n.as_str())
+                    .map(str::to_string)
+            })
+            .collect();
+        assert!(
+            !plan_names.iter().any(|n| n == "ask_user"),
+            "ask_user is interactive and must not be advertised during planning"
+        );
     }
 }

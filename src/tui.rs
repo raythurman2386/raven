@@ -306,6 +306,12 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
     let mut live_tool: Option<String> = None;
     let mut turn_tool_count: usize = 0;
 
+    // When the model asks the user a question mid-task, the sender half of a
+    // oneshot is parked here so the input box repurposes to collect the answer.
+    // The agent task blocks awaiting the reply on the receiver.
+    let mut pending_question: Option<tokio::sync::oneshot::Sender<String>> = None;
+    let mut pending_question_text: Option<String> = None;
+
     let store = SessionStore::for_workspace(&settings.workspace)?;
     let mut session = store.create(&settings.model)?;
     let mut session_messages: Vec<ChatMessage> = Vec::new();
@@ -373,6 +379,7 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
                     state_txt,
                     state_color,
                     live_tool.as_deref(),
+                    pending_question_text.as_deref(),
                     scroll,
                     auto_scroll,
                 );
@@ -492,6 +499,16 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
                                     &mut task_handle,
                                     &mut quit,
                                 )?;
+                                continue;
+                            }
+
+                            // If the model asked the user a question, the next
+                            // Enter delivers the typed answer instead of
+                            // submitting a task.
+                            if let Some(reply) = pending_question.take() {
+                                let _ = reply.send(text.clone());
+                                pending_question_text = None;
+                                status = "running".into();
                                 continue;
                             }
 
@@ -696,6 +713,17 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
                         assistant_text.clear();
                     }
                 }
+                AgentEvent::AskUser { question, reply } => {
+                    // Park the question so the input box repurposes to collect
+                    // the answer. The agent task blocks until we send it back.
+                    log.push(LogEntry::system(format!("❓ {question}")));
+                    log_dirty = true;
+                    pending_question = Some(reply);
+                    pending_question_text = Some(question);
+                    status = "awaiting answer".into();
+                    input.clear();
+                    scroll = 0;
+                }
                 AgentEvent::Done => {
                     if let Some(handle) = task_handle.take() {
                         if let Ok(Ok(msgs)) = handle.await {
@@ -790,6 +818,7 @@ fn draw_ui(
     state_txt: &str,
     state_color: Color,
     live_tool: Option<&str>,
+    pending_question: Option<&str>,
     scroll: u16,
     _auto_scroll: bool,
 ) {
@@ -915,18 +944,27 @@ fn draw_ui(
         chunks[3],
     );
 
-    // Input — prompt glyph like a real agent CLI
-    let title = if plan_pending {
-        " approve / revise "
+    // Input — prompt glyph like a real agent CLI. When the model asked a
+    // question, the box shows the question and collects the answer.
+    let title = if let Some(q) = pending_question {
+        format!(" answer: {q} ")
+    } else if plan_pending {
+        " approve / revise ".into()
     } else {
-        " task "
+        " task ".into()
     };
-    let prompt = if plan_pending { "? " } else { "❯ " };
+    let prompt = if pending_question.is_some() {
+        "▸ "
+    } else if plan_pending {
+        "? "
+    } else {
+        "❯ "
+    };
     let input_line = Line::from(vec![
         Span::styled(
             prompt,
             Style::default()
-                .fg(if plan_pending {
+                .fg(if pending_question.is_some() || plan_pending {
                     Theme::PLAN
                 } else {
                     Theme::ACCENT

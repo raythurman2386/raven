@@ -155,11 +155,20 @@ turn finishes, the log records a single compact summary line
 (`⇢ 8 tool calls this turn`), keeping the log focused on user/assistant text
 and plan content.
 
+### Asking you questions mid-task (`ask_user`)
+
+The agent has an `ask_user` tool: when it needs a decision or clarification it
+cannot resolve from the workspace, it stops and asks. In the TUI the input box
+repurposes to show the question; type your answer and press Enter to continue
+the task. In headless mode the question is printed to stderr and your answer
+is read from stdin. If you dismiss/close without answering, the agent is told
+no answer was provided and proceeds (or re-decides) on its own.
+
 ### TUI limitations
 
 - Each submission spawns a **fresh agent** — conversation history is not carried across turns.
 - Plan approval is heuristic: type `yes`/`y`/`approve`/`go`/`execute`/`ok` to execute, or any other text to revise.
-- No scrollback navigation or multi-line input.
+- Scrollback is limited to the on-screen log window.
 
 ---
 

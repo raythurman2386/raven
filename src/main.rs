@@ -415,6 +415,17 @@ async fn headless_run(
                 plan_ready = true;
                 break;
             }
+            AgentEvent::AskUser { question, reply } => {
+                // Headless: print the question and read a line from stdin,
+                // then send the answer back so the agent can continue. If the
+                // channel is closed on our side (user hit EOF), the agent
+                // treats it as "no answer".
+                eprintln!("\n── {question} ──");
+                let mut line = String::new();
+                let _ = std::io::stdin().read_line(&mut line);
+                let answer = line.trim().to_string();
+                let _ = reply.send(answer);
+            }
             AgentEvent::Done => break,
             AgentEvent::Error(e) => {
                 eprintln!("\nError: {}", e);

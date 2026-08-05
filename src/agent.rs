@@ -123,6 +123,13 @@ pub enum AgentEvent {
     /// The plan-only turn produced a plan and signalled readiness to execute.
     /// Consumers should auto-proceed to execution (model-driven, no human gate).
     PlanReady,
+    /// The model asked the user a question mid-task. The consumer must render
+    /// it and send the answer back over the included oneshot channel (or drop
+    /// the sender to signal "no answer / dismissed").
+    AskUser {
+        question: String,
+        reply: tokio::sync::oneshot::Sender<String>,
+    },
     /// The agent finished normally (no more tool calls).
     Done,
     /// An error occurred (HTTP failure, stream error, max iterations).
@@ -446,6 +453,43 @@ impl Agent {
                         continue;
                     }
                 };
+                // ask_user is special: it blocks on a user reply over a oneshot
+                // channel rather than dispatching to the (sync) tool sandbox. The
+                // consumer renders the question and sends the answer back. If the
+                // sender is dropped (user dismissed / no consumer), the model sees
+                // that no answer was given.
+                if tc.function.name == "ask_user" {
+                    let question = args
+                        .get("question")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<String>();
+                    let _ = tx
+                        .send(AgentEvent::AskUser {
+                            question,
+                            reply: reply_tx,
+                        })
+                        .await;
+                    let answer = reply_rx
+                        .await
+                        .unwrap_or_else(|_| "The user did not provide an answer.".to_string());
+                    let result = format!("User answered: {answer}");
+                    let _ = tx
+                        .send(AgentEvent::ToolEnd {
+                            name: "ask_user".into(),
+                            preview: result.chars().take(600).collect(),
+                        })
+                        .await;
+                    self.messages.push(ChatMessage {
+                        role: "tool".into(),
+                        content: Some(result),
+                        tool_calls: None,
+                        tool_call_id: Some(tc.id.clone()),
+                    });
+                    continue;
+                }
+
                 let _ = tx
                     .send(AgentEvent::ToolStart {
                         name: tc.function.name.clone(),
