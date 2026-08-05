@@ -139,6 +139,21 @@ fn usage_color(pct: f64) -> Color {
     }
 }
 
+/// Braille spinner frames for the live-tool "glimmer" (Grok Build-style).
+/// A slow frame divisor (~4 redraws per frame at 60ms = ~3.7 fps) keeps the
+/// spinner visible but calm.
+fn spinner_frame(tick: u64) -> &'static str {
+    const FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    FRAMES[(tick / 4) as usize % FRAMES.len()]
+}
+
+/// Pulsing diamond for "waiting on you" cues (ask_user / plan approval), the
+/// same visual language Grok Build uses. Brightness pulses on a ~1.3s cadence.
+fn waiting_diamond(tick: u64) -> &'static str {
+    const DIAMONDS: &[&str] = &["◆", "◇"];
+    DIAMONDS[(tick / 8) as usize % DIAMONDS.len()]
+}
+
 fn state_label(state: &AgentState, status: &str) -> (&'static str, Color) {
     match state {
         AgentState::Planning => ("planning", Theme::PLAN),
@@ -146,6 +161,7 @@ fn state_label(state: &AgentState, status: &str) -> (&'static str, Color) {
         AgentState::Executing => ("executing", Theme::ACCENT),
         _ if status.starts_with("tool:") => ("tool", Theme::TOOL),
         _ if status.starts_with("thinking") => ("thinking", Theme::DIM),
+        _ if status.starts_with("awaiting answer") => ("awaiting answer", Theme::PLAN),
         _ => ("ready", Theme::USER),
     }
 }
@@ -300,6 +316,11 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
     let mut auto_scroll = true;
     let mut quit = false;
 
+    // Animation tick for the live-tool spinner (and any pulsing cues).
+    // Increments every redraw while something is running so the spinner
+    // advances; held steady when idle so the UI is perfectly static.
+    let mut tick: u64 = 0;
+
     // Live tool activity shown in the status strip while a tool runs, plus a
     // running count of tool calls in the current turn. The live line is
     // ephemeral; the count collapses into one compact summary line per turn.
@@ -364,6 +385,10 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
         let force_draw =
             log_dirty || messages_dirty || stream_patch || !running || live_tool.is_some();
         if force_draw || last_draw.elapsed() >= DRAW_INTERVAL {
+            // Advance the spinner animation only while there's live activity.
+            if running || live_tool.is_some() {
+                tick = tick.wrapping_add(1);
+            }
             terminal.draw(|f| {
                 draw_ui(
                     f,
@@ -382,6 +407,7 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
                     pending_question_text.as_deref(),
                     scroll,
                     auto_scroll,
+                    tick,
                 );
             })?;
             last_draw = std::time::Instant::now();
@@ -462,12 +488,15 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
                             }
                         }
                         KeyCode::Char(c) => {
-                            if !running {
+                            // Typing is blocked while a task runs EXCEPT when a
+                            // question is pending — the agent is blocked waiting
+                            // for our answer, so we must allow input.
+                            if !running || pending_question.is_some() {
                                 input.push(c);
                             }
                         }
                         KeyCode::Backspace => {
-                            if !running {
+                            if !running || pending_question.is_some() {
                                 input.pop();
                             }
                         }
@@ -827,6 +856,7 @@ fn draw_ui(
     pending_question: Option<&str>,
     scroll: u16,
     _auto_scroll: bool,
+    tick: u64,
 ) {
     let show_plan = plan_pending && !plan_preview.is_empty();
     let plan_h = if show_plan {
@@ -926,7 +956,11 @@ fn draw_ui(
         f.render_widget(plan_widget, chunks[2]);
     }
 
-    // Status strip — state + workspace + live tool activity (ephemeral)
+    // Status strip — state + workspace + live tool activity (ephemeral).
+    // While a tool runs, a spinning braille "glimmer" precedes the tool name so
+    // there's a clear moving cue of what's executing (Grok Build-style). When a
+    // question awaits the user, a pulsing diamond marks the "waiting on you"
+    // state instead.
     let mut status_line = vec![
         Span::styled(
             format!(" {state_txt} "),
@@ -941,8 +975,14 @@ fn draw_ui(
     ];
     if let Some(tool) = live_tool {
         status_line.push(Span::styled(
-            format!(" {tool}"),
+            format!(" {} {}", spinner_frame(tick), tool),
             Style::default().fg(Theme::TOOL),
+        ));
+    }
+    if pending_question.is_some() {
+        status_line.push(Span::styled(
+            format!(" {}", waiting_diamond(tick)),
+            Style::default().fg(Theme::PLAN),
         ));
     }
     f.render_widget(
@@ -1368,5 +1408,29 @@ mod tests {
         assert!(on, "plan mode should be on");
         assert_eq!(agent_state, AgentState::Idle);
         assert_eq!(status, "ready");
+    }
+
+    #[test]
+    fn spinner_frame_cycles() {
+        // The spinner must rotate through distinct frames as the tick grows.
+        let f0 = spinner_frame(0);
+        let f1 = spinner_frame(4);
+        let f2 = spinner_frame(8);
+        assert_ne!(f0, f1, "frames should differ");
+        assert_ne!(f1, f2, "frames should differ");
+        assert!(!f0.is_empty());
+    }
+
+    #[test]
+    fn waiting_diamond_alternates() {
+        let a = waiting_diamond(0);
+        let b = waiting_diamond(8);
+        assert_ne!(a, b, "diamond should pulse between frames");
+    }
+
+    #[test]
+    fn state_label_awaiting_answer() {
+        let (txt, _color) = state_label(&AgentState::Idle, "awaiting answer");
+        assert_eq!(txt, "awaiting answer");
     }
 }
