@@ -300,6 +300,12 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
     let mut auto_scroll = true;
     let mut quit = false;
 
+    // Live tool activity shown in the status strip while a tool runs, plus a
+    // running count of tool calls in the current turn. The live line is
+    // ephemeral; the count collapses into one compact summary line per turn.
+    let mut live_tool: Option<String> = None;
+    let mut turn_tool_count: usize = 0;
+
     let store = SessionStore::for_workspace(&settings.workspace)?;
     let mut session = store.create(&settings.model)?;
     let mut session_messages: Vec<ChatMessage> = Vec::new();
@@ -349,7 +355,8 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
 
         // Throttle full redraws so a burst of streamed tokens (or an idle
         // loop) doesn't repaint the terminal more than ~16x/sec.
-        let force_draw = log_dirty || messages_dirty || stream_patch || !running;
+        let force_draw =
+            log_dirty || messages_dirty || stream_patch || !running || live_tool.is_some();
         if force_draw || last_draw.elapsed() >= DRAW_INTERVAL {
             terminal.draw(|f| {
                 draw_ui(
@@ -365,6 +372,7 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
                     pct,
                     state_txt,
                     state_color,
+                    live_tool.as_deref(),
                     scroll,
                     auto_scroll,
                 );
@@ -458,6 +466,9 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
                             input.clear();
                             scroll = 0;
                             auto_scroll = true;
+                            // Fresh turn: reset the per-turn tool-call count.
+                            turn_tool_count = 0;
+                            live_tool = None;
 
                             // Slash commands take precedence over plan-response
                             // and normal task submission.
@@ -562,15 +573,25 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
                     }
                 }
                 AgentEvent::ToolStart { name, args } => {
-                    // Flush open assistant bubble before tool line
-                    log.push(LogEntry::tool(format!("→ {name}({args})")));
-                    log_dirty = true;
-                    status = format!("tool: {name}");
+                    // Ephemeral: show the live tool in the status strip and
+                    // bump the per-turn count. No permanent log line per call.
+                    let args_str = if args.is_null() {
+                        String::new()
+                    } else {
+                        args.to_string()
+                    };
+                    let snip: String = args_str.chars().take(60).collect();
+                    live_tool = Some(format!("⇢ {name}({snip})"));
+                    turn_tool_count += 1;
+                    status = "running".into();
                 }
                 AgentEvent::ToolEnd { name, preview } => {
-                    let snip: String = preview.chars().take(180).collect();
-                    log.push(LogEntry::tool(format!("  [{name}] {snip}")));
-                    log_dirty = true;
+                    // Tool finished — clear the live indicator. Keep the count;
+                    // it collapses into a summary line at turn end.
+                    let _ = name;
+                    let _ = preview;
+                    live_tool = None;
+                    status = "running".into();
                 }
                 AgentEvent::Iteration(n) => {
                     status = format!("thinking… (iter {n})");
@@ -673,6 +694,16 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
                     }
                     running = false;
                     assistant_text.clear();
+                    if turn_tool_count > 0 {
+                        log.push(LogEntry::tool(format!(
+                            "⇢ {} tool call{} this turn",
+                            turn_tool_count,
+                            if turn_tool_count == 1 { "" } else { "s" }
+                        )));
+                        log_dirty = true;
+                    }
+                    turn_tool_count = 0;
+                    live_tool = None;
                 }
                 AgentEvent::Error(e) => {
                     log.push(LogEntry::error(e));
@@ -682,6 +713,16 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
                     agent_state = AgentState::Idle;
                     running = false;
                     assistant_text.clear();
+                    if turn_tool_count > 0 {
+                        log.push(LogEntry::tool(format!(
+                            "⇢ {} tool call{} this turn",
+                            turn_tool_count,
+                            if turn_tool_count == 1 { "" } else { "s" }
+                        )));
+                        log_dirty = true;
+                    }
+                    turn_tool_count = 0;
+                    live_tool = None;
                 }
             }
         }
@@ -717,6 +758,7 @@ fn draw_ui(
     pct: f64,
     state_txt: &str,
     state_color: Color,
+    live_tool: Option<&str>,
     scroll: u16,
     _auto_scroll: bool,
 ) {
@@ -805,8 +847,8 @@ fn draw_ui(
         f.render_widget(plan_widget, chunks[2]);
     }
 
-    // Status strip
-    let status_line = Line::from(vec![
+    // Status strip — state + workspace + live tool activity (ephemeral)
+    let mut status_line = vec![
         Span::styled(
             format!(" {state_txt} "),
             Style::default()
@@ -817,9 +859,15 @@ fn draw_ui(
             format!(" {}", settings.workspace.display()),
             Style::default().fg(Theme::DIM),
         ),
-    ]);
+    ];
+    if let Some(tool) = live_tool {
+        status_line.push(Span::styled(
+            format!(" {tool}"),
+            Style::default().fg(Theme::TOOL),
+        ));
+    }
     f.render_widget(
-        Paragraph::new(status_line).style(Style::default().bg(Theme::STATUS_BG)),
+        Paragraph::new(Line::from(status_line)).style(Style::default().bg(Theme::STATUS_BG)),
         chunks[3],
     );
 

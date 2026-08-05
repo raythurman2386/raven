@@ -136,6 +136,14 @@ host. Type one and press `Enter`; `/help` lists everything.
 The command registry lives in `src/commands.rs`; adding a command is one
 registry entry plus one TUI dispatch arm, and it auto-appears in `/help`.
 
+### Tool activity is collapsed
+
+Tool calls are shown live in the status strip (`⇢ read_file(...)`) while they
+run, but are **not** spammed into the conversation log line-by-line. When a
+turn finishes, the log records a single compact summary line
+(`⇢ 8 tool calls this turn`), keeping the log focused on user/assistant text
+and plan content.
+
 ### TUI limitations
 
 - Each submission spawns a **fresh agent** — conversation history is not carried across turns.
