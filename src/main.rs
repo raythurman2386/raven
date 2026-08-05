@@ -132,8 +132,13 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Default to `warn` when RUST_LOG is unset. EnvFilter::from_default_env()
+    // yields an EMPTY filter (suppressing even WARN/ERROR) when the var is
+    // missing, which silently dropped config-parse and session warnings.
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_env_filter(filter)
         .with_target(false)
         .compact()
         .init();
