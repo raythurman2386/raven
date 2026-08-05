@@ -173,7 +173,7 @@ Compaction lives in [`src/context.rs`](../src/context.rs).
 ## Running tests
 
 ```bash
-cargo test                    # 102 offline unit tests
+cargo test                    # 104 offline unit tests
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```

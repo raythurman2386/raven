@@ -319,58 +319,15 @@ impl Sandbox {
             .stderr(std::process::Stdio::piped());
 
         let mut child = cmd.spawn().context("spawn shell")?;
-
-        // Drain stdout/stderr in background threads to prevent pipe deadlock
-        // when a child produces more than the OS pipe buffer (~64KB on Linux).
-        let stdout_handle = child.stdout.take().map(|mut out| {
-            std::thread::spawn(move || {
-                let mut buf = Vec::new();
-                let _ = std::io::Read::read_to_end(&mut out, &mut buf);
-                buf
-            })
-        });
-        let stderr_handle = child.stderr.take().map(|mut err| {
-            std::thread::spawn(move || {
-                let mut buf = Vec::new();
-                let _ = std::io::Read::read_to_end(&mut err, &mut buf);
-                buf
-            })
-        });
-
-        // Wait for the child with timeout
-        let start = std::time::Instant::now();
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break status,
-                Ok(None) => {
-                    if start.elapsed().as_secs() > timeout_secs {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        return Ok("Error: command timed out".into());
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                    continue;
-                }
-                Err(e) => return Ok(format!("Error: {}", e)),
+        match wait_for_child(&mut child, timeout_secs) {
+            Some((status, stdout, stderr)) => {
+                let mut out = format!("exit={}\n", status.code().unwrap_or(-1));
+                out.push_str(&String::from_utf8_lossy(&stdout));
+                out.push_str(&String::from_utf8_lossy(&stderr));
+                Ok(cap_output(out))
             }
-        };
-
-        // Collect pipe output from background threads
-        let stdout = stdout_handle
-            .and_then(|h| h.join().ok())
-            .unwrap_or_default();
-        let stderr = stderr_handle
-            .and_then(|h| h.join().ok())
-            .unwrap_or_default();
-
-        let mut out = format!("exit={}\n", status.code().unwrap_or(-1));
-        out.push_str(&String::from_utf8_lossy(&stdout));
-        out.push_str(&String::from_utf8_lossy(&stderr));
-        if out.len() > MAX_TOOL_OUTPUT {
-            out.truncate(MAX_TOOL_OUTPUT);
-            out.push_str("\n...[truncated]");
+            None => Ok("Error: command timed out".into()),
         }
-        Ok(out)
     }
 
     /// Regex content search (Grok Build `grep` semantics, pure-Rust fallback).
@@ -482,27 +439,34 @@ impl Sandbox {
     }
 
     fn run_git(&self, args: &[&str]) -> Result<String> {
-        let output = Command::new("git")
+        // Git is a blocking subprocess and can hang (credential prompts,
+        // network-FS stalls, large history), so bound it with a timeout.
+        let mut child = Command::new("git")
             .args(args)
             .current_dir(&self.workspace)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .output()
+            .spawn()
             .context("spawn git")?;
-        let mut out = String::new();
-        if !output.stdout.is_empty() {
-            out.push_str(&String::from_utf8_lossy(&output.stdout));
-        }
-        if !output.stderr.is_empty() {
-            if !out.is_empty() {
-                out.push('\n');
+        match wait_for_child(&mut child, 30) {
+            Some((status, stdout, stderr)) => {
+                let mut out = String::new();
+                if !stdout.is_empty() {
+                    out.push_str(&String::from_utf8_lossy(&stdout));
+                }
+                if !stderr.is_empty() {
+                    if !out.is_empty() {
+                        out.push('\n');
+                    }
+                    out.push_str(&String::from_utf8_lossy(&stderr));
+                }
+                if out.is_empty() {
+                    out = format!("exit={}", status.code().unwrap_or(-1));
+                }
+                Ok(cap_output(out))
             }
-            out.push_str(&String::from_utf8_lossy(&output.stderr));
+            None => Ok("Error: git command timed out".into()),
         }
-        if out.is_empty() {
-            out = format!("exit={}", output.status.code().unwrap_or(-1));
-        }
-        Ok(out)
     }
 
     // ── apply_patch (unified diff) ──────────────────────────────────────
@@ -567,24 +531,30 @@ impl Sandbox {
             TestRunner::Pytest => ("pytest", vec![]),
         };
 
-        let output = Command::new(cmd)
+        // A test runner can hang (compiling a large crate, waiting on I/O), so
+        // bound it with a generous timeout rather than blocking forever.
+        let mut child = Command::new(cmd)
             .args(&args)
             .current_dir(&self.workspace)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .output()
+            .spawn()
             .context("spawn test runner")?;
-
-        let mut out = format!(
-            "--- run_tests ({}) exit={} ---\n",
-            cmd,
-            output.status.code().unwrap_or(-1)
-        );
-        out.push_str(&String::from_utf8_lossy(&output.stdout));
-        if !output.stderr.is_empty() {
-            out.push_str(&String::from_utf8_lossy(&output.stderr));
+        match wait_for_child(&mut child, 600) {
+            Some((status, stdout, stderr)) => {
+                let mut out = format!(
+                    "--- run_tests ({}) exit={} ---\n",
+                    cmd,
+                    status.code().unwrap_or(-1)
+                );
+                out.push_str(&String::from_utf8_lossy(&stdout));
+                if !stderr.is_empty() {
+                    out.push_str(&String::from_utf8_lossy(&stderr));
+                }
+                Ok(cap_output(out))
+            }
+            None => Ok("Error: test runner timed out".into()),
         }
-        Ok(truncate_output(&out, MAX_TOOL_OUTPUT))
     }
 }
 
@@ -599,6 +569,68 @@ fn truncate_output(s: &str, max: usize) -> String {
         let truncated: String = s.chars().take(max).collect();
         format!("{}\n...[truncated at {} chars]", truncated, max)
     }
+}
+
+/// Cap tool output to [`MAX_TOOL_OUTPUT`] chars (char-safe) with a marker.
+fn cap_output(s: String) -> String {
+    if s.chars().count() <= MAX_TOOL_OUTPUT {
+        s
+    } else {
+        let truncated: String = s.chars().take(MAX_TOOL_OUTPUT).collect();
+        format!("{}\n...[truncated]", truncated)
+    }
+}
+
+/// Run a spawned child to completion with a timeout, draining stdout/stderr
+/// on background threads so a chatty child can't deadlock the pipe buffers.
+///
+/// Returns `Some((exit_status, stdout, stderr))` on completion, or `None` if
+/// the child did not finish within `timeout_secs` (the child is killed).
+fn wait_for_child(
+    child: &mut std::process::Child,
+    timeout_secs: u64,
+) -> Option<(std::process::ExitStatus, Vec<u8>, Vec<u8>)> {
+    // Drain stdout/stderr in background threads to prevent pipe deadlock when
+    // a child produces more than the OS pipe buffer (~64KB on Linux).
+    let stdout_handle = child.stdout.take().map(|mut out| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut out, &mut buf);
+            buf
+        })
+    });
+    let stderr_handle = child.stderr.take().map(|mut err| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut err, &mut buf);
+            buf
+        })
+    });
+
+    let start = std::time::Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if start.elapsed().as_secs() > timeout_secs {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                continue;
+            }
+            Err(_) => return None,
+        }
+    };
+
+    let stdout = stdout_handle
+        .and_then(|h| h.join().ok())
+        .unwrap_or_default();
+    let stderr = stderr_handle
+        .and_then(|h| h.join().ok())
+        .unwrap_or_default();
+    Some((status, stdout, stderr))
 }
 
 enum TestRunner {
@@ -1659,5 +1691,43 @@ mod tests {
             out.chars().count()
         );
         assert!(out.contains("truncated at"), "missing truncation marker");
+    }
+
+    #[test]
+    fn wait_for_child_times_out() {
+        // A child that sleeps longer than the timeout must be killed, with
+        // wait_for_child returning None rather than blocking forever.
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg("sleep 5")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let start = std::time::Instant::now();
+        let result = wait_for_child(&mut child, 1);
+        assert!(
+            result.is_none(),
+            "long-running child should be killed on timeout"
+        );
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(4),
+            "timeout should return promptly, took {:?}",
+            start.elapsed()
+        );
+    }
+
+    #[test]
+    fn wait_for_child_completes() {
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg("echo hi")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let result = wait_for_child(&mut child, 5).expect("child should finish");
+        assert_eq!(result.0.code(), Some(0));
+        assert_eq!(String::from_utf8_lossy(&result.1).trim(), "hi");
     }
 }
