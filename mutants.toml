@@ -1,0 +1,8 @@
+# cargo-mutants configuration
+# Focus mutation testing on logic-heavy modules; exclude UI glue.
+
+[exclude]
+# Main entry point — argument parsing glue, not logic
+"src/main.rs" = true
+# TUI rendering — not unit-testable
+"src/tui.rs" = true

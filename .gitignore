@@ -1,0 +1,24 @@
+# Rust build artifacts
+target/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Session storage (per-workspace)
+.raven/sessions/
+.ollama-grok/sessions/
+.hermes/
+# Environment / secrets
+.env
+.env.local
+
+# Logs
+*.log
