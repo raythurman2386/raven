@@ -122,6 +122,7 @@ compact_threshold = 0.75
 max_iterations = 30
 plan_first = true
 temperature = 0.2
+no_stream = false
 ```
 
 ### Environment variables
@@ -181,7 +182,7 @@ All writes are atomic (temp file + rename). Use `--resume` to continue a previou
 ## Testing
 
 ```bash
-cargo test                    # 101 tests, all offline
+cargo test                    # 102 tests, all offline
 cargo clippy                  # zero warnings
 cargo clippy -- -W clippy::pedantic  # stricter linting
 ```

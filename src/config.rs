@@ -164,6 +164,8 @@ pub struct ConfigFile {
     pub max_iterations: Option<usize>,
     pub plan_first: Option<bool>,
     pub temperature: Option<f32>,
+    /// Disable streaming and use a single non-streaming request instead.
+    pub no_stream: Option<bool>,
 }
 
 /// Load config from workspace `.raven/config.toml` then `~/.raven/config.toml`.
@@ -190,6 +192,7 @@ pub fn load_config_file(workspace: &std::path::Path) -> ConfigFile {
         max_iterations: ws.max_iterations.or(global.max_iterations),
         plan_first: ws.plan_first.or(global.plan_first),
         temperature: ws.temperature.or(global.temperature),
+        no_stream: ws.no_stream.or(global.no_stream),
     }
 }
 
@@ -336,6 +339,16 @@ max_iterations = 10
         assert_eq!(cfg.model.as_deref(), Some("test-model"));
         assert_eq!(cfg.compact_threshold, Some(0.5));
         assert_eq!(cfg.max_iterations, Some(10));
+    }
+
+    #[test]
+    fn config_file_parses_no_stream() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg_dir = tmp.path().join(".raven");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        std::fs::write(cfg_dir.join("config.toml"), "no_stream = true\n").unwrap();
+        let cfg = load_config_file(tmp.path());
+        assert_eq!(cfg.no_stream, Some(true));
     }
 
     #[test]

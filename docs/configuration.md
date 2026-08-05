@@ -39,6 +39,37 @@ RUST_LOG=raven=debug raven -p "..."
 
 ---
 
+## Config file
+
+Layered TOML config, loaded from the workspace first (higher priority), then the global file. Both are optional; missing keys fall through to env vars / CLI flags / built-in defaults.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `model` | `gemma4:latest` | Default model (overridden by `-m`) |
+| `host` | `http://localhost:11434/v1` | OpenAI-compatible base URL (overridden by `--host`) |
+| `context_window` | inferred from model | Override the model's context window size (tokens) |
+| `compact_threshold` | `0.75` | Fraction of usable context at which compaction triggers |
+| `max_iterations` | `30` | Max agent iterations per run |
+| `plan_first` | `true` | Propose a plan before executing |
+| `temperature` | `0.2` | Sampling temperature |
+| `no_stream` | `false` | Disable streaming (single request per turn) |
+
+```toml
+# .raven/config.toml  (workspace)  or  ~/.raven/config.toml  (global)
+model = "qwen2.5-coder:14b"
+host = "http://localhost:11434/v1"
+context_window = 131072
+compact_threshold = 0.75
+max_iterations = 30
+plan_first = true
+temperature = 0.2
+no_stream = false
+```
+
+CLI flags still win over config file values; env vars take precedence over the config file but lose to explicit CLI flags.
+
+---
+
 ## Context window
 
 The context window is fetched from the model's actual metadata via Ollama's `/api/show` endpoint when `--context-window` / `RAVEN_CONTEXT_WINDOW` / `OG_CONTEXT_WINDOW` are unset. This returns the real `context_length` from the model file. If the API is unreachable, a name-based heuristic is used as fallback:
