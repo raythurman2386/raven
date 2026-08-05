@@ -266,6 +266,6 @@ correct (one per turn, never per-iteration).
 - [x] Phase 4 — Repo symbol map
 - [x] Phase 5 — Memory file index + recall
 - [x] Phase 6 — Git auto-commit + /undo
-- [ ] Phase 7 — LLM structured compaction
+- [x] Phase 7 — LLM structured compaction
 - [ ] Phase 8 — Auto-lint + reflection
 - [ ] Phase 9 — Session durability + flush-on-stop
