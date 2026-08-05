@@ -803,7 +803,6 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
                             .collect();
                         log.push(LogEntry::system(String::new()));
                         log.push(LogEntry::system("plan ready — approve or revise below"));
-                        log_dirty = true;
                         plan_pending = true;
                         agent_state = AgentState::AwaitingApproval;
                         status = "awaiting plan approval".into();
@@ -813,6 +812,14 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
                         agent_state = AgentState::Idle;
                     }
                     running = false;
+                    // Force a full re-render from the authoritative `log` on
+                    // turn end. The stream-patch path reads `assistant_text`,
+                    // which we clear below — if a stale stream_patch were left
+                    // pending it would patch the trailing assistant block with
+                    // the now-empty buffer and erase the response that just
+                    // streamed (the "tail of the reply never shows" bug).
+                    // Re-rendering from `log` (which holds the complete text)
+                    // is grok-build's transcript-as-source-of-truth model.
                     assistant_text.clear();
                     if turn_tool_count > 0 {
                         log.push(LogEntry::tool(format!(
@@ -820,18 +827,19 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
                             turn_tool_count,
                             if turn_tool_count == 1 { "" } else { "s" }
                         )));
-                        log_dirty = true;
                     }
                     turn_tool_count = 0;
                     live_tool = None;
+                    log_dirty = true;
                 }
                 AgentEvent::Error(e) => {
                     log.push(LogEntry::error(e));
-                    log_dirty = true;
                     plan_preview.clear();
                     status = "ready".into();
                     agent_state = AgentState::Idle;
                     running = false;
+                    // Same as Done: re-render from `log`, not the scratch
+                    // buffer we're about to clear.
                     assistant_text.clear();
                     if turn_tool_count > 0 {
                         log.push(LogEntry::tool(format!(
@@ -839,10 +847,10 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
                             turn_tool_count,
                             if turn_tool_count == 1 { "" } else { "s" }
                         )));
-                        log_dirty = true;
                     }
                     turn_tool_count = 0;
                     live_tool = None;
+                    log_dirty = true;
                 }
             }
         }
