@@ -1102,6 +1102,34 @@ pub fn tool_definitions() -> serde_json::Value {
                     "required": ["url"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "skill_search",
+                "description": "List skills whose name or description matches a query, or all skills when the query is empty. Skills are SKILL.md files in .raven/skills/ or ~/.raven/skills/.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "Keyword to match against skill names/descriptions (empty lists all)" }
+                    },
+                    "required": ["query"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "skill_load",
+                "description": "Load a skill's instructions into context as a <skill> envelope. Call skill_search first to find the exact name.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string", "description": "Exact skill name to load" }
+                    },
+                    "required": ["name"]
+                }
+            }
         }
     ])
 }
@@ -1122,6 +1150,8 @@ pub fn plan_tool_definitions() -> serde_json::Value {
         "git_log",
         "web_search",
         "web_fetch",
+        "skill_search",
+        "skill_load",
         "exit_plan_mode",
     ];
 
@@ -1267,6 +1297,14 @@ pub fn dispatch(sandbox: &Sandbox, name: &str, args: &serde_json::Value) -> Stri
             sandbox.apply_patch(patch)
         }
         "run_tests" => sandbox.run_tests(),
+        "skill_search" => {
+            let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
+            Ok(crate::skills::search(&sandbox.workspace, query))
+        }
+        "skill_load" => {
+            let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            Ok(crate::skills::load(&sandbox.workspace, name))
+        }
         other => Ok(format!("Unknown tool: {}", other)),
     };
     match res {
@@ -1848,6 +1886,8 @@ mod tests {
             "git_status",
             "web_search",
             "web_fetch",
+            "skill_search",
+            "skill_load",
         ] {
             assert!(
                 names.iter().any(|n| n == expected),

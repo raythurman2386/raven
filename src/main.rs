@@ -38,6 +38,7 @@ mod error;
 mod memory;
 mod plan;
 mod session;
+mod skills;
 mod tokenizer;
 mod tools;
 mod tui;

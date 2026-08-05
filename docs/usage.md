@@ -178,6 +178,21 @@ ranked list of result titles and URLs (via DuckDuckGo's HTML endpoint), and
 the tools can't read local files. Both are read-only and available during
 planning, and their output is capped.
 
+### Skills (`skill_search` / `skill_load`)
+
+Skills are reusable instruction files — `SKILL.md` with YAML frontmatter
+(`name`, `description`) and a markdown body. Drop them under `.raven/skills/`
+(project) or `~/.raven/skills/` (global), e.g.:
+
+```text
+.raven/skills/commit/SKILL.md
+```
+
+The agent can discover them with `skill_search` (match by name or
+description) and load one into context with `skill_load`, which returns the
+body wrapped in a `<skill>` envelope. Both are read-only and available during
+planning.
+
 ### TUI limitations
 
 - Each submission spawns a **fresh agent** — conversation history is not carried across turns.
