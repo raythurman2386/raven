@@ -56,6 +56,7 @@ use session::{Session, SessionStore};
 #[derive(Parser, Debug)]
 #[command(
     name = "raven",
+    version,
     about = "Privacy-first local coding-agent harness for Ollama / OpenAI-compatible endpoints"
 )]
 struct Cli {
@@ -127,10 +128,6 @@ struct Cli {
     /// List saved sessions for this workspace.
     #[arg(long)]
     list_sessions: bool,
-
-    /// Force a new session (don't resume even if sessions exist).
-    #[arg(long)]
-    new_session: bool,
 }
 
 #[tokio::main]

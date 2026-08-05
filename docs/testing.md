@@ -10,14 +10,15 @@ cargo test
 
 ## Test structure
 
-All tests are inline `#[cfg(test)] mod tests` blocks in the source files (this is a binary-only crate with no `[lib]` target, so there is no `tests/` integration directory — cross-module behavior is exercised through the inline suites):
-
-- `src/config.rs` — context window inference, max_tokens derivation, AGENTS.md loading, config.toml parsing
-- `src/agent.rs` — ephemeral reminder computation (loop-breaker, iteration nudge)
-- `src/context.rs` — token estimation, compaction (preserves system message, reduces tokens, keeps tool-call/result pairs), tool-result pruning
-- `src/tools.rs` — sandbox path confinement (including symlink-escape rejection), list_dir, read_file, write_file, search_replace, grep, run_shell (dangerous command blocking, API key stripping), dispatch routing, glob matching, unified diff parsing, apply_patch
-- `src/plan.rs` — plan parsing (JSON, numbered list, bullet list, code block), plan formatting
-- `src/tokenizer.rs` — BPE token counting behavior
+- **Unit tests** (`#[cfg(test)] mod tests` in each source file):
+  - `src/config.rs` — context window inference, max_tokens derivation, AGENTS.md loading, config.toml parsing
+  - `src/agent.rs` — ephemeral reminder computation (loop-breaker, iteration nudge)
+  - `src/context.rs` — token estimation, compaction (preserves system message, reduces tokens, keeps tool-call/result pairs), tool-result pruning
+  - `src/tools.rs` — sandbox path confinement (including symlink-escape rejection), list_dir, read_file, write_file, search_replace, grep, run_shell (dangerous command blocking, API key stripping), dispatch routing, glob matching, unified diff parsing, apply_patch
+  - `src/plan.rs` — plan parsing (JSON, numbered list, bullet list, code block), plan formatting
+  - `src/tokenizer.rs` — BPE token counting behavior
+- **Integration tests** (`tests/`):
+  - `tests/cli_smoke.rs` — black-box tests of the compiled binary (`CARGO_BIN_EXE_raven`): `--help`/`--version` output, no-task error, and session persistence round-trip
 
 ## Bugs found by tests
 
