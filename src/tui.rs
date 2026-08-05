@@ -398,10 +398,16 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
                             break
                         }
                         KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            plan_first = !plan_first;
+                            let on = toggle_plan_mode(
+                                &mut plan_first,
+                                &mut plan_pending,
+                                &mut plan_preview,
+                                &mut agent_state,
+                                &mut status,
+                            );
                             log.push(LogEntry::system(format!(
                                 "plan mode {}",
-                                if plan_first { "on" } else { "off" }
+                                if on { "on" } else { "off" }
                             )));
                             log_dirty = true;
                         }
@@ -1009,6 +1015,36 @@ fn wrapped_line_count(s: &str, width: usize) -> usize {
 
 // ── Task / plan helpers (keeps the event loop readable) ──────────────────
 
+/// Toggle plan-first mode and, when turning it OFF, clear any stuck
+/// plan-approval state so the input box isn't left stuck in "approve / revise".
+///
+/// `plan_pending` + `plan_preview` describe a plan awaiting human approval.
+/// They are independent of `plan_first` (which only affects the NEXT submit),
+/// so toggling plan off must also drop the pending approval, or the next typed
+/// input still routes to `handle_plan_response` instead of `start_task`.
+fn toggle_plan_mode(
+    plan_first: &mut bool,
+    plan_pending: &mut bool,
+    plan_preview: &mut Vec<String>,
+    agent_state: &mut AgentState,
+    status: &mut String,
+) -> bool {
+    *plan_first = !*plan_first;
+    if !*plan_first {
+        // Turning plan mode off: clear a stuck approval so input isn't trapped.
+        *plan_pending = false;
+        plan_preview.clear();
+        if matches!(
+            *agent_state,
+            AgentState::AwaitingApproval | AgentState::Planning
+        ) {
+            *agent_state = AgentState::Idle;
+            *status = "ready".into();
+        }
+    }
+    *plan_first
+}
+
 #[allow(clippy::too_many_arguments, clippy::ptr_arg)]
 fn start_task(
     text: &str,
@@ -1159,10 +1195,10 @@ fn dispatch_slash_command(
             *log_dirty = true;
         }
         "plan" => {
-            *plan_first = !*plan_first;
+            let on = toggle_plan_mode(plan_first, plan_pending, plan_preview, agent_state, status);
             log.push(LogEntry::system(format!(
                 "plan mode {}",
-                if *plan_first { "on" } else { "off" }
+                if on { "on" } else { "off" }
             )));
             *log_dirty = true;
         }
@@ -1262,4 +1298,75 @@ fn dispatch_slash_command(
         }
     }
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plan::AgentState;
+
+    #[test]
+    fn toggle_plan_off_clears_stuck_pending_approval() {
+        // Simulate: plan is ready and awaiting approval, then the user turns
+        // plan mode OFF. The input box must NOT stay trapped in approve/revise.
+        let mut plan_first = true;
+        let mut plan_pending = true;
+        let mut plan_preview = vec!["1. Do X".into()];
+        let mut agent_state = AgentState::AwaitingApproval;
+        let mut status = "awaiting plan approval".into();
+
+        let on = toggle_plan_mode(
+            &mut plan_first,
+            &mut plan_pending,
+            &mut plan_preview,
+            &mut agent_state,
+            &mut status,
+        );
+        assert!(!on, "plan mode should be off");
+        assert!(!plan_pending, "pending approval must be cleared");
+        assert!(plan_preview.is_empty(), "plan preview must be cleared");
+        assert_eq!(agent_state, AgentState::Idle, "state must reset to Idle");
+        assert_eq!(status, "ready");
+    }
+
+    #[test]
+    fn toggle_plan_off_clears_stuck_planning_state() {
+        // Turning plan off mid-planning (no approval yet) must also unstick.
+        let mut plan_first = true;
+        let mut plan_pending = false;
+        let mut plan_preview: Vec<String> = Vec::new();
+        let mut agent_state = AgentState::Planning;
+        let mut status = "planning".into();
+
+        toggle_plan_mode(
+            &mut plan_first,
+            &mut plan_pending,
+            &mut plan_preview,
+            &mut agent_state,
+            &mut status,
+        );
+        assert_eq!(agent_state, AgentState::Idle);
+        assert_eq!(status, "ready");
+    }
+
+    #[test]
+    fn toggle_plan_on_keeps_pending_state() {
+        // Turning plan mode ON when idle must not touch anything else.
+        let mut plan_first = false;
+        let mut plan_pending = false;
+        let mut plan_preview: Vec<String> = Vec::new();
+        let mut agent_state = AgentState::Idle;
+        let mut status = "ready".into();
+
+        let on = toggle_plan_mode(
+            &mut plan_first,
+            &mut plan_pending,
+            &mut plan_preview,
+            &mut agent_state,
+            &mut status,
+        );
+        assert!(on, "plan mode should be on");
+        assert_eq!(agent_state, AgentState::Idle);
+        assert_eq!(status, "ready");
+    }
 }
