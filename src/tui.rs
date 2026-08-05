@@ -152,8 +152,13 @@ fn state_label(state: &AgentState, status: &str) -> (&'static str, Color) {
 
 // ── Render log lines (only when dirty) ───────────────────────────────────
 
-fn render_log_lines(log: &[LogEntry]) -> Vec<Line<'static>> {
+/// Render every log entry into display lines, returning the count of trailing
+/// lines owned by the *last* assistant entry (0 if the log ends on any other
+/// kind). That tail count lets the streaming path patch just the active
+/// assistant block instead of re-rendering the whole log per token.
+fn render_log_lines(log: &[LogEntry]) -> (Vec<Line<'static>>, usize) {
     let mut lines = Vec::with_capacity(log.len().saturating_mul(2));
+    let mut last_assistant_start: Option<usize> = None;
     for e in log {
         match e.kind {
             LogKind::User => {
@@ -170,8 +175,11 @@ fn render_log_lines(log: &[LogEntry]) -> Vec<Line<'static>> {
                     ]));
                 }
                 lines.push(Line::from(""));
+                // Non-assistant tail: clears any earlier assistant marker.
+                last_assistant_start = None;
             }
             LogKind::Assistant => {
+                last_assistant_start = Some(lines.len());
                 for part in e.text.lines() {
                     lines.push(Line::from(Span::styled(
                         part.to_string(),
@@ -184,6 +192,7 @@ fn render_log_lines(log: &[LogEntry]) -> Vec<Line<'static>> {
                     e.text.clone(),
                     Style::default().fg(Theme::TOOL),
                 )));
+                last_assistant_start = None;
             }
             LogKind::System => {
                 if e.text.is_empty() {
@@ -194,6 +203,7 @@ fn render_log_lines(log: &[LogEntry]) -> Vec<Line<'static>> {
                         Style::default().fg(Theme::SYSTEM),
                     )));
                 }
+                last_assistant_start = None;
             }
             LogKind::Error => {
                 lines.push(Line::from(Span::styled(
@@ -202,10 +212,27 @@ fn render_log_lines(log: &[LogEntry]) -> Vec<Line<'static>> {
                         .fg(Theme::ERROR)
                         .add_modifier(Modifier::BOLD),
                 )));
+                last_assistant_start = None;
             }
         }
     }
-    lines
+    let tail_count = match last_assistant_start {
+        Some(s) => lines.len().saturating_sub(s),
+        None => 0,
+    };
+    (lines, tail_count)
+}
+
+/// Render just one assistant text block into display lines (for streaming).
+fn render_assistant_lines(text: &str) -> Vec<Line<'static>> {
+    text.lines()
+        .map(|part| {
+            Line::from(Span::styled(
+                part.to_string(),
+                Style::default().fg(Theme::FG),
+            ))
+        })
+        .collect()
 }
 
 // ── Main TUI ─────────────────────────────────────────────────────────────
@@ -241,11 +268,25 @@ pub async fn run_tui(settings: Settings) -> Result<()> {
 
     let mut log_dirty = true;
     let mut cached_log_lines: Vec<Line<'static>> = Vec::new();
+    // Number of trailing lines owned by the last assistant block. On a
+    // stream patch we truncate to this length and re-render just that block,
+    // instead of re-rendering the entire log for every streamed token.
+    let mut last_assistant_lines: usize = 0;
     // When only the last assistant line streams, patch it without full rebuild.
     let mut stream_patch = false;
 
     let mut cached_est_tokens: usize = 0;
     let mut messages_dirty = false;
+
+    // Hard cap on rendered log entries so per-frame cost stays bounded for
+    // long sessions. Old entries are dropped from the on-screen log only; the
+    // session file keeps the full history.
+    const MAX_LOG_ENTRIES: usize = 2000;
+
+    // Throttle full redraws during steady streaming to keep the CPU/terminal
+    // cost flat while the model is mid-response.
+    const DRAW_INTERVAL: std::time::Duration = std::time::Duration::from_millis(60);
+    let mut last_draw = std::time::Instant::now();
 
     let mut input = String::new();
     let mut status = "ready".to_string();
@@ -267,14 +308,29 @@ pub async fn run_tui(settings: Settings) -> Result<()> {
     let (tx, mut rx) = mpsc::channel::<AgentEvent>(128);
 
     loop {
+        // Cap the on-screen log so per-frame cost stays bounded on long
+        // sessions. The session file keeps full history, so dropping from the
+        // view is safe.
+        if log.len() > MAX_LOG_ENTRIES {
+            let drop = log.len() - MAX_LOG_ENTRIES;
+            log.drain(..drop);
+            log_dirty = true;
+        }
+
         if log_dirty {
-            cached_log_lines = render_log_lines(&log);
+            let (rendered, tail) = render_log_lines(&log);
+            cached_log_lines = rendered;
+            last_assistant_lines = tail;
             log_dirty = false;
             stream_patch = false;
         } else if stream_patch {
-            // Rebuild only from last assistant block — simplest correct approach:
-            // full rebuild is still cheap for typical session sizes; flag kept for future.
-            cached_log_lines = render_log_lines(&log);
+            // Patch only the trailing assistant block instead of re-rendering
+            // the whole log per token.
+            let new_tail = render_assistant_lines(&assistant_text);
+            let new_tail_len = new_tail.len();
+            cached_log_lines.truncate(cached_log_lines.len().saturating_sub(last_assistant_lines));
+            cached_log_lines.extend(new_tail);
+            last_assistant_lines = new_tail_len;
             stream_patch = false;
         }
 
@@ -291,24 +347,30 @@ pub async fn run_tui(settings: Settings) -> Result<()> {
         };
         let (state_txt, state_color) = state_label(&agent_state, &status);
 
-        terminal.draw(|f| {
-            draw_ui(
-                f,
-                app_name,
-                &settings,
-                &cached_log_lines,
-                &input,
-                plan_pending,
-                &plan_preview,
-                plan_first,
-                est_tokens,
-                pct,
-                state_txt,
-                state_color,
-                scroll,
-                auto_scroll,
-            );
-        })?;
+        // Throttle full redraws so a burst of streamed tokens (or an idle
+        // loop) doesn't repaint the terminal more than ~16x/sec.
+        let force_draw = log_dirty || messages_dirty || stream_patch || !running;
+        if force_draw || last_draw.elapsed() >= DRAW_INTERVAL {
+            terminal.draw(|f| {
+                draw_ui(
+                    f,
+                    app_name,
+                    &settings,
+                    &cached_log_lines,
+                    &input,
+                    plan_pending,
+                    &plan_preview,
+                    plan_first,
+                    est_tokens,
+                    pct,
+                    state_txt,
+                    state_color,
+                    scroll,
+                    auto_scroll,
+                );
+            })?;
+            last_draw = std::time::Instant::now();
+        }
 
         // Input + mouse
         if event::poll(std::time::Duration::from_millis(40))? {
