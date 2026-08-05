@@ -880,7 +880,7 @@ pub fn tool_definitions() -> serde_json::Value {
                     "properties": {
                         "path": { "type": "string" },
                         "start_line": { "type": "integer", "description": "1-based start" },
-                        "max_lines": { "type": "integer", "description": "Max lines (default 200)" }
+                        "max_lines": { "type": "integer", "description": "Max lines (default 400)" }
                     },
                     "required": ["path"]
                 }
@@ -1080,7 +1080,7 @@ pub fn dispatch(sandbox: &Sandbox, name: &str, args: &serde_json::Value) -> Stri
             let max = args
                 .get("max_lines")
                 .and_then(|v| v.as_u64())
-                .unwrap_or(200) as usize;
+                .unwrap_or(400) as usize;
             sandbox.read_file(path, start, max)
         }
         "search_replace" => {

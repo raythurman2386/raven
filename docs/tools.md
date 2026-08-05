@@ -37,7 +37,7 @@ Returns a listing with dirs first, then files (alphabetical). Each line: `dir|fi
 {
   "path": "string (required)",
   "start_line": "integer (optional, 1-based, default 1)",
-  "max_lines": "integer (optional, default 200)"
+  "max_lines": "integer (optional, default 400)"
 }
 ```
 
