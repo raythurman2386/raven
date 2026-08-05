@@ -134,23 +134,36 @@ fn find_safe_tail_start(messages: &[ChatMessage], desired_start: usize) -> usize
     start
 }
 
-/// Compact a message history in place, returning `(before_tokens, after_tokens)`.
-///
-/// Strategy:
-///   1. Always keep the system message (index 0).
-///   2. Compute a token budget for the trailing window (~40% of context_window).
-///   3. Find the largest tail that fits in the trailing budget, respecting
-///      tool-call/tool-result pair boundaries.
-///   4. Summarize everything between the system message and the tail into a
-///      short synthetic user + assistant pair.
-///   5. Replace `messages` with: `[system, summary_user, summary_assistant, ...tail]`.
-///
-/// Returns `None` if compaction is not needed (history is under the soft limit).
-pub fn compact_if_needed(
-    messages: &mut Vec<ChatMessage>,
+/// The result of a compaction: the new token estimate and how it changed.
+pub type CompactionResult = (usize, usize);
+
+/// The outcome of [`prepare_compaction`].
+enum CompactionOutcome {
+    /// History is under the soft limit — no compaction performed.
+    None,
+    /// Soft-pruning alone brought us under the limit; no summarization needed.
+    /// Carries `(before, after)` token estimates.
+    PrunedOnly(usize, usize),
+    /// The middle region needs summarizing before assembly.
+    NeedsSummary(CompactionPlan),
+}
+
+/// Prepare compaction: prune old tool results, check the threshold, and if
+/// over it, choose the tail boundary.
+struct CompactionPlan {
+    /// Messages between system (0) and tail_start, to be summarized.
+    middle: Vec<ChatMessage>,
+    /// Index into `messages` where the kept tail begins.
+    tail_start: usize,
+    /// Token estimate before compaction.
+    before: usize,
+}
+
+fn prepare_compaction(
+    messages: &mut [ChatMessage],
     context_window: usize,
     compact_threshold: f32,
-) -> Option<(usize, usize)> {
+) -> CompactionOutcome {
     // Reserve for model output.
     let output_reserve = (context_window / 8).max(1024);
     let soft_limit =
@@ -158,7 +171,7 @@ pub fn compact_if_needed(
 
     let before = history_tokens(messages);
     if before <= soft_limit {
-        return None;
+        return CompactionOutcome::None;
     }
 
     // Step 1: Soft-prune old tool results (keep head 1500 + tail 1500 chars)
@@ -167,7 +180,7 @@ pub fn compact_if_needed(
     prune_tool_results(messages, 3);
     let after_prune = history_tokens(messages);
     if after_prune <= soft_limit {
-        return Some((before, after_prune));
+        return CompactionOutcome::PrunedOnly(before, after_prune);
     }
 
     // Trailing budget: ~40% of (context_window - output_reserve)
@@ -190,12 +203,32 @@ pub fn compact_if_needed(
     // Adjust so we don't split a tool-call/tool-result pair
     tail_start = find_safe_tail_start(messages, tail_start);
 
-    // The middle is everything between system (0) and tail_start
-    let middle_end = tail_start;
-    let middle = &messages[1..middle_end];
+    CompactionOutcome::NeedsSummary(CompactionPlan {
+        middle: messages[1..tail_start].to_vec(),
+        tail_start,
+        before,
+    })
+}
 
-    // Build summary
-    let summary_user = build_summary_user(middle);
+/// Assemble the compacted history from a plan, replacing `messages` in place.
+///
+/// `llm_summary` is an optional pre-computed LLM summary of the middle. When
+/// `None`, the extractive [`build_summary_user`] fallback is used.
+fn assemble_compaction(
+    messages: &mut Vec<ChatMessage>,
+    plan: CompactionPlan,
+    llm_summary: Option<String>,
+) -> CompactionResult {
+    // Build summary (LLM-provided or extractive fallback).
+    let summary_user = match llm_summary {
+        Some(text) => ChatMessage {
+            role: "user".into(),
+            content: Some(format!("[Compacted conversation summary]\n{}", text)),
+            tool_calls: None,
+            tool_call_id: None,
+        },
+        None => build_summary_user(&plan.middle),
+    };
     let summary_assistant = ChatMessage {
         role: "assistant".into(),
         content: Some(
@@ -209,7 +242,7 @@ pub fn compact_if_needed(
 
     // Assemble new history
     let system = messages[0].clone();
-    let tail: Vec<ChatMessage> = messages[tail_start..].to_vec();
+    let tail: Vec<ChatMessage> = messages[plan.tail_start..].to_vec();
 
     messages.clear();
     messages.push(system);
@@ -217,8 +250,35 @@ pub fn compact_if_needed(
     messages.push(summary_assistant);
     messages.extend(tail);
 
-    let after = history_tokens(messages);
-    Some((before, after))
+    (plan.before, history_tokens(messages))
+}
+
+/// LLM-structured compaction: summarize the middle with the model, falling
+/// back to the extractive summarizer if the model call fails.
+///
+/// `summarizer` is an async callable that takes ownership of the middle
+/// messages and returns a summary string (or `None` to fall back). Taking the
+/// messages by value with a `'static` future avoids tying the closure to the
+/// caller's borrows.
+pub async fn compact_if_needed_llm(
+    messages: &mut Vec<ChatMessage>,
+    context_window: usize,
+    compact_threshold: f32,
+    summarizer: impl FnOnce(
+        Vec<ChatMessage>,
+    ) -> futures_util::future::BoxFuture<'static, Option<String>>,
+) -> Option<(usize, usize)> {
+    match prepare_compaction(messages, context_window, compact_threshold) {
+        CompactionOutcome::None => None,
+        // Soft-pruning alone sufficed — no LLM round-trip needed.
+        CompactionOutcome::PrunedOnly(before, after) => Some((before, after)),
+        CompactionOutcome::NeedsSummary(plan) => {
+            // Clone the middle so the extractive fallback still has it if the
+            // LLM summarizer returns `None`.
+            let summary = summarizer(plan.middle.clone()).await;
+            Some(assemble_compaction(messages, plan, summary))
+        }
+    }
 }
 
 /// Build a synthetic user message summarizing the middle turns.
@@ -447,53 +507,64 @@ mod tests {
         assert_eq!(total, sum);
     }
 
-    // ── compact_if_needed ────────────────────────────────────────────────
+    // ── compact_if_needed_llm ──────────────────────────────────────────
 
-    #[test]
-    fn compaction_not_needed_under_threshold() {
+    /// Exercise compaction with the extractive fallback (summarizer returns
+    /// `None`), matching the old sync entrypoint's behavior.
+    async fn compact_extractive(
+        msgs: &mut Vec<ChatMessage>,
+        context_window: usize,
+        threshold: f32,
+    ) -> Option<(usize, usize)> {
+        compact_if_needed_llm(msgs, context_window, threshold, |_middle| {
+            Box::pin(async { None })
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn compaction_not_needed_under_threshold() {
         let mut msgs = vec![msg("system", "sys"), msg("user", "short")];
-        let result = compact_if_needed(&mut msgs, 128_000, 0.75);
+        let result = compact_extractive(&mut msgs, 128_000, 0.75).await;
         assert!(result.is_none());
         assert_eq!(msgs.len(), 2);
     }
 
-    #[test]
-    fn compaction_preserves_system_message() {
+    #[tokio::test]
+    async fn compaction_preserves_system_message() {
         let mut msgs = vec![msg("system", "important system prompt")];
         for i in 0..100 {
-            msgs.push(msg("user", &format!("message {}", i)));
-            msgs.push(msg("assistant", &format!("response {}", i)));
+            msgs.push(msg("user", &format!("message {i}")));
+            msgs.push(msg("assistant", &format!("response {i}")));
         }
-        let result = compact_if_needed(&mut msgs, 8192, 0.1);
+        let result = compact_extractive(&mut msgs, 8192, 0.1).await;
         assert!(result.is_some());
         assert_eq!(msgs[0].role, "system");
         assert_eq!(msgs[0].content.as_deref(), Some("important system prompt"));
     }
 
-    #[test]
-    fn compaction_reduces_token_count() {
+    #[tokio::test]
+    async fn compaction_reduces_token_count() {
         let mut msgs = vec![msg("system", "sys")];
         for i in 0..200 {
-            msgs.push(msg("user", &format!("message number {}", i)));
-            msgs.push(msg("assistant", &format!("response to message {}", i)));
+            msgs.push(msg("user", &format!("message number {i}")));
+            msgs.push(msg("assistant", &format!("response to message {i}")));
         }
-        let (before, after) = compact_if_needed(&mut msgs, 8192, 0.1).unwrap();
+        let (before, after) = compact_extractive(&mut msgs, 8192, 0.1).await.unwrap();
         assert!(
             after < before,
-            "after ({}) should be < before ({})",
-            after,
-            before
+            "after ({after}) should be < before ({before})"
         );
     }
 
-    #[test]
-    fn compaction_produces_summary_messages() {
+    #[tokio::test]
+    async fn compaction_produces_summary_messages() {
         let mut msgs = vec![msg("system", "sys")];
         for i in 0..100 {
-            msgs.push(msg("user", &format!("task {}", i)));
-            msgs.push(msg("assistant", &format!("did {}", i)));
+            msgs.push(msg("user", &format!("task {i}")));
+            msgs.push(msg("assistant", &format!("did {i}")));
         }
-        compact_if_needed(&mut msgs, 8192, 0.1).unwrap();
+        compact_extractive(&mut msgs, 8192, 0.1).await.unwrap();
         // After compaction: [system, summary_user, summary_assistant, ...tail]
         assert!(msgs.len() >= 3);
         assert_eq!(msgs[1].role, "user");
@@ -501,8 +572,8 @@ mod tests {
         assert!(msgs[1].content.as_deref().unwrap().contains("[Compacted"));
     }
 
-    #[test]
-    fn compaction_does_not_split_tool_call_result_pair() {
+    #[tokio::test]
+    async fn compaction_does_not_split_tool_call_result_pair() {
         let mut msgs = vec![msg("system", "sys")];
         // Fill with enough content to trigger compaction
         for _i in 0..40 {
@@ -517,7 +588,7 @@ mod tests {
         ));
         msgs.push(tool_msg("call_42", "file contents here"));
 
-        compact_if_needed(&mut msgs, 8192, 0.3).unwrap();
+        compact_extractive(&mut msgs, 8192, 0.3).await.unwrap();
 
         // Find the tool result — its matching assistant call must precede it
         let tool_idx = msgs.iter().position(|m| m.role == "tool");
@@ -583,5 +654,60 @@ mod tests {
             .find(|m| m.tool_call_id.as_deref() == Some("c1"))
             .unwrap();
         assert_eq!(c1.content.as_deref(), Some("small output"));
+    }
+
+    #[tokio::test]
+    async fn llm_compaction_uses_provided_summary_and_reduces_tokens() {
+        let mut msgs = vec![msg("system", "sys")];
+        for i in 0..200 {
+            msgs.push(msg("user", &format!("message number {i}")));
+            msgs.push(msg("assistant", &format!("response to message {i}")));
+        }
+        let (before, after) = compact_if_needed_llm(&mut msgs, 8192, 0.1, |_middle| {
+            Box::pin(async { Some("LLM distilled: 200 turns of task work.".to_string()) })
+        })
+        .await
+        .unwrap();
+        assert!(
+            after < before,
+            "after ({after}) should be < before ({before})"
+        );
+        // The LLM summary text is present in the assembled history.
+        let summary_present = msgs.iter().any(|m| {
+            m.content
+                .as_deref()
+                .is_some_and(|c| c.contains("LLM distilled"))
+        });
+        assert!(summary_present, "LLM summary should be in the history");
+        // System message preserved.
+        assert_eq!(msgs[0].role, "system");
+    }
+
+    #[tokio::test]
+    async fn llm_compaction_falls_back_when_summarizer_returns_none() {
+        let mut msgs = vec![msg("system", "sys")];
+        for i in 0..200 {
+            msgs.push(msg("user", &format!("message number {i}")));
+            msgs.push(msg("assistant", &format!("response to message {i}")));
+        }
+        let (before, after) = compact_if_needed_llm(&mut msgs, 8192, 0.1, |_middle| {
+            Box::pin(async { None }) // summarizer failed → extractive fallback
+        })
+        .await
+        .unwrap();
+        assert!(
+            after < before,
+            "fallback should still reduce tokens ({after} < {before})"
+        );
+        // The extractive summary marker is present.
+        let fallback_present = msgs.iter().any(|m| {
+            m.content
+                .as_deref()
+                .is_some_and(|c| c.contains("[Compacted conversation summary]"))
+        });
+        assert!(
+            fallback_present,
+            "extractive fallback summary should be present"
+        );
     }
 }

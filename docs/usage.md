@@ -222,6 +222,16 @@ the TUI. It runs `git reset --soft HEAD~1`, which undoes the commit while
 **keeping all changes in the working tree** — nothing is lost, and you can
 re-commit once the agent's next move is clearer.
 
+### Context compaction (LLM-structured)
+
+When history grows past the soft limit, Raven **summarizes the middle turns
+with the model** (a dedicated non-streaming summarization request) and keeps a
+recent tail, so the agent retains more signal per token than the old
+extractive (message-joins) summarizer. The system message is always preserved,
+and tool-call/tool-result pairs are never split. If the summarization request
+fails, Raven falls back to the extractive summarizer so compaction always
+proceeds.
+
 ### TUI limitations
 
 - Each submission spawns a **fresh agent** — conversation history is not carried across turns.

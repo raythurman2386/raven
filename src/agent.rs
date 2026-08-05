@@ -26,7 +26,7 @@ use std::collections::BTreeMap;
 use tokio::sync::mpsc;
 
 use crate::config::{load_agents_md, Settings};
-use crate::context::{compact_if_needed, history_tokens};
+use crate::context::{compact_if_needed_llm, history_tokens};
 use crate::error::AgentError;
 use crate::memory;
 use crate::tools::{dispatch, tool_definitions, Sandbox};
@@ -273,12 +273,32 @@ impl Agent {
             let reminders = compute_reminders(&self.messages, iter);
 
             // Compaction: if estimated history tokens exceed the soft limit,
-            // summarize the middle turns and keep a recent tail.
-            if let Some((before, after)) = compact_if_needed(
+            // summarize the middle turns with the model (falling back to the
+            // extractive summarizer if the summarization request fails) and
+            // keep a recent tail.
+            //
+            // Capture the fields the summarizer needs as owned values (client
+            // is Arc-backed and cheap to clone) so the closure doesn't borrow
+            // `self` — which would conflict with the mutable borrow of
+            // `self.messages` below.
+            let client = self.client.clone();
+            let base_url = self.settings.base_url.clone();
+            let model = self.settings.model.clone();
+            if let Some((before, after)) = compact_if_needed_llm(
                 &mut self.messages,
                 self.settings.context_window,
                 self.settings.compact_threshold,
-            ) {
+                move |middle| {
+                    Box::pin(summarize_request(
+                        client.clone(),
+                        base_url.clone(),
+                        model.clone(),
+                        middle,
+                    ))
+                },
+            )
+            .await
+            {
                 let _ = tx
                     .send(AgentEvent::Compacted {
                         before_tokens: before,
@@ -886,6 +906,60 @@ impl Agent {
         }
 
         (content_buf, tool_acc)
+    }
+}
+
+/// Summarize a slice of conversation history into a compact paragraph.
+///
+/// Used by LLM-structured compaction. Makes a single non-streaming chat
+/// request asking the model to distill the middle turns. Returns `None` if
+/// the request fails, so the caller falls back to the extractive summarizer.
+async fn summarize_request(
+    client: reqwest::Client,
+    base_url: String,
+    model: String,
+    middle: Vec<ChatMessage>,
+) -> Option<String> {
+    let prompt = format!(
+        "Distill the following conversation segment into a compact summary \
+         (max ~150 words) preserving the key user requests, decisions, and \
+         actions taken. This will replace the original messages in a \
+         long-running agent session.\n\n{}\n\nSummary:",
+        middle
+            .iter()
+            .map(|m| format!("{}: {}", m.role, m.content.clone().unwrap_or_default()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+
+    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "You are a context-compaction assistant for a coding agent. Be concise and factual."},
+            {"role": "user", "content": prompt}
+        ],
+        "max_tokens": 512,
+        "stream": false
+    });
+
+    let resp = client.post(&url).json(&body).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let json: serde_json::Value = resp.json().await.ok()?;
+    let text = json
+        .get("choices")
+        .and_then(|c| c.get(0))
+        .and_then(|c| c.get("message"))
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_str())
+        .map(str::to_string)?;
+    let trimmed = text.trim().to_string();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
     }
 }
 
