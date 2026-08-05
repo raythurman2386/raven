@@ -13,9 +13,14 @@ use serde::{Deserialize, Serialize};
 /// re-planning instead of touching files.
 pub const EXECUTE_PROMPT: &str = "\
 The plan above is APPROVED. Do NOT propose or restate another plan, do NOT \
-re-iterate steps, do NOT summarize what you are about to do. Begin EXECUTING \
-the approved plan now: read what you need, then make the file edits / run the \
-commands the plan calls for, in order. Work until the plan is done.";
+re-iterate steps, do NOT summarize what you are about to do, and do NOT end \
+with a plain-text summary of intent. Begin EXECUTING the approved plan now: \
+read what you need, then make the file edits / run the commands the plan \
+calls for, in order. The turn is not finished until every step is done and \
+you have actually made the required edits — if the plan is not yet complete, \
+your reply MUST include a tool call (write_file, search_replace, run_shell, \
+etc.) that progresses it. Work until the plan is done, then reply with a \
+brief summary of what changed.";
 
 /// A structured plan with numbered steps.
 #[derive(Debug, Clone, Serialize, Deserialize)]
