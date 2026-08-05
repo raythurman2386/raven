@@ -490,6 +490,45 @@ impl Agent {
                     continue;
                 }
 
+                // Shell permission gate: when confirm_shell is on (not --yolo),
+                // every run_shell command is confirmed with the user first,
+                // reusing the ask_user oneshot path. If the user declines, the
+                // command is replaced with a no-op explanation the model can see.
+                if self.settings.confirm_shell && tc.function.name == "run_shell" {
+                    let command = args
+                        .get("command")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let (confirm_tx, confirm_rx) = tokio::sync::oneshot::channel::<String>();
+                    let question = format!("Allow this shell command?\n\n$ {command}\n\n(type 'y' to allow, anything else to deny)");
+                    let _ = tx
+                        .send(AgentEvent::AskUser {
+                            question,
+                            reply: confirm_tx,
+                        })
+                        .await;
+                    let answer = confirm_rx.await.unwrap_or_default();
+                    let allowed = answer.trim().eq_ignore_ascii_case("y")
+                        || answer.trim().eq_ignore_ascii_case("yes");
+                    if !allowed {
+                        let result = "Shell command NOT run: the user declined permission. Do not retry unless you have a safer alternative.".to_string();
+                        let _ = tx
+                            .send(AgentEvent::ToolEnd {
+                                name: "run_shell".into(),
+                                preview: result.chars().take(600).collect(),
+                            })
+                            .await;
+                        self.messages.push(ChatMessage {
+                            role: "tool".into(),
+                            content: Some(result),
+                            tool_calls: None,
+                            tool_call_id: Some(tc.id.clone()),
+                        });
+                        continue;
+                    }
+                }
+
                 let _ = tx
                     .send(AgentEvent::ToolStart {
                         name: tc.function.name.clone(),

@@ -50,6 +50,9 @@ pub struct Settings {
     pub compact_threshold: f32,
     /// Disable streaming and use a single non-streaming request instead.
     pub no_stream: bool,
+    /// When true, every `run_shell` command is confirmed with the user first
+    /// (via the same ask_user channel). Off with `--yolo`.
+    pub confirm_shell: bool,
 }
 
 impl Settings {

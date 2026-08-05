@@ -219,6 +219,7 @@ async fn main() -> Result<()> {
         context_window,
         compact_threshold,
         no_stream: cli.no_stream || cfg.no_stream.unwrap_or(false),
+        confirm_shell: !cli.yolo,
     };
 
     if let Some(tasks) = cli.parallel {

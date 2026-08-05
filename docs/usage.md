@@ -164,6 +164,11 @@ the task. In headless mode the question is printed to stderr and your answer
 is read from stdin. If you dismiss/close without answering, the agent is told
 no answer was provided and proceeds (or re-decides) on its own.
 
+The same prompt is used as a **shell permission gate**: unless you run with
+`--yolo`, every `run_shell` command is confirmed first. Type `y`/`yes` to
+allow; anything else (or dismissing) blocks the command and tells the model it
+was declined.
+
 ### TUI limitations
 
 - Each submission spawns a **fresh agent** — conversation history is not carried across turns.
