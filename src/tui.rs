@@ -251,6 +251,46 @@ fn render_assistant_lines(text: &str) -> Vec<Line<'static>> {
         .collect()
 }
 
+/// Pre-wrap each log line to `width` columns so one display row maps to one
+/// rendered segment (grok-build's `split_into_line_segments` scrollback
+/// model). Without this, `Paragraph::wrap()` expands long lines to several
+/// rows while the scroll range is computed from the unwrapped count, so the
+/// tail of a long response becomes unreachable.
+fn prewrap_lines(lines: &[Line<'static>], width: usize) -> Vec<Line<'static>> {
+    let mut out = Vec::with_capacity(lines.len().saturating_add(16));
+    for line in lines {
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        let mut chars = text.chars().peekable();
+        loop {
+            // Consume up to `width` chars (or until a newline).
+            let mut seg = String::new();
+            let mut took = 0usize;
+            while let Some(&c) = chars.peek() {
+                if c == '\n' {
+                    chars.next();
+                    break;
+                }
+                if took == width {
+                    break;
+                }
+                seg.push(c);
+                chars.next();
+                took += 1;
+            }
+            if seg.is_empty() && chars.peek().is_none() {
+                break;
+            }
+            // Preserve the original styling on each wrapped segment.
+            let seg_style = line.spans.first().map(|s| s.style).unwrap_or_default();
+            out.push(Line::from(Span::styled(seg, seg_style)));
+            if chars.peek().is_none() {
+                break;
+            }
+        }
+    }
+    out
+}
+
 // ── Main TUI ─────────────────────────────────────────────────────────────
 
 pub async fn run_tui(mut settings: Settings) -> Result<()> {
@@ -358,8 +398,19 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
             stream_patch = false;
         } else if stream_patch {
             // Patch only the trailing assistant block instead of re-rendering
-            // the whole log per token.
-            let new_tail = render_assistant_lines(&assistant_text);
+            // the whole log per token. The transcript (log) is the source of
+            // truth — we re-render the LAST assistant entry's text, NOT a
+            // separate scratch buffer. A scratch buffer accumulates assistant
+            // text across all iterations of a multi-tool turn, which diverges
+            // from the per-iteration log entries and drops the tail of a long
+            // final answer.
+            let tail_text = log
+                .iter()
+                .rev()
+                .find(|e| matches!(e.kind, LogKind::Assistant))
+                .map(|e| e.text.as_str())
+                .unwrap_or("");
+            let new_tail = render_assistant_lines(tail_text);
             let new_tail_len = new_tail.len();
             cached_log_lines.truncate(cached_log_lines.len().saturating_sub(last_assistant_lines));
             cached_log_lines.extend(new_tail);
@@ -952,9 +1003,17 @@ fn draw_ui(
     ]);
     f.render_widget(Paragraph::new(top), chunks[0]);
 
-    // Log
+    // Log — pre-wrap each cached line to the content width so ONE display
+    // row == ONE wrapped segment (grok-build's scrollback model). This keeps
+    // the scroll range exact: without pre-wrapping, Paragraph::wrap() expands
+    // long lines to several rows and the scroll math (based on the unwrapped
+    // line count) lands short of the true bottom, making the tail of a long
+    // response unreachable.
+    let content_width = (chunks[1].width.saturating_sub(4)) as usize; // 2 borders + 2 padding
+    let display_lines = prewrap_lines(log_lines, content_width.max(1));
+
     let log_h = chunks[1].height.saturating_sub(2) as usize;
-    let max_scroll = log_lines.len().saturating_sub(log_h);
+    let max_scroll = display_lines.len().saturating_sub(log_h);
     let scroll_eff = (scroll as usize).min(max_scroll);
     let offset = max_scroll.saturating_sub(scroll_eff) as u16;
 
@@ -962,9 +1021,8 @@ fn draw_ui(
         .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
         .border_style(Style::default().fg(Theme::BORDER))
         .padding(Padding::horizontal(1));
-    let log_widget = Paragraph::new(log_lines.to_vec())
+    let log_widget = Paragraph::new(display_lines)
         .block(log_block)
-        .wrap(Wrap { trim: false })
         .scroll((offset, 0));
     f.render_widget(log_widget, chunks[1]);
 
@@ -1536,5 +1594,34 @@ mod tests {
         let input_h = 3u16; // baseline single-line input box
         let status_y = term_h.saturating_sub(input_h).saturating_sub(1);
         assert_eq!(status_y, 26);
+    }
+
+    #[test]
+    fn prewrap_lines_splits_long_lines() {
+        // A single 30-char line at width 10 → 3 wrapped display rows.
+        let input = vec![Line::from(Span::raw("abcdefghijklmnopqrstuvwxyz"))];
+        let out = prewrap_lines(&input, 10);
+        assert_eq!(out.len(), 3, "long line should wrap into 3 rows");
+        // Re-joined, the text must be preserved exactly.
+        let joined: String = out.iter().map(|l| l.to_string()).collect();
+        assert_eq!(joined, "abcdefghijklmnopqrstuvwxyz");
+    }
+
+    #[test]
+    fn prewrap_lines_preserves_newlines() {
+        // A newline forces a row break independent of width.
+        let input = vec![Line::from(Span::raw("line1\nline2"))];
+        let out = prewrap_lines(&input, 100);
+        assert_eq!(out.len(), 2, "newline should split into 2 rows");
+        assert_eq!(out[0].to_string(), "line1");
+        assert_eq!(out[1].to_string(), "line2");
+    }
+
+    #[test]
+    fn prewrap_lines_short_line_stays_one_row() {
+        let input = vec![Line::from(Span::raw("hi"))];
+        let out = prewrap_lines(&input, 20);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].to_string(), "hi");
     }
 }
