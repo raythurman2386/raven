@@ -1201,7 +1201,11 @@ fn dispatch_slash_command(
             // Interrupt the running task by aborting its spawned future.
             if let Some(handle) = task_handle.take() {
                 handle.abort();
-                log.push(LogEntry::system("⏹ stopped"));
+                // Persist whatever the interrupted turn already produced so it
+                // isn't lost on a hard stop.
+                let _ = store.save_all_messages(session, session_messages);
+                let _ = store.update_summary(session, None);
+                log.push(LogEntry::system("⏹ stopped (partial turn saved)"));
                 *log_dirty = true;
             } else {
                 log.push(LogEntry::system("nothing running to stop"));

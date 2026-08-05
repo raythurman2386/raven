@@ -241,6 +241,15 @@ automatically runs the linter and feeds any errors back to the model as a
 reminder on the *next* request — so the agent self-corrects before you see the
 damage. On a clean lint pass nothing is injected, keeping the loop quiet.
 
+### Session durability
+
+Session files are written atomically with a **unique temp name**
+(`.{pid}.{counter}.tmp` + rename) so concurrent writers — like a running turn
+and a `/stop` flush — can never clobber each other's in-flight temp file.
+Interrupting a task with `/stop` now **persists the partial turn** (`/stop`
+saves what the interrupted turn already produced) instead of dropping it, and
+quitting (Ctrl+C/Esc/`/quit`) always flushes the session before exit.
+
 ### TUI limitations
 
 - Each submission spawns a **fresh agent** — conversation history is not carried across turns.

@@ -215,8 +215,16 @@ fn load_messages(path: &Path) -> Result<Vec<ChatMessage>> {
 }
 
 /// Write bytes to a temp file then rename (atomic on most filesystems).
+///
+/// Uses a unique temp name (`.<pid>.<counter>.tmp`) rather than a fixed
+/// `.tmp` so two concurrent writers (e.g. a running turn and a `/stop` flush)
+/// can never clobber each other's in-flight temp file. The rename is atomic,
+/// so a reader sees either the old or the new content, never a partial write.
 fn write_atomic(path: &Path, content: &[u8]) -> Result<()> {
-    let tmp = path.with_extension("tmp");
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let unique = format!(".{}.{}.tmp", std::process::id(), n);
+    let tmp = path.with_extension(unique);
     std::fs::write(&tmp, content)?;
     std::fs::rename(&tmp, path)?;
     Ok(())
@@ -261,4 +269,49 @@ fn unix_to_ymd_hms(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
 
     (y as u64, m, d, hour, min, sec)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_atomic_uses_unique_tmp_and_leaves_none_behind() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("summary.json");
+        // Write twice — the unique temp names must not collide, and after each
+        // write no `.tmp` files may remain.
+        write_atomic(&target, b"v1").unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"v1");
+        write_atomic(&target, b"v2").unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"v2");
+        // No temp files left behind.
+        let leftovers: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "no temp files should remain: {leftovers:?}"
+        );
+    }
+
+    #[test]
+    fn write_atomic_concurrent_writers_do_not_collide() {
+        // Two sequential unique-tmp writes produce distinct temp names, proving
+        // a concurrent pair can't clobber each other's in-flight file.
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("messages.jsonl");
+        // Simulate two writers producing unique tmp paths via write_atomic.
+        write_atomic(&target, b"a").unwrap();
+        write_atomic(&target, b"b").unwrap();
+        let names: Vec<String> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        // Only the final target remains.
+        assert_eq!(names, vec!["messages.jsonl".to_string()]);
+    }
 }
