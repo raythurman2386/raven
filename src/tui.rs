@@ -23,7 +23,7 @@ use anyhow::Result;
 use crossterm::{
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
-        MouseEventKind,
+        MouseButton, MouseEventKind,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -408,6 +408,7 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
                     scroll,
                     auto_scroll,
                     tick,
+                    running,
                 );
             })?;
             last_draw = std::time::Instant::now();
@@ -626,6 +627,31 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
                         scroll = scroll.saturating_sub(3);
                         if scroll == 0 {
                             auto_scroll = true;
+                        }
+                    }
+                    // Clickable [stop] button in the status strip: clicking it
+                    // aborts the running task exactly like /stop. The button
+                    // hugs the right edge of the status row, which is the row
+                    // just above the (variable-height) input box.
+                    MouseEventKind::Down(MouseButton::Left) if running => {
+                        let size = terminal.size().unwrap_or_default();
+                        let input_h = input_box_height(&input, size.width);
+                        let status_y = size.height.saturating_sub(input_h).saturating_sub(1);
+                        if m.row == status_y
+                            && m.column >= size.width.saturating_sub(STOP_BTN.len() as u16)
+                        {
+                            if let Some(handle) = task_handle.take() {
+                                handle.abort();
+                                let _ = store.save_all_messages(&session, &session_messages);
+                                let _ = store.update_summary(&mut session, None);
+                                log.push(LogEntry::system("⏹ stopped (click)"));
+                                log_dirty = true;
+                            }
+                            running = false;
+                            agent_state = AgentState::Idle;
+                            status = "ready".into();
+                            assistant_text.clear();
+                            live_tool = None;
                         }
                     }
                     _ => {}
@@ -857,6 +883,7 @@ fn draw_ui(
     scroll: u16,
     _auto_scroll: bool,
     tick: u64,
+    running: bool,
 ) {
     let show_plan = plan_pending && !plan_preview.is_empty();
     let plan_h = if show_plan {
@@ -868,11 +895,7 @@ fn draw_ui(
     // Input box grows with the wrapped line count so long tasks don't clip.
     // Width available for input = terminal width minus prompt glyph and
     // borders (left/right padding in the block).
-    let term_w = f.size().width.saturating_sub(4).max(1) as usize;
-    let prompt_chars = 2; // "❯ " / "? "
-    let avail = term_w.saturating_sub(prompt_chars).max(1);
-    let input_h = wrapped_line_count(input, avail).clamp(1, 6) as u16;
-    let input_h = input_h.saturating_add(2); // + top/bottom border rows
+    let input_h = input_box_height(input, f.size().width);
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -985,6 +1008,24 @@ fn draw_ui(
             Style::default().fg(Theme::PLAN),
         ));
     }
+
+    // Right-align a clickable [stop] button while a task runs (Grok Build
+    // keeps a cancel affordance on the status row). It's rendered as the
+    // last span; a click on it is detected via the status row's Y position
+    // (see the mouse handler) and aborts the running task like /stop.
+    if running {
+        let status_row_w = chunks[3].width;
+        let line_w: usize = status_line.iter().map(|s| s.content.chars().count()).sum();
+        let btn_w = STOP_BTN.chars().count();
+        // Pad so the button hugs the right edge of the status row.
+        let pad = status_row_w.saturating_sub(line_w as u16 + btn_w as u16 + 1);
+        if pad > 0 {
+            status_line.push(Span::raw(" ".repeat(pad as usize)));
+        }
+        status_line.push(Span::raw(" "));
+        status_line.push(stop_span());
+    }
+
     f.render_widget(
         Paragraph::new(Line::from(status_line)).style(Style::default().bg(Theme::STATUS_BG)),
         chunks[3],
@@ -1051,6 +1092,30 @@ fn wrapped_line_count(s: &str, width: usize) -> usize {
         }
     }
     lines
+}
+
+/// Height of the input box (in rows, including borders) for a given input and
+/// terminal width. Shared by the draw path and click-hit-testing so both agree
+/// on where the status strip (the row just above the input) sits.
+fn input_box_height(input: &str, term_width: u16) -> u16 {
+    let avail = term_width.saturating_sub(4).max(1) as usize; // minus 2 border cols
+    let avail = avail.saturating_sub(2).max(1); // minus prompt glyph "❯ "
+    let lines = wrapped_line_count(input, avail).clamp(1, 6) as u16;
+    lines.saturating_add(2) // + top/bottom border rows
+}
+
+/// The `[stop]` button rendered at the right edge of the status strip.
+const STOP_BTN: &str = "[stop]";
+
+/// Build a `Span` for the `[stop]` button in the status strip (right-aligned).
+/// The caller right-aligns it against the status row's width.
+fn stop_span() -> Span<'static> {
+    Span::styled(
+        STOP_BTN.to_string(),
+        Style::default()
+            .fg(Theme::ERROR)
+            .add_modifier(Modifier::BOLD),
+    )
 }
 
 // ── Task / plan helpers (keeps the event loop readable) ──────────────────
@@ -1432,5 +1497,36 @@ mod tests {
     fn state_label_awaiting_answer() {
         let (txt, _color) = state_label(&AgentState::Idle, "awaiting answer");
         assert_eq!(txt, "awaiting answer");
+    }
+
+    #[test]
+    fn input_box_height_baseline() {
+        // Short input at a normal terminal width → single wrapped line + borders.
+        assert_eq!(input_box_height("hi", 120), 3);
+    }
+
+    #[test]
+    fn input_box_height_grows_with_multiline_input() {
+        // Multi-line input grows the box, capping at 6 wrapped lines + 2 borders.
+        let tall = "line1\nline2\nline3\nline4\nline5\nline6\nline7";
+        let h = input_box_height(tall, 120);
+        assert!(h >= 4, "multi-line input should grow the box, got {h}");
+        assert!(h <= 8, "box height should be capped, got {h}");
+    }
+
+    #[test]
+    fn stop_button_hit_region_is_right_edge() {
+        // The button hugs the right edge: the hit region is the last
+        // STOP_BTN.len() columns of the status row.
+        let width = 120u16;
+        let btn_len = STOP_BTN.len() as u16;
+        let region_start = width.saturating_sub(btn_len);
+        assert_eq!(region_start, 120 - 6);
+        // The status row Y is computed as term_h - input_h - 1; verify the
+        // arithmetic the handler relies on.
+        let term_h = 30u16;
+        let input_h = 3u16; // baseline single-line input box
+        let status_y = term_h.saturating_sub(input_h).saturating_sub(1);
+        assert_eq!(status_y, 26);
     }
 }
