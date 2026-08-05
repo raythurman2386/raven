@@ -130,6 +130,7 @@ host. Type one and press `Enter`; `/help` lists everything.
 | `/plan` | `/p` | Toggle plan-first mode |
 | `/new` | `/n` | Save the current session and start a fresh one |
 | `/clear` | `/c` | Clear the on-screen log (history preserved) |
+| `/model <name>` | `/m` | Switch the model for subsequent turns |
 | `/quit` | `/q`, `/exit` | Quit Raven |
 
 The command registry lives in `src/commands.rs`; adding a command is one

@@ -65,6 +65,12 @@ pub fn commands() -> Vec<CommandSpec> {
             arg_help: None,
         },
         CommandSpec {
+            name: "model",
+            aliases: &["m"],
+            summary: "Switch the model for subsequent turns: /model <name>",
+            arg_help: Some("<model>"),
+        },
+        CommandSpec {
             name: "quit",
             aliases: &["q", "exit"],
             summary: "Quit Raven",
@@ -179,6 +185,20 @@ mod tests {
     fn parse_alias_resolves_to_canonical() {
         let pc = parse("/q").unwrap();
         assert_eq!(pc.name, "quit");
+    }
+
+    #[test]
+    fn model_command_registered_with_alias() {
+        let pc = parse("/model deepseek-v4-pro:cloud").unwrap();
+        assert_eq!(pc.name, "model");
+        assert_eq!(pc.args, "deepseek-v4-pro:cloud");
+        // /m is an alias for /model
+        assert_eq!(parse("/m").unwrap().name, "model");
+        // /help lists it
+        assert!(help_text().contains("/model"), "help should list /model");
+        // /help model works
+        let h = command_help("model").expect("/model has help");
+        assert!(h.contains("Switch the model"), "help text: {h}");
     }
 
     #[test]

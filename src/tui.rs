@@ -237,7 +237,7 @@ fn render_assistant_lines(text: &str) -> Vec<Line<'static>> {
 
 // ── Main TUI ─────────────────────────────────────────────────────────────
 
-pub async fn run_tui(settings: Settings) -> Result<()> {
+pub async fn run_tui(mut settings: Settings) -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -262,7 +262,7 @@ pub async fn run_tui(settings: Settings) -> Result<()> {
         )),
         LogEntry::system(String::new()),
         LogEntry::system(
-            "enter submit · ctrl+n new · ctrl+p plan · ctrl+c quit · wheel/pgup scroll",
+            "enter submit · /help · /plan · /model · /new · ctrl+c quit · wheel/pgup scroll",
         ),
     ];
 
@@ -464,7 +464,7 @@ pub async fn run_tui(settings: Settings) -> Result<()> {
                             if let Some(pc) = commands::parse(&text) {
                                 dispatch_slash_command(
                                     &pc,
-                                    &settings,
+                                    &mut settings,
                                     &mut log,
                                     &mut log_dirty,
                                     &mut plan_first,
@@ -980,7 +980,7 @@ fn handle_plan_response(
 #[allow(clippy::too_many_arguments, clippy::ptr_arg)]
 fn dispatch_slash_command(
     pc: &commands::ParsedCommand,
-    settings: &Settings,
+    settings: &mut Settings,
     log: &mut Vec<LogEntry>,
     log_dirty: &mut bool,
     plan_first: &mut bool,
@@ -1031,7 +1031,7 @@ fn dispatch_slash_command(
             )));
             log.push(LogEntry::system(String::new()));
             log.push(LogEntry::system(
-                "new session · enter submit · /plan · /new · /help · /quit",
+                "new session · enter submit · /plan · /model · /new · /help · /quit",
             ));
             *log_dirty = true;
             plan_preview.clear();
@@ -1044,6 +1044,29 @@ fn dispatch_slash_command(
         "clear" => {
             log.clear();
             *log_dirty = true;
+        }
+        "model" => {
+            let name = pc.args.trim();
+            if name.is_empty() {
+                log.push(LogEntry::system(format!(
+                    "current model: {}  (try /model <name>)",
+                    settings.model
+                )));
+                *log_dirty = true;
+            } else {
+                settings.model = name.to_string();
+                // Re-infer the context window and derived max_tokens for the
+                // new model, matching the startup resolution in main.rs.
+                settings.context_window = crate::context::infer_context_window(&settings.model);
+                settings.max_tokens = Settings::derived_max_tokens(settings.context_window);
+                log.push(LogEntry::system(format!(
+                    "model → {} · context {} · max_tokens {}",
+                    settings.model,
+                    crate::context::infer_context_window(&settings.model),
+                    settings.max_tokens
+                )));
+                *log_dirty = true;
+            }
         }
         "quit" => {
             *quit = true;
