@@ -264,7 +264,7 @@ correct (one per turn, never per-iteration).
 - [x] Phase 2 — Web search + fetch
 - [x] Phase 3 — Skills system
 - [x] Phase 4 — Repo symbol map
-- [ ] Phase 5 — Memory file index + recall
+- [x] Phase 5 — Memory file index + recall
 - [ ] Phase 6 — Git auto-commit + /undo
 - [ ] Phase 7 — LLM structured compaction
 - [ ] Phase 8 — Auto-lint + reflection
