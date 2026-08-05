@@ -252,6 +252,7 @@ impl Agent {
 
         for iter in 0..self.settings.max_iterations {
             let _ = tx.send(AgentEvent::Iteration(iter + 1)).await;
+            let t_iter = std::time::Instant::now();
 
             // Reminders for the *next* request only. These are appended to the
             // outgoing request body, NOT to `self.messages`, so the persisted
@@ -327,7 +328,17 @@ impl Agent {
                 self.settings.base_url.trim_end_matches('/')
             );
 
+            // Phase timing: pre-request work (tokenization, compaction, body
+            // build, serialization) vs HTTP round-trip vs stream processing.
+            tracing::info!(
+                "iter={} pre_http_ms={} history_msgs={}",
+                iter + 1,
+                t_iter.elapsed().as_millis(),
+                self.messages.len()
+            );
+
             // Send with retry for transient failures
+            let t_send = std::time::Instant::now();
             let resp = match self.send_with_retry(&url, &body, &tx).await {
                 Ok(r) => r,
                 Err(e) => {
@@ -335,13 +346,27 @@ impl Agent {
                     return Ok(());
                 }
             };
+            tracing::info!(
+                "iter={} send_http_ms={} (model={})",
+                iter + 1,
+                t_send.elapsed().as_millis(),
+                self.settings.model
+            );
 
             // Process the response (streaming or non-streaming)
+            let t_stream = std::time::Instant::now();
             let (content_buf, tool_acc) = if self.settings.no_stream {
                 self.process_non_stream(resp, &tx).await
             } else {
                 self.process_stream(resp, &tx).await
             };
+            tracing::info!(
+                "iter={} stream_ms={} content_chars={} tool_calls={}",
+                iter + 1,
+                t_stream.elapsed().as_millis(),
+                content_buf.chars().count(),
+                tool_acc.len()
+            );
 
             // Build assistant message
             let mut assistant = ChatMessage {
