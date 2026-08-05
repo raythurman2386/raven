@@ -806,7 +806,11 @@ fn draw_ui(
         ),
         Span::styled("  ·  ", Style::default().fg(Theme::DIM)),
         Span::styled(
-            if plan_first { "plan:on" } else { "plan:off" },
+            if plan_first {
+                "plan-first:on"
+            } else {
+                "plan-first:off"
+            },
             Style::default().fg(if plan_first { Theme::PLAN } else { Theme::DIM }),
         ),
     ]);
