@@ -16,6 +16,7 @@
 //! | Module        | Responsibility                                      |
 //! |---------------|-----------------------------------------------------|
 //! | [`config`]    | `Settings`, env defaults, config file loading       |
+//! | [`commands`]  | Slash-command registry + parsing for the TUI        |
 //! | [`agent`]     | Streaming loop, `AgentEvent`, parallel sub-agents   |
 //! | [`context`]   | Token estimation, compaction, context-window query  |
 //! | [`tools`]     | `Sandbox`, tool implementations, `dispatch`         |
@@ -30,6 +31,7 @@
 //! `docs/architecture.md` for design details.
 
 mod agent;
+mod commands;
 mod config;
 mod context;
 mod error;

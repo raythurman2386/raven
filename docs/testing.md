@@ -13,6 +13,7 @@ cargo test
 - **Unit tests** (`#[cfg(test)] mod tests` in each source file):
   - `src/config.rs` — context window inference, max_tokens derivation, AGENTS.md loading, config.toml parsing
   - `src/agent.rs` — ephemeral reminder computation (loop-breaker, iteration nudge)
+  - `src/commands.rs` — slash-command parsing, alias resolution, registry uniqueness, help rendering
   - `src/context.rs` — token estimation, compaction (preserves system message, reduces tokens, keeps tool-call/result pairs), tool-result pruning
   - `src/tools.rs` — sandbox path confinement (including symlink-escape rejection), list_dir, read_file, write_file, search_replace, grep, run_shell (dangerous command blocking, API key stripping), dispatch routing, glob matching, unified diff parsing, apply_patch
   - `src/plan.rs` — plan parsing (JSON, numbered list, bullet list, code block), plan formatting

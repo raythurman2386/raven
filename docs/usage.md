@@ -115,8 +115,25 @@ raven --tui    # force TUI even with a task
 |---|---|
 | Type + `Enter` | Submit a task |
 | `Backspace` | Edit input |
-| `Ctrl+P` | Toggle plan mode |
+| `Ctrl+P` | Toggle plan mode (also `/plan`) |
 | `Ctrl+C` / `Esc` | Quit |
+
+### Slash commands
+
+Raven uses slash commands (Grok Build-style) to drive the TUI. They work
+identically in editor-like terminals where `Ctrl+` shortcuts collide with the
+host. Type one and press `Enter`; `/help` lists everything.
+
+| Command | Aliases | Action |
+|---|---|---|
+| `/help [cmd]` | `/h`, `/?` | List all commands, or detail one |
+| `/plan` | `/p` | Toggle plan-first mode |
+| `/new` | `/n` | Save the current session and start a fresh one |
+| `/clear` | `/c` | Clear the on-screen log (history preserved) |
+| `/quit` | `/q`, `/exit` | Quit Raven |
+
+The command registry lives in `src/commands.rs`; adding a command is one
+registry entry plus one TUI dispatch arm, and it auto-appears in `/help`.
 
 ### TUI limitations
 

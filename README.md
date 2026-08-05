@@ -182,7 +182,7 @@ All writes are atomic (temp file + rename). Use `--resume` to continue a previou
 ## Testing
 
 ```bash
-cargo test                    # 109 tests, all offline
+cargo test                    # 118 tests, all offline
 cargo clippy                  # zero warnings
 cargo clippy -- -W clippy::pedantic  # stricter linting
 ```
@@ -197,8 +197,9 @@ See `docs/testing.md` for coverage and mutation testing instructions.
 src/
   main.rs       # CLI, headless runner, session management
   agent.rs      # Streaming agent loop, retry, parallel sub-agents
+  commands.rs   # Slash-command registry + parsing for the TUI
   tools.rs      # 14 tools + workspace sandbox (path confinement, shell filter)
-  tui.rs        # ratatui TUI with status bar, streaming, scrollback
+  tui.rs        # ratatui TUI with status bar, streaming, scrollback, /commands
   config.rs     # Settings, config.toml loading, context window inference
   context.rs    # Compaction strategy, tool-result pruning
   tokenizer.rs  # Pure-Rust BPE tokenizer (no external vocab)

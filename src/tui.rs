@@ -40,6 +40,7 @@ use std::io::stdout;
 use tokio::sync::mpsc;
 
 use crate::agent::{Agent, AgentEvent, ChatMessage};
+use crate::commands;
 use crate::config::Settings;
 use crate::context::history_tokens;
 use crate::plan::{self, AgentState};
@@ -256,6 +257,7 @@ pub async fn run_tui(settings: Settings) -> Result<()> {
     let mut agent_state = AgentState::Idle;
     let mut scroll: u16 = 0;
     let mut auto_scroll = true;
+    let mut quit = false;
 
     let store = SessionStore::for_workspace(&settings.workspace)?;
     let mut session = store.create(&settings.model)?;
@@ -394,6 +396,29 @@ pub async fn run_tui(settings: Settings) -> Result<()> {
                             input.clear();
                             scroll = 0;
                             auto_scroll = true;
+
+                            // Slash commands take precedence over plan-response
+                            // and normal task submission.
+                            if let Some(pc) = commands::parse(&text) {
+                                dispatch_slash_command(
+                                    &pc,
+                                    &settings,
+                                    &mut log,
+                                    &mut log_dirty,
+                                    &mut plan_first,
+                                    &mut plan_pending,
+                                    &mut plan_preview,
+                                    &mut running,
+                                    &mut agent_state,
+                                    &mut status,
+                                    &mut assistant_text,
+                                    &mut session_messages,
+                                    &store,
+                                    &mut session,
+                                    &mut quit,
+                                )?;
+                                continue;
+                            }
 
                             if plan_pending {
                                 handle_plan_response(
@@ -598,6 +623,10 @@ pub async fn run_tui(settings: Settings) -> Result<()> {
                     assistant_text.clear();
                 }
             }
+        }
+
+        if quit {
+            break;
         }
     }
 
@@ -879,4 +908,92 @@ fn handle_plan_response(
         Ok(agent.messages)
     }));
     Ok(())
+}
+
+/// Dispatch a parsed slash command, mutating TUI state as needed.
+///
+/// Returns `Ok(true)` if the command was handled (the input should not be
+/// treated as a task or plan response). All user-visible feedback is pushed
+/// to the log.
+#[allow(clippy::too_many_arguments, clippy::ptr_arg)]
+fn dispatch_slash_command(
+    pc: &commands::ParsedCommand,
+    settings: &Settings,
+    log: &mut Vec<LogEntry>,
+    log_dirty: &mut bool,
+    plan_first: &mut bool,
+    plan_pending: &mut bool,
+    plan_preview: &mut Vec<String>,
+    running: &mut bool,
+    agent_state: &mut AgentState,
+    status: &mut String,
+    assistant_text: &mut String,
+    session_messages: &mut Vec<ChatMessage>,
+    store: &SessionStore,
+    session: &mut crate::session::Session,
+    quit: &mut bool,
+) -> Result<bool> {
+    match pc.name.as_str() {
+        "help" => {
+            let text = if pc.args.is_empty() {
+                commands::help_text()
+            } else {
+                commands::command_help(&pc.args)
+                    .unwrap_or_else(|| format!("Unknown command: /{}", pc.args))
+            };
+            log.push(LogEntry::system(text));
+            *log_dirty = true;
+        }
+        "plan" => {
+            *plan_first = !*plan_first;
+            log.push(LogEntry::system(format!(
+                "plan mode {}",
+                if *plan_first { "on" } else { "off" }
+            )));
+            *log_dirty = true;
+        }
+        "new" => {
+            // Save the current session, then start a fresh one.
+            let _ = store.save_all_messages(session, session_messages);
+            let _ = store.update_summary(session, None);
+            *session = store.create(&settings.model)?;
+            session_messages.clear();
+            log.clear();
+            log.push(LogEntry::system(format!(
+                "raven · {} · {}",
+                settings.model, settings.base_url
+            )));
+            log.push(LogEntry::system(format!(
+                "workspace {}",
+                settings.workspace.display()
+            )));
+            log.push(LogEntry::system(String::new()));
+            log.push(LogEntry::system(
+                "new session · enter submit · /plan · /new · /help · /quit",
+            ));
+            *log_dirty = true;
+            plan_preview.clear();
+            *plan_pending = false;
+            *running = false;
+            *agent_state = AgentState::Idle;
+            *status = "ready".into();
+            assistant_text.clear();
+        }
+        "clear" => {
+            log.clear();
+            *log_dirty = true;
+        }
+        "quit" => {
+            *quit = true;
+        }
+        _ => {
+            // Unknown command — surface a helpful message.
+            log.push(LogEntry::system(format!(
+                "Unknown command: /{}  (try /help)",
+                pc.name
+            )));
+            *log_dirty = true;
+        }
+    }
+    Ok(true)
 }

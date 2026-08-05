@@ -154,6 +154,35 @@ let _ = tx.send(AgentEvent::MyEvent { detail: "..." }).await;
 
 ---
 
+## Adding a slash command
+
+Slash commands live in [`src/commands.rs`](../src/commands.rs). The registry
+is the single source of truth, so `/help` auto-lists any command you add.
+
+### 1. Add a `CommandSpec` to the registry
+
+```rust
+CommandSpec {
+    name: "mycmd",
+    aliases: &["m"],
+    summary: "What it does (shown in /help)",
+    arg_help: None, // or Some("[arg]")
+},
+```
+
+### 2. Handle it in the TUI dispatcher
+
+In [`src/tui.rs`](../src/tui.rs), add a match arm in `dispatch_slash_command`.
+It receives the parsed command, shared UI state (`log`, `plan_first`,
+`session`, `quit`, ...), and `&SessionStore` — push any user-visible feedback
+to `log`.
+
+### 3. Document it
+
+- Add a row to the slash-command table in [docs/usage.md](usage.md).
+
+---
+
 ## Changing compaction
 
 Compaction lives in [`src/context.rs`](../src/context.rs).
@@ -173,7 +202,7 @@ Compaction lives in [`src/context.rs`](../src/context.rs).
 ## Running tests
 
 ```bash
-cargo test                    # 109 tests (105 unit + 4 CLI smoke), all offline
+cargo test                    # 118 tests (114 unit + 4 CLI smoke), all offline
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
