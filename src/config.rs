@@ -79,8 +79,11 @@ impl Settings {
     /// assert_eq!(Settings::derived_max_tokens(128_000), 8192);
     /// ```
     pub fn derived_max_tokens(context_window: usize) -> u32 {
+        // Output budget: window / 8, clamped to a generous ceiling so long,
+        // detailed responses aren't cut short. 32k covers even 1M-token
+        // cloud contexts comfortably while staying a sane per-call cap.
         let raw = context_window / 8;
-        raw.clamp(1024, 8192) as u32
+        raw.clamp(1024, 32_768) as u32
     }
 }
 
@@ -221,6 +224,14 @@ mod tests {
     }
 
     #[test]
+    fn infer_context_window_glm_cloud() {
+        assert_eq!(infer_context_window("glm-5.2:cloud"), 1_000_000);
+        assert_eq!(infer_context_window("glm-5.2:cloud"), 1_000_000);
+        // Non-cloud glm falls back to 128k, not the 1M cloud special case.
+        assert_eq!(infer_context_window("glm5:8b"), 128_000);
+    }
+
+    #[test]
     fn infer_context_window_32k_models() {
         assert_eq!(infer_context_window("llama3:8b"), 32_768);
         assert_eq!(infer_context_window("codellama:13b"), 32_768);
@@ -256,13 +267,13 @@ mod tests {
     #[test]
     fn derived_max_tokens_mid_range() {
         assert_eq!(Settings::derived_max_tokens(32_768), 4096);
-        assert_eq!(Settings::derived_max_tokens(65_536), 8192);
+        assert_eq!(Settings::derived_max_tokens(262_144), 32_768);
     }
 
     #[test]
     fn derived_max_tokens_clamps_high() {
-        assert_eq!(Settings::derived_max_tokens(128_000), 8192);
-        assert_eq!(Settings::derived_max_tokens(1_000_000), 8192);
+        assert_eq!(Settings::derived_max_tokens(128_000), 16_000);
+        assert_eq!(Settings::derived_max_tokens(1_000_000), 32_768);
     }
 
     #[test]

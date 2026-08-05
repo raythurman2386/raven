@@ -24,7 +24,10 @@ pub use crate::tokenizer::{history_tokens, message_tokens};
 ///   - fallback                                                   → 32_768
 pub fn infer_context_window(model: &str) -> usize {
     let m = model.to_lowercase();
-    if m.contains("gemma4")
+    // Cloud glm (via Ollama) has a 1M-token context.
+    if m.contains("glm") && m.contains("cloud") {
+        1_000_000
+    } else if m.contains("gemma4")
         || m.contains("gemma3")
         || m.contains("qwen2.5")
         || m.contains("qwen3")
@@ -32,6 +35,7 @@ pub fn infer_context_window(model: &str) -> usize {
         || m.contains("llama3.2")
         || m.contains("deepseek")
         || m.contains("codestral")
+        || m.contains("glm")
     {
         128_000
     } else if m.contains("llama3") || m.contains("codellama") || m.contains("32k") {
