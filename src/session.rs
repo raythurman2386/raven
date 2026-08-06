@@ -59,10 +59,10 @@ impl SessionStore {
         Ok(Self { sessions_dir })
     }
 
-    /// Create a new session with a timestamped ID.
+    /// Create a new session with a collision-proof ID.
     pub fn create(&self, model: &str) -> Result<Session> {
         let now = now_iso();
-        let id = now.clone();
+        let id = generate_session_id(&now);
         let summary = SessionSummary {
             version: SESSION_FORMAT_VERSION,
             id: id.clone(),
@@ -235,6 +235,14 @@ pub fn now_iso_public() -> String {
     now_iso()
 }
 
+/// Generate a collision-proof session ID by appending a monotonic counter
+/// suffix to the ISO timestamp (e.g. `2026-08-06T00:06:18-0001`).
+fn generate_session_id(iso: &str) -> String {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{iso}-{n:04x}")
+}
+
 /// Generate an ISO 8601 timestamp string (UTC, second precision).
 fn now_iso() -> String {
     let now = std::time::SystemTime::now()
@@ -380,6 +388,20 @@ mod tests {
     fn unix_to_ymd_hms_2038_boundary() {
         // 2038-01-19 03:14:07 UTC — the classic 32-bit time_t overflow point.
         assert_eq!(unix_to_ymd_hms(2147483647), (2038, 1, 19, 3, 14, 7));
+    }
+
+    #[test]
+    fn generate_session_id_is_unique() {
+        let base = "2026-08-06T00:06:18";
+        let ids: Vec<String> = (0..100).map(|_| generate_session_id(base)).collect();
+        let mut dedup = ids.clone();
+        dedup.sort();
+        dedup.dedup();
+        assert_eq!(ids.len(), dedup.len(), "all 100 IDs must be unique");
+        for id in &ids {
+            assert!(id.starts_with(base), "ID must start with timestamp: {id}");
+            assert_eq!(id.len(), base.len() + 5, "ID length mismatch: {id}");
+        }
     }
 
     #[test]
