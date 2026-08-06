@@ -9,6 +9,7 @@
 //! async loop (they need HTTP). They never execute downloaded content.
 
 use anyhow::{Context, Result};
+use std::sync::OnceLock;
 
 /// Cap on returned text, matching the file-tool output cap.
 const MAX_TOOL_OUTPUT: usize = 12_000;
@@ -16,18 +17,25 @@ const MAX_TOOL_OUTPUT: usize = 12_000;
 /// can't stall the agent loop).
 const WEB_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
-/// Build a short-timeout client for web calls.
+static WEB_CLIENT: OnceLock<Result<reqwest::Client>> = OnceLock::new();
+
+/// Return a shared short-timeout client for web calls, initializing it once.
 ///
 /// Separate from the agent's chat client so a slow web endpoint never shares
-/// (or stalls) the model request path. Cheap to build once per call; reqwest
-/// pools connections internally.
-fn web_client() -> Result<reqwest::Client> {
-    reqwest::Client::builder()
-        .timeout(WEB_TIMEOUT)
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .user_agent("raven-mini-harness/0.1 (+privacy-first local agent)")
-        .build()
-        .context("build web client")
+/// (or stalls) the model request path. The client is constructed lazily on
+/// first use and reused across all subsequent calls.
+fn web_client() -> Result<&'static reqwest::Client> {
+    WEB_CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .timeout(WEB_TIMEOUT)
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .user_agent("raven-mini-harness/0.1 (+privacy-first local agent)")
+                .build()
+                .context("build web client")
+        })
+        .as_ref()
+        .map_err(|e| anyhow::anyhow!("{e}"))
 }
 
 /// Validate that `url` is an absolute http(s) URL. Rejects `file://`, `data://`,
