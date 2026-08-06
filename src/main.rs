@@ -423,11 +423,13 @@ async fn headless_run(
                 // Headless: print the question and read a line from stdin,
                 // then send the answer back so the agent can continue. If the
                 // channel is closed on our side (user hit EOF), the agent
-                // treats it as "no answer".
+                // treats it as "no answer". When stdin is not interactive
+                // (cron / piped / closed), auto-decline without reading so we
+                // never block on a human in an automation run.
                 eprintln!("\n── {question} ──");
-                let mut line = String::new();
-                let _ = std::io::stdin().read_line(&mut line);
-                let answer = line.trim().to_string();
+                let answer = read_line_if_tty()
+                    .map(|l| l.trim().to_string())
+                    .unwrap_or_default();
                 let _ = reply.send(answer);
             }
             AgentEvent::Done => break,
@@ -451,21 +453,17 @@ async fn headless_run(
         // to execution without a human gate. Otherwise prompt.
         if !plan_ready {
             println!("── Approve? [Y]es / [n]o / [r]evise ──");
-            let mut line = String::new();
-            std::io::stdin().read_line(&mut line)?;
-            let low = line.trim().to_lowercase();
-            match low.as_str() {
-                "" | "y" | "yes" | "ok" | "approve" => {
+            match resolve_approval("Approving plan")? {
+                Approval::Yes => {
                     // Approved — fall through to execution.
                 }
-                "n" | "no" | "abort" | "q" | "quit" => {
+                Approval::No => {
                     println!("Aborted.");
                     return Ok(());
                 }
-                _ => {
+                Approval::Revise(feedback) => {
                     // Revise — send feedback as a new user message
-                    let feedback =
-                        format!("Revise the plan based on this feedback:\n{}", line.trim());
+                    let feedback = format!("Revise the plan based on this feedback:\n{feedback}");
                     let mut agent = Agent::with_messages(
                         settings.clone(),
                         first_messages.clone().unwrap_or_default(),
@@ -517,12 +515,14 @@ async fn headless_run(
                     println!("\n{}", plan::format_plan(&revised));
                     if !rev_ready {
                         println!("── Approve? [Y]es / [n]o ──");
-                        let mut line2 = String::new();
-                        std::io::stdin().read_line(&mut line2)?;
-                        let low2 = line2.trim().to_lowercase();
-                        if !(low2.is_empty() || low2 == "y" || low2 == "yes" || low2 == "ok") {
-                            println!("Aborted.");
-                            return Ok(());
+                        // Auto-approve when non-interactive; any non-yes answer
+                        // (including a revise suggestion) aborts.
+                        match resolve_approval("Approving revised plan")? {
+                            Approval::No | Approval::Revise(_) => {
+                                println!("Aborted.");
+                                return Ok(());
+                            }
+                            Approval::Yes => {}
                         }
                     }
                 }
@@ -586,6 +586,67 @@ async fn headless_run(
     Ok(())
 }
 
+/// Whether stdin is an interactive terminal.
+///
+/// In a cron job or any non-interactive invocation, stdin is a pipe or closed
+/// fd — NOT a TTY. Reading from it in that state can block forever (an open
+/// pipe nobody writes to), which would hang a set-and-forget automation run.
+/// Callers gate all interactive stdin reads on this so headless automation
+/// never blocks.
+fn stdin_is_tty() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdin().is_terminal()
+}
+
+/// Read one line of user input, or return `None` immediately when stdin is not
+/// interactive (cron / piped / closed). Never blocks on a non-TTY stdin.
+fn read_line_if_tty() -> Option<String> {
+    if !stdin_is_tty() {
+        return None;
+    }
+    let mut line = String::new();
+    // Interactive: read may still EOF (e.g. Ctrl-D). Treat as no input.
+    let n = std::io::stdin().read_line(&mut line).unwrap_or(0);
+    if n == 0 {
+        None
+    } else {
+        Some(line)
+    }
+}
+
+/// The outcome of an interactive approval prompt.
+#[derive(Debug)]
+enum Approval {
+    Yes,
+    No,
+    Revise(String),
+}
+
+/// Classify a raw input line into an [`Approval`]. Pure — no I/O — so the
+/// approval semantics are unit-testable offline.
+fn classify_approval(line: &str) -> Approval {
+    match line.trim().to_lowercase().as_str() {
+        "" | "y" | "yes" | "ok" | "approve" => Approval::Yes,
+        "n" | "no" | "abort" | "q" | "quit" => Approval::No,
+        other => Approval::Revise(other.to_string()),
+    }
+}
+
+/// Resolve an interactive yes/no/revise answer to an approval decision.
+///
+/// Returns `Ok(true)` to proceed, `Ok(false)` to abort, or `Err(revise_text)`
+/// to re-plan with the given feedback. When stdin is not interactive, defaults
+/// to `Ok(true)` (auto-approve) so automation never blocks on a human gate.
+fn resolve_approval(prompt: &str) -> Result<Approval> {
+    match read_line_if_tty() {
+        None => {
+            eprintln!("{prompt} (auto-approved: non-interactive)");
+            Ok(Approval::Yes)
+        }
+        Some(line) => Ok(classify_approval(&line)),
+    }
+}
+
 /// Save the agent's final messages to the session.
 fn save_session_messages(
     store: &SessionStore,
@@ -605,4 +666,38 @@ fn save_session_messages(
     // Update in-memory state
     session.messages = messages.to_vec();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_accepts_common_yes_forms() {
+        for s in ["", "y", "Y", "yes", "ok", "approve", "  y  ", "YES\n"] {
+            assert!(
+                matches!(classify_approval(s), Approval::Yes),
+                "expected Yes for {s:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_accepts_no_forms() {
+        for s in ["n", "no", "abort", "q", "quit", "NO"] {
+            assert!(
+                matches!(classify_approval(s), Approval::No),
+                "expected No for {s:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_treats_anything_else_as_revise() {
+        // A non-yes/non-no answer is a revise-with-feedback.
+        match classify_approval("  break this into two steps ") {
+            Approval::Revise(fb) => assert_eq!(fb, "break this into two steps"),
+            other => panic!("expected Revise, got {other:?}"),
+        }
+    }
 }
