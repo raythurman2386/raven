@@ -401,24 +401,41 @@ mod tests {
     }
 
     #[test]
-    fn run_shell_strips_api_keys() {
+    fn run_shell_uses_clean_environment() {
         let tmp = tempfile::tempdir().unwrap();
         let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
         std::env::set_var("RAVEN_API_KEY", "raven-secret");
         std::env::set_var("OLLAMA_API_KEY", "ollama-secret");
         let out = sb
-            .run_shell("echo $RAVEN_API_KEY $OLLAMA_API_KEY", 10)
+            .run_shell("echo RAVEN=$RAVEN_API_KEY OLLAMA=$OLLAMA_API_KEY", 10)
             .unwrap();
         std::env::remove_var("RAVEN_API_KEY");
         std::env::remove_var("OLLAMA_API_KEY");
         assert!(
             !out.contains("raven-secret"),
-            "RAVEN_API_KEY should be stripped: {}",
+            "RAVEN_API_KEY should not leak: {}",
             out
         );
         assert!(
             !out.contains("ollama-secret"),
-            "OLLAMA_API_KEY should be stripped: {}",
+            "OLLAMA_API_KEY should not leak: {}",
+            out
+        );
+    }
+
+    #[test]
+    fn run_shell_passes_allowed_env_vars() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
+        let out = sb.run_shell("echo PATH=$PATH HOME=$HOME", 10).unwrap();
+        assert!(
+            out.contains("PATH="),
+            "PATH should be passed through: {}",
+            out
+        );
+        assert!(
+            out.contains("HOME="),
+            "HOME should be passed through: {}",
             out
         );
     }
