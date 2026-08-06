@@ -27,7 +27,7 @@ use tokio::sync::mpsc;
 
 use crate::config::{load_agents_md, Settings};
 use crate::context::{compact_if_needed_llm, history_tokens};
-use crate::error::{cap_http_body, AgentError};
+use crate::error::{cap_http_body, AgentError, ToolError};
 use crate::memory;
 use crate::plan::Plan;
 use crate::tools::{dispatch, safe_command_re, tool_definitions, Sandbox};
@@ -762,14 +762,26 @@ impl Agent {
             }
 
             for h in handles {
-                let (id, name, result, cache_key) = h.await.unwrap_or_else(|e| {
+                let (id, name, dispatch_result, cache_key) = h.await.unwrap_or_else(|e| {
                     (
                         String::new(),
                         "unknown".into(),
-                        format!("Tool error: join failed: {}", e),
+                        Err(ToolError::Other(format!("Tool error: join failed: {}", e))),
                         String::new(),
                     )
                 });
+                let result = match dispatch_result {
+                    Ok(s) => s,
+                    Err(e) => {
+                        let msg = format!("Tool error: {e}");
+                        if e.is_transient() {
+                            tracing::warn!("Transient tool error (retryable): {e}");
+                        } else {
+                            tracing::error!("Tool error: {e}");
+                        }
+                        msg
+                    }
+                };
                 // Cache read-only results
                 let is_read_only = matches!(
                     name.as_str(),

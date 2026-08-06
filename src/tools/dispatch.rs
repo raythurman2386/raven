@@ -1,14 +1,32 @@
 //! Tool dispatch: match on tool name and route to the appropriate handler.
 
+use crate::error::ToolError;
+
 use super::sandbox::{sandbox_search_code, Sandbox};
 use super::TodoItem;
 
-/// Dispatch a tool call by name, returning the result as a string.
+/// Convert an `anyhow::Error` into a [`ToolError`], extracting IO context
+/// from the error chain when possible.
+fn anyhow_to_tool_error(e: anyhow::Error, path: &str, operation: &str) -> ToolError {
+    for cause in e.chain() {
+        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+            return ToolError::io(path, operation, io.kind(), io.to_string());
+        }
+    }
+    ToolError::Other(format!("{e:#}"))
+}
+
+/// Dispatch a tool call by name, returning the result or a structured error.
 ///
-/// Unknown tool names return an error string rather than `Err`, so the model
-/// receives actionable feedback. Tool errors are also stringified.
-pub fn dispatch(sandbox: &Sandbox, name: &str, args: &serde_json::Value) -> String {
-    let res = match name {
+/// Unknown tool names return an error string in `Ok` so the model receives
+/// actionable feedback. Filesystem errors are returned as [`ToolError::Io`]
+/// with path and operation context.
+pub fn dispatch(
+    sandbox: &Sandbox,
+    name: &str,
+    args: &serde_json::Value,
+) -> Result<String, ToolError> {
+    let res: anyhow::Result<String> = match name {
         "list_dir" => {
             let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
             sandbox.list_dir(path)
@@ -131,10 +149,19 @@ pub fn dispatch(sandbox: &Sandbox, name: &str, args: &serde_json::Value) -> Stri
             let message = args.get("message").and_then(|v| v.as_str()).unwrap_or("");
             sandbox.git_commit(message)
         }
-        other => Ok(format!("Unknown tool: {}", other)),
+        other => return Ok(format!("Unknown tool: {}", other)),
     };
-    match res {
-        Ok(s) => s,
-        Err(e) => format!("Tool error: {}", e),
+    let file_path = extract_file_path(name, args);
+    res.map_err(|e| anyhow_to_tool_error(e, &file_path, name))
+}
+
+fn extract_file_path(name: &str, args: &serde_json::Value) -> String {
+    match name {
+        "list_dir" | "read_file" | "search_replace" | "write_file" | "grep" => args
+            .get("path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        _ => String::new(),
     }
 }

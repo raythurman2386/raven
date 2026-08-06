@@ -20,6 +20,62 @@ pub fn cap_http_body(body: String) -> String {
     truncated
 }
 
+/// Errors that occur during tool execution (filesystem, subprocess, etc.).
+///
+/// Carries structured context (path, operation, error kind + message) so
+/// callers can distinguish transient vs. deterministic failures instead of
+/// matching on flat strings.
+#[derive(Debug, Error)]
+pub enum ToolError {
+    /// A filesystem I/O error with path, operation, and preserved message.
+    #[error("IO error {operation} '{path}': {message}")]
+    Io {
+        path: String,
+        operation: String,
+        kind: std::io::ErrorKind,
+        message: String,
+    },
+    /// Any other tool error (validation, timeout, not-found, subprocess, etc.).
+    #[error("{0}")]
+    Other(String),
+}
+
+impl ToolError {
+    /// Create an `Io` variant with path, operation, error kind, and the
+    /// original OS error message preserved.
+    pub fn io(
+        path: impl Into<String>,
+        operation: impl Into<String>,
+        kind: std::io::ErrorKind,
+        message: impl Into<String>,
+    ) -> Self {
+        ToolError::Io {
+            path: path.into(),
+            operation: operation.into(),
+            kind,
+            message: message.into(),
+        }
+    }
+
+    /// Returns `true` for errors that may succeed on retry (permission
+    /// denied, connection failures, timeouts, interrupted syscalls).
+    pub fn is_transient(&self) -> bool {
+        match self {
+            ToolError::Io { kind, .. } => matches!(
+                kind,
+                std::io::ErrorKind::NotFound
+                    | std::io::ErrorKind::PermissionDenied
+                    | std::io::ErrorKind::ConnectionRefused
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::TimedOut
+                    | std::io::ErrorKind::Interrupted
+                    | std::io::ErrorKind::WouldBlock
+            ),
+            ToolError::Other(_) => false,
+        }
+    }
+}
+
 /// Errors that can occur during the agent loop.
 #[derive(Debug, Error)]
 pub enum AgentError {
@@ -73,5 +129,48 @@ mod tests {
     fn cap_http_body_empty_body_unchanged() {
         let body = String::new();
         assert_eq!(cap_http_body(body.clone()), body);
+    }
+
+    #[test]
+    fn tool_error_io_carries_path_and_message() {
+        let err = ToolError::io(
+            "/tmp/test.txt",
+            "read_file",
+            std::io::ErrorKind::PermissionDenied,
+            "Permission denied (os error 13)",
+        );
+        let display = err.to_string();
+        assert!(display.contains("/tmp/test.txt"), "{display}");
+        assert!(display.contains("read_file"), "{display}");
+        assert!(display.contains("Permission denied"), "{display}");
+        assert!(err.is_transient());
+    }
+
+    #[test]
+    fn tool_error_other_is_not_transient() {
+        let err = ToolError::Other("validation failed".into());
+        assert!(!err.is_transient());
+    }
+
+    #[test]
+    fn tool_error_io_not_found_is_transient() {
+        let err = ToolError::io(
+            "/tmp/missing",
+            "read_file",
+            std::io::ErrorKind::NotFound,
+            "No such file",
+        );
+        assert!(err.is_transient());
+    }
+
+    #[test]
+    fn tool_error_io_broken_pipe_is_not_transient() {
+        let err = ToolError::io(
+            "/dev/null",
+            "write_file",
+            std::io::ErrorKind::BrokenPipe,
+            "Broken pipe",
+        );
+        assert!(!err.is_transient());
     }
 }
