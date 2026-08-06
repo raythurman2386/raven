@@ -8,6 +8,8 @@ use thiserror::Error;
 
 const MAX_HTTP_ERROR_BODY_LEN: usize = 500;
 
+/// Shorten an HTTP error body to a capped length, appending an ellipsis if
+/// truncation occurred, so large error responses don't waste context.
 pub fn cap_http_body(body: String) -> String {
     if body.len() <= MAX_HTTP_ERROR_BODY_LEN {
         return body;
