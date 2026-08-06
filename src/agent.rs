@@ -1740,7 +1740,8 @@ mod tests {
     #[tokio::test]
     async fn compaction_triggers_when_context_exceeds_threshold() {
         let tmp = tempfile::tempdir().unwrap();
-        let summarizer_body = r#"{"choices":[{"message":{"role":"assistant","content":"summary"}}]}"#;
+        let summarizer_body =
+            r#"{"choices":[{"message":{"role":"assistant","content":"summary"}}]}"#;
         let agent_body = concat!(
             "data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n",
             "data: [DONE]\n\n",
