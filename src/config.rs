@@ -93,22 +93,38 @@ impl Settings {
     }
 }
 
+/// Maximum number of characters read from an AGENTS.md-style file.
+const MAX_AGENTS_MD_CHARS: usize = 8000;
+
 /// Load optional project instructions from the workspace.
 ///
 /// Checks, in order: `AGENTS.md`, `CLAUDE.md`, `.grok/AGENTS.md`, `AGENT.md`.
-/// Returns the contents of the first match (truncated to 8000 chars), or an
-/// empty string if none are found.
+/// Returns the contents of the first match (truncated to 8000 chars with a
+/// trailing truncation marker when trimmed), or an empty string if none are
+/// found.
 pub fn load_agents_md(workspace: &std::path::Path) -> String {
     const CANDIDATES: &[&str] = &["AGENTS.md", "CLAUDE.md", ".grok/AGENTS.md", "AGENT.md"];
     for name in CANDIDATES {
         let p = workspace.join(name);
         if p.is_file() {
             if let Ok(text) = std::fs::read_to_string(&p) {
-                return text.chars().take(8000).collect();
+                return truncate_agents_md(&text);
             }
         }
     }
     String::new()
+}
+
+/// Truncate AGENTS.md content to 8000 chars, appending a marker when content
+/// was cut so the model knows it is incomplete.
+fn truncate_agents_md(content: &str) -> String {
+    let char_count = content.chars().count();
+    if char_count > MAX_AGENTS_MD_CHARS {
+        let truncated: String = content.chars().take(MAX_AGENTS_MD_CHARS).collect();
+        format!("{truncated}\n\n[truncated: content exceeds {MAX_AGENTS_MD_CHARS} chars]")
+    } else {
+        content.to_string()
+    }
 }
 
 /// Default model name: `RAVEN_MODEL` env var, else `OLLAMA_MODEL`, else `gemma4:latest`.
@@ -320,10 +336,31 @@ mod tests {
     #[test]
     fn load_agents_md_truncates_at_8000_chars() {
         let tmp = tempfile::tempdir().unwrap();
-        let long = "x".repeat(10_000);
+        let long = "z".repeat(10_000);
         std::fs::write(tmp.path().join("AGENTS.md"), &long).unwrap();
         let result = load_agents_md(tmp.path());
+        assert_eq!(result.chars().filter(|c| *c == 'z').count(), 8000);
+        assert!(result.ends_with("[truncated: content exceeds 8000 chars]"));
+    }
+
+    #[test]
+    fn load_agents_md_no_marker_when_under_limit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let short = "z".repeat(100);
+        std::fs::write(tmp.path().join("AGENTS.md"), &short).unwrap();
+        let result = load_agents_md(tmp.path());
+        assert_eq!(result, short);
+        assert!(!result.contains("truncated"));
+    }
+
+    #[test]
+    fn load_agents_md_no_marker_at_exact_limit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let exact = "z".repeat(8000);
+        std::fs::write(tmp.path().join("AGENTS.md"), &exact).unwrap();
+        let result = load_agents_md(tmp.path());
         assert_eq!(result.chars().count(), 8000);
+        assert!(!result.contains("truncated"));
     }
 
     #[test]
