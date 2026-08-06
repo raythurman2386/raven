@@ -24,12 +24,13 @@ monorepo). Every item is grounded in `xai-org/grok-build` source, kept at
 
 ---
 
-## Current State (audited 2026-08-05)
+## Current State (audited 2026-08-06)
 
-**Tools (14):** list_dir, read_file, search_replace, write_file, grep, run_shell,
-search_code, todo_write, memory_update, git_status, git_diff, git_log,
-apply_patch, run_tests. Plus `exit_plan_mode` signal in plan toolset.
-(`src/tools.rs`, 1823 lines)
+**Tools (22):** list_dir, read_file, search_replace, write_file, grep, run_shell,
+search_code, todo_write, memory_update, memory_search, git_status, git_diff,
+git_log, git_commit, apply_patch, run_tests, run_lint, ask_user, web_search,
+web_fetch, skill_search, skill_load. Plus `exit_plan_mode` signal in plan toolset.
+(`src/tools/` module: definitions.rs, dispatch.rs, git.rs, mod.rs, patch.rs, sandbox.rs)
 
 **Already production-grade (done):**
 - Linear tokenizer (`src/tokenizer.rs`) — O(n), was O(n²) perf blocker.
