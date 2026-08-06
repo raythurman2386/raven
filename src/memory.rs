@@ -60,19 +60,31 @@ pub fn update_memory(workspace: &Path, section: &str, content: &str) -> Result<S
         MEMORY_TEMPLATE.to_string()
     };
 
-    // Find the section header and append after it
     let section_header = format!("## {}", section);
+    let entry = format!("- {}", content.trim());
     if let Some(pos) = file_content.find(&section_header) {
-        // Find the end of the line containing the header
         let insert_pos = file_content[pos..]
             .find('\n')
             .map(|n| pos + n + 1)
             .unwrap_or(file_content.len());
-        let entry = format!("- {}\n", content.trim());
-        file_content.insert_str(insert_pos, &entry);
+
+        let section_end = file_content[insert_pos..]
+            .find("\n## ")
+            .map(|n| insert_pos + n)
+            .unwrap_or(file_content.len());
+        let section_body = &file_content[insert_pos..section_end];
+
+        if section_body.lines().any(|line| line.trim() == entry) {
+            return Ok(format!(
+                "Memory [{}] already contains: {}",
+                section,
+                content.trim()
+            ));
+        }
+
+        file_content.insert_str(insert_pos, &format!("{entry}\n"));
     } else {
-        // Section not found — append it
-        file_content.push_str(&format!("\n## {}\n- {}\n", section, content.trim()));
+        file_content.push_str(&format!("\n## {}\n{entry}\n", section));
     }
 
     std::fs::write(&path, file_content)?;
@@ -203,5 +215,43 @@ mod tests {
         let ws = workspace_with_memory(&body);
         let out = search_memory(&ws, "rust");
         assert!(out.lines().filter(|l| l.contains("item")).count() <= MAX_SEARCH_RESULTS);
+    }
+
+    #[test]
+    fn update_memory_skips_duplicate_entry() {
+        let ws = workspace_with_memory("## Decisions\n- Use Rust\n");
+        let result = update_memory(&ws, "Decisions", "Use Rust").unwrap();
+        assert!(result.contains("already contains"));
+        let content = std::fs::read_to_string(ws.join(".raven").join("MEMORY.md")).unwrap();
+        assert_eq!(content.matches("- Use Rust").count(), 1);
+    }
+
+    #[test]
+    fn update_memory_adds_new_entry() {
+        let ws = workspace_with_memory("## Decisions\n- Use Rust\n");
+        let result = update_memory(&ws, "Decisions", "Deploy via Docker").unwrap();
+        assert!(result.contains("Updated memory"));
+        let content = std::fs::read_to_string(ws.join(".raven").join("MEMORY.md")).unwrap();
+        assert!(content.contains("- Deploy via Docker"));
+    }
+
+    #[test]
+    fn update_memory_creates_file_with_template() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = update_memory(tmp.path(), "Decisions", "Use Rust").unwrap();
+        assert!(result.contains("Updated memory"));
+        let content = std::fs::read_to_string(tmp.path().join(".raven").join("MEMORY.md")).unwrap();
+        assert!(content.contains("## Decisions"));
+        assert!(content.contains("- Use Rust"));
+    }
+
+    #[test]
+    fn update_memory_skips_duplicate_in_new_section() {
+        let tmp = tempfile::tempdir().unwrap();
+        update_memory(tmp.path(), "Decisions", "Use Rust").unwrap();
+        let result = update_memory(tmp.path(), "Decisions", "Use Rust").unwrap();
+        assert!(result.contains("already contains"));
+        let content = std::fs::read_to_string(tmp.path().join(".raven").join("MEMORY.md")).unwrap();
+        assert_eq!(content.matches("- Use Rust").count(), 1);
     }
 }
