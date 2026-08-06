@@ -2,7 +2,8 @@
 //!
 //! All file paths are relative to the workspace root and confined to it.
 //! [`Sandbox::safe_resolve`] rejects `..` traversal. [`Sandbox::run_shell`]
-//! blocks a set of destructive patterns and strips secret env vars.
+//! blocks a set of destructive patterns and uses a clean environment with only
+//! explicitly allowed vars.
 
 use anyhow::{bail, Context, Result};
 use regex::Regex;
@@ -322,8 +323,9 @@ impl Sandbox {
 
     /// Run a shell command in the workspace with a timeout.
     ///
-    /// `cwd` is forced to the workspace; secret env vars are stripped; dangerous
-    /// patterns are blocked. Output is capped at 12 000 chars.
+    /// `cwd` is forced to the workspace; the environment is cleared and only
+    /// explicitly allowed vars (`PATH`, `HOME`, `PWD`, `LANG`) are passed
+    /// through. Dangerous patterns are blocked. Output is capped at 12 000 chars.
     pub fn run_shell(&self, command: &str, timeout_secs: u64) -> Result<String> {
         if dangerous_re().is_match(command) {
             return Ok("Error: command blocked by sandbox filter".into());
@@ -332,17 +334,14 @@ impl Sandbox {
         cmd.arg("-c")
             .arg(command)
             .current_dir(&self.workspace)
-            .env("PWD", &self.workspace)
-            .env_remove("AWS_SECRET_ACCESS_KEY")
-            .env_remove("OPENAI_API_KEY")
-            .env_remove("XAI_API_KEY")
-            .env_remove("ANTHROPIC_API_KEY")
-            .env_remove("RAVEN_API_KEY")
-            .env_remove("OLLAMA_API_KEY")
-            .env_remove("GITHUB_TOKEN")
-            .env_remove("GITLAB_TOKEN")
-            .env_remove("DATABASE_URL")
-            .stdout(std::process::Stdio::piped())
+            .env_clear()
+            .env("PWD", &self.workspace);
+        for key in &["PATH", "HOME", "LANG"] {
+            if let Ok(val) = std::env::var(key) {
+                cmd.env(key, val);
+            }
+        }
+        cmd.stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
         let mut child = cmd.spawn().context("spawn shell")?;
