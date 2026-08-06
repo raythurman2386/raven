@@ -181,6 +181,18 @@ All writes are atomic (temp file + rename). Use `--resume` to continue a previou
 
 ---
 
+## Shell safety
+
+The `run_shell` tool uses two complementary filters, neither of which is a security boundary:
+
+1. **Denylist** — a regex that blocks obviously destructive patterns (recursive root deletes, fork bombs, `curl | sh`, etc.). This is a **best-effort guard**, not a security boundary. A denylist is inherently incomplete — it can always be bypassed (e.g. `rm -rf ~` is not blocked even though `rm -rf /` is).
+
+2. **Allowlist** — a regex that matches known-safe development commands (`cargo`, `git`, `npm`, `ls`, `grep`, etc.). When `confirm_shell` is enabled (the default, non-`--yolo` path), commands matching the allowlist run without a confirmation prompt. Anything outside the allowlist requires explicit user approval.
+
+The `--yolo` flag disables confirmation entirely, but the denylist still applies as a last-resort filter. Neither mechanism replaces OS-level sandboxing (Landlock/seccomp), which is intentionally out of scope.
+
+---
+
 ## Testing
 
 ```bash
