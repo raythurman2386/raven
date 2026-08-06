@@ -1463,4 +1463,25 @@ mod tests {
             .any(|e| matches!(e, AgentEvent::Retry { attempt: 1, .. })));
         assert!(events.iter().any(|e| matches!(e, AgentEvent::Done)));
     }
+
+    #[tokio::test]
+    async fn non_stream_text_message() {
+        let tmp = tempfile::tempdir().unwrap();
+        let body =
+            r#"{"choices":[{"message":{"role":"assistant","content":"plain json answer"}}]}"#;
+        let (base, _h) = spawn_mock(vec![body]).await;
+        let mut s = settings_for(tmp.path(), &base);
+        s.no_stream = true;
+        let mut agent = Agent::new(s).unwrap();
+        let (tx, mut rx) = mpsc::channel(256);
+        agent.run("go", tx).await.unwrap();
+        let mut events = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            events.push(ev);
+        }
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::TextDelta(s) if s == "plain json answer")));
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::Done)));
+    }
 }
