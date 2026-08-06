@@ -29,6 +29,7 @@ use crate::config::{load_agents_md, Settings};
 use crate::context::{compact_if_needed_llm, history_tokens};
 use crate::error::{cap_http_body, AgentError};
 use crate::memory;
+use crate::plan::Plan;
 use crate::tools::{dispatch, safe_command_re, tool_definitions, Sandbox};
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -170,6 +171,8 @@ pub enum AgentEvent {
         question: String,
         reply: tokio::sync::oneshot::Sender<String>,
     },
+    /// The plan's step statuses have been updated during execution.
+    PlanProgress(Plan),
     /// The agent finished normally (no more tool calls).
     Done,
     /// An error occurred (HTTP failure, stream error, max iterations).
@@ -208,6 +211,11 @@ pub struct Agent {
     /// Set to true when a file-editing tool (write_file/search_replace/apply_patch)
     /// runs, signalling that the repo map in the system message may be stale.
     repo_map_stale: bool,
+    /// Optional plan being executed; step statuses are updated as the agent
+    /// progresses through tool calls.
+    plan: Option<Plan>,
+    /// Index into `plan.steps` of the step currently being executed.
+    current_step: usize,
 }
 
 impl Agent {
@@ -230,6 +238,8 @@ impl Agent {
             verified: false,
             verify_attempts: 0,
             repo_map_stale: false,
+            plan: None,
+            current_step: 0,
             client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(300))
                 .build()
@@ -244,6 +254,13 @@ impl Agent {
     /// physically cannot modify the workspace during planning.
     pub fn plan_only(mut self) -> Self {
         self.plan_only = true;
+        self
+    }
+
+    /// Attach a plan to this agent so step statuses are updated during
+    /// execution and emitted as [`AgentEvent::PlanProgress`] events.
+    pub fn with_plan(mut self, plan: Plan) -> Self {
+        self.plan = Some(plan);
         self
     }
 
@@ -315,6 +332,13 @@ impl Agent {
             let t_iter = std::time::Instant::now();
             // True if this turn's tools edited files, triggering a lint pass.
             let mut edited = false;
+
+            // Plan progress: mark the current step InProgress at the start of
+            // each iteration.
+            if let Some(ref mut plan) = self.plan {
+                crate::plan::advance_step(plan, &mut self.current_step, false, false);
+                let _ = tx.send(AgentEvent::PlanProgress(plan.clone())).await;
+            }
 
             // Reminders for the *next* request only. These are appended to the
             // outgoing request body, NOT to `self.messages`, so the persisted
@@ -491,6 +515,10 @@ impl Agent {
                     continue;
                 }
                 self.messages.push(assistant);
+                if let Some(ref mut plan) = self.plan {
+                    crate::plan::advance_step(plan, &mut self.current_step, false, true);
+                    let _ = tx.send(AgentEvent::PlanProgress(plan.clone())).await;
+                }
                 let _ = tx.send(AgentEvent::Done).await;
                 return Ok(());
             }
@@ -772,6 +800,13 @@ impl Agent {
                     tool_calls: None,
                     tool_call_id: Some(id),
                 });
+            }
+
+            // Plan progress: mark the current step Completed and advance to
+            // the next step after tool calls finish.
+            if let Some(ref mut plan) = self.plan {
+                crate::plan::advance_step(plan, &mut self.current_step, true, false);
+                let _ = tx.send(AgentEvent::PlanProgress(plan.clone())).await;
             }
 
             // Auto-lint reflection: if this turn edited files, run the

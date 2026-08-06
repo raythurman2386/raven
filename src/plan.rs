@@ -150,6 +150,38 @@ fn parse_numbered_list(text: &str) -> Plan {
     }
 }
 
+/// Advance plan step statuses as the agent executes.
+///
+/// - Marks the current step `InProgress`.
+/// - If `had_tool_calls` is true, marks the current step `Completed` and
+///   advances `current_step` to the next step.
+/// - If `done` is true, marks all remaining steps (including the current one)
+///   `Completed`.
+/// - `current_step` is clamped to `plan.steps.len()`.
+pub fn advance_step(plan: &mut Plan, current_step: &mut usize, had_tool_calls: bool, done: bool) {
+    if plan.steps.is_empty() {
+        return;
+    }
+    *current_step = (*current_step).min(plan.steps.len());
+    if done {
+        for step in &mut plan.steps {
+            step.status = PlanStepStatus::Completed;
+        }
+        *current_step = plan.steps.len();
+        return;
+    }
+    if *current_step < plan.steps.len() {
+        plan.steps[*current_step].status = PlanStepStatus::InProgress;
+    }
+    if had_tool_calls && *current_step < plan.steps.len() {
+        plan.steps[*current_step].status = PlanStepStatus::Completed;
+        *current_step += 1;
+        if *current_step < plan.steps.len() {
+            plan.steps[*current_step].status = PlanStepStatus::InProgress;
+        }
+    }
+}
+
 /// Format a plan for display (headless or TUI).
 pub fn format_plan(plan: &Plan) -> String {
     let mut out = format!("── {} ──\n", plan.title);
@@ -234,6 +266,134 @@ Done."#;
         let text = "1. Do something\n";
         let plan = parse_plan(text);
         assert_eq!(plan.title, "Plan");
+    }
+
+    #[test]
+    fn advance_step_single_step_completion() {
+        let mut plan = Plan {
+            title: "Test".into(),
+            steps: vec![PlanStep {
+                description: "Do X".into(),
+                status: PlanStepStatus::Pending,
+            }],
+            created_at: "".into(),
+        };
+        let mut current = 0usize;
+        advance_step(&mut plan, &mut current, true, false);
+        assert_eq!(plan.steps[0].status, PlanStepStatus::Completed);
+        assert_eq!(current, 1);
+    }
+
+    #[test]
+    fn advance_step_multi_step_progression() {
+        let mut plan = Plan {
+            title: "Test".into(),
+            steps: vec![
+                PlanStep {
+                    description: "A".into(),
+                    status: PlanStepStatus::Pending,
+                },
+                PlanStep {
+                    description: "B".into(),
+                    status: PlanStepStatus::Pending,
+                },
+                PlanStep {
+                    description: "C".into(),
+                    status: PlanStepStatus::Pending,
+                },
+            ],
+            created_at: "".into(),
+        };
+        let mut current = 0usize;
+        advance_step(&mut plan, &mut current, true, false);
+        assert_eq!(plan.steps[0].status, PlanStepStatus::Completed);
+        assert_eq!(plan.steps[1].status, PlanStepStatus::InProgress);
+        assert_eq!(plan.steps[2].status, PlanStepStatus::Pending);
+        assert_eq!(current, 1);
+        advance_step(&mut plan, &mut current, true, false);
+        assert_eq!(plan.steps[0].status, PlanStepStatus::Completed);
+        assert_eq!(plan.steps[1].status, PlanStepStatus::Completed);
+        assert_eq!(plan.steps[2].status, PlanStepStatus::InProgress);
+        assert_eq!(current, 2);
+    }
+
+    #[test]
+    fn advance_step_done_marks_all_remaining_completed() {
+        let mut plan = Plan {
+            title: "Test".into(),
+            steps: vec![
+                PlanStep {
+                    description: "A".into(),
+                    status: PlanStepStatus::Pending,
+                },
+                PlanStep {
+                    description: "B".into(),
+                    status: PlanStepStatus::Pending,
+                },
+                PlanStep {
+                    description: "C".into(),
+                    status: PlanStepStatus::Pending,
+                },
+            ],
+            created_at: "".into(),
+        };
+        let mut current = 1usize;
+        advance_step(&mut plan, &mut current, false, true);
+        assert_eq!(plan.steps[0].status, PlanStepStatus::Completed);
+        assert_eq!(plan.steps[1].status, PlanStepStatus::Completed);
+        assert_eq!(plan.steps[2].status, PlanStepStatus::Completed);
+        assert_eq!(current, 3);
+    }
+
+    #[test]
+    fn advance_step_no_tool_calls_does_not_advance() {
+        let mut plan = Plan {
+            title: "Test".into(),
+            steps: vec![
+                PlanStep {
+                    description: "A".into(),
+                    status: PlanStepStatus::Pending,
+                },
+                PlanStep {
+                    description: "B".into(),
+                    status: PlanStepStatus::Pending,
+                },
+            ],
+            created_at: "".into(),
+        };
+        let mut current = 0usize;
+        advance_step(&mut plan, &mut current, false, false);
+        assert_eq!(plan.steps[0].status, PlanStepStatus::InProgress);
+        assert_eq!(plan.steps[1].status, PlanStepStatus::Pending);
+        assert_eq!(current, 0);
+    }
+
+    #[test]
+    fn advance_step_clamps_at_end() {
+        let mut plan = Plan {
+            title: "Test".into(),
+            steps: vec![PlanStep {
+                description: "A".into(),
+                status: PlanStepStatus::Pending,
+            }],
+            created_at: "".into(),
+        };
+        let mut current = 5usize;
+        advance_step(&mut plan, &mut current, true, false);
+        assert_eq!(current, 1);
+        assert_eq!(plan.steps[0].status, PlanStepStatus::Pending);
+    }
+
+    #[test]
+    fn advance_step_empty_plan_noop() {
+        let mut plan = Plan {
+            title: "Test".into(),
+            steps: vec![],
+            created_at: "".into(),
+        };
+        let mut current = 0usize;
+        advance_step(&mut plan, &mut current, true, false);
+        assert_eq!(current, 0);
     }
 
     #[test]
