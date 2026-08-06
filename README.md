@@ -12,6 +12,7 @@ A **privacy-first** local coding-agent harness written in Rust for [Ollama](http
 |---|---|
 | Streaming agent loop (OpenAI-compatible `/v1/chat/completions`) | MCP server marketplace |
 | 22 tools: `list_dir`, `read_file`, `search_replace`, `write_file`, `grep`, `run_shell`, `search_code`, `todo_write`, `memory_update`, `memory_search`, `git_status`, `git_diff`, `git_log`, `git_commit`, `apply_patch`, `run_tests`, `run_lint`, `ask_user`, `web_search`, `web_fetch`, `skill_search`, `skill_load` | MCP server marketplace |
+| Document extraction: `read_file` converts `.docx`, `.pdf`, `.xlsx`, `.odt`, `.epub`, `.pptx`, `.csv` and more to Markdown (via the `anydoc` engine) | MCP server marketplace |
 | Workspace sandbox (path confinement + dangerous-command filter) | OS-level kernel sandbox (Landlock/seccomp) |
 | Structured plan mode (parse → approve → revise → execute) | Worktree isolation |
 | Skills (`SKILL.md` discovery + `skill_search`/`skill_load`) | Rhai workflow engine |
@@ -199,7 +200,7 @@ src/
   main.rs       # CLI, headless runner, session management
   agent.rs      # Streaming agent loop, retry, parallel sub-agents
   commands.rs   # Slash-command registry + parsing for the TUI
-  tools.rs      # 14 tools + workspace sandbox (path confinement, shell filter)
+  tools/        # Tool modules: definitions, dispatch, document, git, patch, sandbox
   tui.rs        # ratatui TUI with status bar, streaming, scrollback, /commands
   config.rs     # Settings, config.toml loading, context window inference
   context.rs    # Compaction strategy, tool-result pruning

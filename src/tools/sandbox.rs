@@ -159,6 +159,10 @@ impl Sandbox {
 
     /// Read a file, returning a numbered line range (1-based `start_line`, up to `max_lines`).
     /// Lines longer than 2000 chars are truncated.
+    ///
+    /// Non-text documents (`.docx`, `.pdf`, `.xlsx`, `.odt`, `.epub`, ...) are
+    /// converted to Markdown via [`super::document`] so the model can read them.
+    /// Known binary files (images, audio, video, archives) are rejected.
     pub fn read_file(&self, path: &str, start_line: usize, max_lines: usize) -> Result<String> {
         let p = self.safe_resolve(path)?;
         if !p.exists() {
@@ -173,6 +177,49 @@ impl Sandbox {
                 path
             ));
         }
+
+        // Structured-document extraction: try before the binary guard so
+        // .docx/.xlsx/.pdf render as text. Malformed documents fall through
+        // to the normal text/binary handling.
+        if super::document::is_extractable_document(path) {
+            match super::document::extract_document_text(&p.to_string_lossy()) {
+                Ok(markdown) => {
+                    let lines: Vec<&str> = markdown.lines().collect();
+                    let start = start_line.saturating_sub(1);
+                    let end = (start + max_lines).min(lines.len());
+                    let mut out = format!(
+                        "--- {} (extracted document, lines {}-{} of {}) ---\n",
+                        path,
+                        start + 1,
+                        end,
+                        lines.len()
+                    );
+                    for (i, line) in lines[start..end].iter().enumerate() {
+                        let truncated: String = line.chars().take(MAX_LINE_LENGTH).collect();
+                        let rendered = format!("{:5}| {}\n", start + i + 1, truncated);
+                        if out.chars().count() + rendered.chars().count() > MAX_TOOL_OUTPUT {
+                            out.push_str(&format!("…[truncated at {} chars]", MAX_TOOL_OUTPUT));
+                            break;
+                        }
+                        out.push_str(&rendered);
+                    }
+                    return Ok(out);
+                }
+                Err(e) => {
+                    // Fall through to the binary guard / text read below.
+                    tracing::debug!("document extraction failed for {}: {e}", path);
+                }
+            }
+        }
+
+        // Binary file guard: block known binary extensions (no I/O).
+        if super::document::has_binary_extension(path) {
+            return Ok(format!(
+                "Error: {} is a binary file. Use list_dir to see available files, or run_shell to inspect it.",
+                path
+            ));
+        }
+
         let text = std::fs::read_to_string(&p).context("read file")?;
         let lines: Vec<&str> = text.lines().collect();
         let start = start_line.saturating_sub(1);

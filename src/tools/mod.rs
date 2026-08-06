@@ -9,6 +9,7 @@
 
 mod definitions;
 mod dispatch;
+mod document;
 mod git;
 mod patch;
 mod sandbox;
@@ -98,6 +99,7 @@ mod tests {
     use super::patch::parse_unified_diff;
     use super::sandbox::{truncate_output, wait_for_child};
     use super::*;
+    use std::io::Write;
     use std::process::Command;
 
     fn sandbox() -> Sandbox {
@@ -426,6 +428,63 @@ mod tests {
         let sb = sandbox();
         let result = dispatch(&sb, "nonexistent_tool", &serde_json::json!({}));
         assert!(result.contains("Unknown tool"));
+    }
+
+    #[test]
+    fn read_file_extracts_docx() {
+        // End-to-end: read_file on a .docx must return extracted text, not
+        // "Tool error: read file". Regression for the relative-vs-absolute
+        // path bug where extraction read against the process CWD.
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        let docx = ws.join("report.docx");
+
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let opts = zip::write::SimpleFileOptions::default();
+        zip.start_file("[Content_Types].xml", opts).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>"#,
+        )
+        .unwrap();
+        zip.start_file("_rels/.rels", opts).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>"#,
+        )
+        .unwrap();
+        zip.start_file("word/document.xml", opts).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:t>Hello from read_file</w:t></w:r></w:p>
+  </w:body>
+</w:document>"#,
+        )
+        .unwrap();
+        let cursor = zip.finish().unwrap();
+        std::fs::write(&docx, cursor.into_inner()).unwrap();
+
+        let sb = Sandbox::new(ws);
+        let out = sb.read_file("report.docx", 1, 100).unwrap();
+        assert!(out.contains("Hello from read_file"), "output: {out}");
+        assert!(out.contains("extracted document"), "output: {out}");
+    }
+
+    #[test]
+    fn read_file_rejects_binary() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("img.png"), b"\x89PNG\r\n\x1a\n").unwrap();
+        let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
+        let out = sb.read_file("img.png", 1, 100).unwrap();
+        assert!(out.contains("binary file"), "output: {out}");
     }
 
     #[test]

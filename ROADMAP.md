@@ -273,3 +273,43 @@ correct (one per turn, never per-iteration).
 
 **All 9 phases complete.** The mini-harness rework against Grok Build is done;
 remaining ideas are documented under "Deferred (YAGNI)" above.
+
+---
+
+## Phase 10 — Document extraction in `read_file`  (Hermes Agent parity)
+
+**Why:** Hermes Agent's `read_file` auto-extracts non-text documents (`.docx`,
+`.pdf`, `.xlsx`, `.odt`, `.epub`, ...) to Markdown so the model can read them
+instead of hitting a binary blob. Raven's `read_file` previously only did
+`read_to_string`, so any document was unreadable.
+
+- New `src/tools/document.rs`: binary-extension guard + `is_extractable_document`
+  + `extract_document_text`, delegating conversion to the **`anydoc` crate**
+  (v0.1.6, MIT, zero external deps) — the same Rust core Hermes uses through its
+  `firecrawl-anydoc` binding. Runs entirely locally (no API key, no network).
+- Wired into `Sandbox::read_file` (mirrors Hermes ordering): try extraction
+  before the binary guard, so `.docx`/`.xlsx`/`.pdf` render as text; malformed
+  documents fall through to the normal text/binary handling.
+- Bumped `rust-version` 1.85 → 1.88 (anydoc's MSRV; toolchain is 1.97).
+- Added `zip` as a dev-dependency for the offline DOCX round-trip test.
+
+**Acceptance:** `cargo test` (10 new offline tests: 8 document-module incl. a
+real DOCX round-trip, plus 2 end-to-end `read_file` tests), clippy `-D warnings`,
+fmt clean.
+**Commit:** `feat(tools): add document extraction to read_file via anydoc`.
+
+**Phase status:**
+- [x] Phase 10 — Document extraction in `read_file`
+
+---
+
+## Flake fixes (found while verifying Phase 10)
+
+Two pre-existing flaky tests surfaced during Phase 10 verification:
+
+1. **`wait_for_child_times_out`** — `wait_for_child` compared `start.elapsed().as_secs() > timeout_secs`, but `as_secs()` truncates to whole seconds, so a 1s timeout actually fired at ~2s. Under parallel load the extra second could push past the test's 4s bound. Fixed to compare `Duration` precisely (`start.elapsed() >= deadline`).
+
+2. **`verify_*` agent tests** — the mock HTTP server accepted one connection per response and dropped the stream. The agent uses a shared `reqwest::Client` that reuses one TCP connection, so a request sent on a reused connection sat unread while the mock blocked on `accept()` for a new connection that never came → the agent hung → timed out → ended with `Error` instead of `Done`. Rewrote the mock (`serve_mock`) to be keep-alive aware: read multiple requests per connection, serve the next scripted response each time, and fall back to a benign empty response once scripted responses are exhausted.
+
+**Acceptance:** 30 consecutive full-suite runs with 0 failures (previously ~3/25), clippy `-D warnings`, fmt clean.
+**Commit:** `fix(tests): make mock server keep-alive aware + precise timeout`.
