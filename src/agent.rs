@@ -455,7 +455,11 @@ impl Agent {
                 // Enforced verification: if the turn edited files and verify is on and
                 // the model hasn't called run_tests, don't finish — inject a recovery
                 // reminder and re-run (capped at 3 attempts).
-                if self.settings.verify && edited_any && !self.verified && self.verify_attempts < 3
+                if self.settings.verify
+                    && edited_any
+                    && !self.verified
+                    && self.verify_attempts < 3
+                    && self.sandbox.has_test_runner()
                 {
                     self.verify_attempts += 1;
                     self.pending_verify = Some(
@@ -1554,6 +1558,11 @@ mod tests {
     #[tokio::test]
     async fn verify_requires_run_tests() {
         let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
         let edit_round = concat!(
         "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"write_file\",\"arguments\":\"{\\\"path\\\":\\\"a.rs\\\",\\\"content\\\":\\\"fn main() {}\\\"}\"}}]}}]}\n\n",
         "data: [DONE]\n\n",
@@ -1584,6 +1593,11 @@ mod tests {
     #[tokio::test]
     async fn verify_passes_when_run_tests_called() {
         let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
         let edit_round = concat!(
         "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"write_file\",\"arguments\":\"{\\\"path\\\":\\\"a.rs\\\",\\\"content\\\":\\\"fn main() {}\\\"}\"}}]}}]}\n\n",
         "data: [DONE]\n\n",
@@ -1640,6 +1654,11 @@ mod tests {
     #[tokio::test]
     async fn verify_caps_at_max_attempts() {
         let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
         let edit_round = concat!(
         "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"write_file\",\"arguments\":\"{\\\"path\\\":\\\"a.rs\\\",\\\"content\\\":\\\"fn main() {}\\\"}\"}}]}}]}\n\n",
         "data: [DONE]\n\n",
@@ -1666,6 +1685,34 @@ mod tests {
             .filter(|e| matches!(e, AgentEvent::VerifyRequired))
             .count();
         assert_eq!(verify_count, 3);
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::Done)));
+    }
+
+    #[tokio::test]
+    async fn verify_skips_when_no_test_runner() {
+        let tmp = tempfile::tempdir().unwrap();
+        let edit_round = concat!(
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"write_file\",\"arguments\":\"{\\\"path\\\":\\\"a.rs\\\",\\\"content\\\":\\\"fn main() {}\\\"}\"}}]}}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+        let text_round = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        // No Cargo.toml in the tempdir → no test runner → gate skipped.
+        let (base, _h) = spawn_mock(vec![edit_round, text_round]).await;
+        let mut s = settings_for(tmp.path(), &base);
+        s.verify = true;
+        let mut agent = Agent::new(s).unwrap();
+        let (tx, mut rx) = mpsc::channel(256);
+        agent.run("edit a.rs", tx).await.unwrap();
+        let mut events = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            events.push(ev);
+        }
+        assert!(!events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::VerifyRequired)));
         assert!(events.iter().any(|e| matches!(e, AgentEvent::Done)));
     }
 }

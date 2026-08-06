@@ -620,6 +620,17 @@ impl Sandbox {
         }
     }
 
+    /// Whether the workspace has a detectable test runner (Cargo, npm, or
+    /// pytest). Mirrors the detection in [`Self::run_tests`]. Used by the
+    /// enforced-verify gate to skip when there is nothing to run.
+    pub fn has_test_runner(&self) -> bool {
+        self.workspace.join("Cargo.toml").exists()
+            || self.workspace.join("package.json").exists()
+            || self.workspace.join("pytest.ini").exists()
+            || self.workspace.join("pyproject.toml").exists()
+            || self.workspace.join("setup.py").exists()
+    }
+
     /// Auto-detect and run the project's linter / type checker.
     ///
     /// Non-mutating: reports problems without fixing them. Prefers the fastest
