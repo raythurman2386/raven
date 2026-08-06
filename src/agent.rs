@@ -27,7 +27,7 @@ use tokio::sync::mpsc;
 
 use crate::config::{load_agents_md, Settings};
 use crate::context::{compact_if_needed_llm, history_tokens};
-use crate::error::AgentError;
+use crate::error::{cap_http_body, AgentError};
 use crate::memory;
 use crate::tools::{dispatch, safe_command_re, tool_definitions, Sandbox};
 use std::collections::HashMap;
@@ -842,7 +842,10 @@ impl Agent {
                                 model: self.settings.model.clone(),
                             });
                         }
-                        return Err(AgentError::HttpError { status, body: text });
+                        return Err(AgentError::HttpError {
+                            status,
+                            body: cap_http_body(text),
+                        });
                     }
                     // 5xx and 429 = transient — retry
                     if ((500..600).contains(&status) || status == 429) && attempt + 1 < max_retries
@@ -859,7 +862,10 @@ impl Agent {
                     }
                     // Other 4xx = don't retry
                     let text = resp.text().await.unwrap_or_default();
-                    return Err(AgentError::HttpError { status, body: text });
+                    return Err(AgentError::HttpError {
+                        status,
+                        body: cap_http_body(text),
+                    });
                 }
                 Err(e) if e.is_connect() || e.is_timeout() => {
                     if attempt + 1 < max_retries {
