@@ -1373,4 +1373,34 @@ mod tests {
     fn args_number_serialized() {
         assert_eq!(args_to_string(&json!(42)), "42");
     }
+
+    #[tokio::test]
+    async fn stream_text_only_reaches_done() {
+        let tmp = tempfile::tempdir().unwrap();
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let (base, _h) = spawn_mock(vec![body]).await;
+        let mut agent = Agent::new(settings_for(tmp.path(), &base)).unwrap();
+        let (tx, mut rx) = mpsc::channel(256);
+        agent.run("hello", tx).await.unwrap();
+        let mut events = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            events.push(ev);
+        }
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::TextDelta(s) if s == "Hel")));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::TextDelta(s) if s == "lo")));
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::Done)));
+        // assistant message appended with the full concatenated content
+        let last = agent.messages.last().unwrap();
+        assert_eq!(last.role, "assistant");
+        assert_eq!(last.content.as_deref(), Some("Hello"));
+    }
 }
