@@ -50,6 +50,9 @@ pub struct Settings {
     pub compact_threshold: f32,
     /// Disable streaming and use a single non-streaming request instead.
     pub no_stream: bool,
+    /// When true, the agent must call `run_tests` after editing files before
+    /// it can finish a turn (enforced verification gate). Default on.
+    pub verify: bool,
     /// When true, every `run_shell` command is confirmed with the user first
     /// (via the same ask_user channel). Off with `--yolo`.
     pub confirm_shell: bool,
@@ -172,6 +175,8 @@ pub struct ConfigFile {
     pub temperature: Option<f32>,
     /// Disable streaming and use a single non-streaming request instead.
     pub no_stream: Option<bool>,
+    /// Enforce the agent runs tests after editing files before finishing.
+    pub verify: Option<bool>,
 }
 
 /// Load config from workspace `.raven/config.toml` then `~/.raven/config.toml`.
@@ -199,6 +204,7 @@ pub fn load_config_file(workspace: &std::path::Path) -> ConfigFile {
         plan_first: ws.plan_first.or(global.plan_first),
         temperature: ws.temperature.or(global.temperature),
         no_stream: ws.no_stream.or(global.no_stream),
+        verify: ws.verify.or(global.verify),
     }
 }
 

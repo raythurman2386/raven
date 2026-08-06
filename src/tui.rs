@@ -771,6 +771,12 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
                     )));
                     log_dirty = true;
                 }
+                AgentEvent::VerifyRequired => {
+                    log.push(LogEntry::system(
+                        "⟳ verify required — re-running to enforce run_tests".to_string(),
+                    ));
+                    log_dirty = true;
+                }
                 AgentEvent::PlanReady => {
                     // Model signalled the plan is complete. Await the planning
                     // task, save messages, show the plan, then auto-execute

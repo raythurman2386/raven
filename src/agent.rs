@@ -120,6 +120,9 @@ pub enum AgentEvent {
     },
     /// A transient error is being retried after a delay.
     Retry { attempt: usize, delay_ms: u64 },
+    /// The turn edited files but did not call `run_tests` before finishing;
+    /// the harness is re-running with a recovery reminder (enforced verify).
+    VerifyRequired,
     /// The plan-only turn produced a plan and signalled readiness to execute.
     /// Consumers should auto-proceed to execution (model-driven, no human gate).
     PlanReady,
@@ -156,6 +159,15 @@ pub struct Agent {
     /// Kept out of `self.messages` so the persisted conversation stays a clean
     /// `[system, user, assistant, tool, ...]` alternation.
     pending_lint: Option<String>,
+    /// Holds a verify-required reminder to surface on the *next* request when
+    /// the model edited files but did not call `run_tests` before finishing.
+    /// Follows the same ephemeral pattern as `pending_lint`.
+    pending_verify: Option<String>,
+    /// Set when the model dispatched `run_tests` this turn (verification done).
+    /// Turn-level, persists across iterations.
+    verified: bool,
+    /// Number of times the enforced-verify gate has re-run this turn (capped at 3).
+    verify_attempts: u32,
 }
 
 impl Agent {
@@ -207,6 +219,9 @@ impl Agent {
             tool_cache: HashMap::new(),
             plan_only: false,
             pending_lint: None,
+            pending_verify: None,
+            verified: false,
+            verify_attempts: 0,
             client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(300))
                 .build()
@@ -268,6 +283,14 @@ impl Agent {
             tool_call_id: None,
         });
 
+        // Turn-level state (persists across iterations within this turn).
+        // `verified` is set when the model dispatches `run_tests`; the
+        // enforced-verify gate checks it at the finish branch so an edit in
+        // iter 1 still gates a finish in iter 2 unless run_tests was called.
+        self.verified = false;
+        self.verify_attempts = 0;
+        let mut edited_any = false;
+
         for iter in 0..self.settings.max_iterations {
             let _ = tx.send(AgentEvent::Iteration(iter + 1)).await;
             let t_iter = std::time::Instant::now();
@@ -281,6 +304,9 @@ impl Agent {
             let mut reminders = compute_reminders(&self.messages, iter);
             if let Some(lint) = self.pending_lint.take() {
                 reminders.push(lint);
+            }
+            if let Some(v) = self.pending_verify.take() {
+                reminders.push(v);
             }
 
             // Compaction: if estimated history tokens exceed the soft limit,
@@ -426,6 +452,21 @@ impl Agent {
             };
 
             if tool_acc.is_empty() {
+                // Enforced verification: if the turn edited files and verify is on and
+                // the model hasn't called run_tests, don't finish — inject a recovery
+                // reminder and re-run (capped at 3 attempts).
+                if self.settings.verify && edited_any && !self.verified && self.verify_attempts < 3
+                {
+                    self.verify_attempts += 1;
+                    self.pending_verify = Some(
+                        "You edited files this turn but did not call run_tests to verify \
+                         your changes. Call run_tests now and fix any failures before \
+                         answering."
+                            .to_string(),
+                    );
+                    let _ = tx.send(AgentEvent::VerifyRequired).await;
+                    continue;
+                }
                 self.messages.push(assistant);
                 let _ = tx.send(AgentEvent::Done).await;
                 return Ok(());
@@ -616,6 +657,12 @@ impl Agent {
                     "write_file" | "search_replace" | "apply_patch"
                 ) {
                     edited = true;
+                    edited_any = true;
+                }
+
+                // Track verification: the model dispatched run_tests this turn.
+                if name == "run_tests" {
+                    self.verified = true;
                 }
 
                 // Check cache for read-only tools
@@ -1260,6 +1307,7 @@ mod tests {
             context_window: 128_000,
             compact_threshold: 0.75,
             no_stream: false,
+            verify: false,
             confirm_shell: false,
         }
     }

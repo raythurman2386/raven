@@ -126,6 +126,10 @@ struct Cli {
     #[arg(long)]
     no_stream: bool,
 
+    /// Disable the enforced verification gate (agent must run tests after edits).
+    #[arg(long)]
+    no_verify: bool,
+
     /// Resume the most recent session (or a specific session by ID).
     #[arg(long, num_args = 0..=1)]
     resume: Option<Option<String>>,
@@ -222,6 +226,7 @@ async fn main() -> Result<()> {
         context_window,
         compact_threshold,
         no_stream: cli.no_stream || cfg.no_stream.unwrap_or(false),
+        verify: !cli.no_verify && cfg.verify.unwrap_or(true),
         confirm_shell: !cli.yolo,
     };
 
@@ -414,6 +419,9 @@ async fn headless_run(
             }
             AgentEvent::Retry { attempt, delay_ms } => {
                 eprintln!("[retry {}/3 in {}ms]", attempt, delay_ms);
+            }
+            AgentEvent::VerifyRequired => {
+                eprintln!("[verify required: re-running to enforce run_tests]");
             }
             AgentEvent::PlanReady => {
                 plan_ready = true;
