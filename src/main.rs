@@ -30,33 +30,18 @@
 //! See the repository `README.md` for user-facing documentation and
 //! `docs/architecture.md` for design details.
 
-mod agent;
-mod commands;
-mod config;
-mod context;
-mod error;
-mod memory;
-mod plan;
-mod repomap;
-mod session;
-mod skills;
-mod tokenizer;
-mod tools;
-mod tui;
-mod web;
-
 use anyhow::Result;
 use clap::Parser;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
 
-use agent::{run_parallel, Agent, AgentEvent, ChatMessage};
-use config::{
+use raven::agent::{run_parallel, Agent, AgentEvent, ChatMessage};
+use raven::config::{
     default_api_key, default_base_url, default_max_iter, default_model, env_compact_threshold,
     env_context_window, load_config_file, Settings,
 };
-use context::{fetch_context_window, infer_context_window};
-use session::{Session, SessionStore};
+use raven::context::{fetch_context_window, infer_context_window};
+use raven::session::{Session, SessionStore};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -293,7 +278,7 @@ async fn main() -> Result<()> {
 
     // Default to TUI when no task given
     if (task.is_empty() && !cli.headless) || cli.tui {
-        return tui::run_tui(settings).await;
+        return raven::tui::run_tui(settings).await;
     }
 
     if task.is_empty() {
@@ -454,8 +439,8 @@ async fn headless_run(
 
     // ── Plan approval flow ─────────────────────────────────────────────
     if plan_first {
-        let plan = plan::parse_plan(&assistant_text);
-        println!("\n{}", plan::format_plan(&plan));
+        let plan = raven::plan::parse_plan(&assistant_text);
+        println!("\n{}", raven::plan::format_plan(&plan));
 
         // Model-driven: if the plan turn ended via exit_plan_mode, auto-proceed
         // to execution without a human gate. Otherwise prompt.
@@ -519,8 +504,8 @@ async fn headless_run(
                     }
                     // Show the revised plan; auto-proceed if the model signalled
                     // completion via exit_plan_mode, else prompt once more.
-                    let revised = plan::parse_plan(&rev_text);
-                    println!("\n{}", plan::format_plan(&revised));
+                    let revised = raven::plan::parse_plan(&rev_text);
+                    println!("\n{}", raven::plan::format_plan(&revised));
                     if !rev_ready {
                         println!("── Approve? [Y]es / [n]o ──");
                         // Auto-approve when non-interactive; any non-yes answer
@@ -541,7 +526,7 @@ async fn headless_run(
         let exec_messages = first_messages.clone().unwrap_or_default();
         let exec_msg = ChatMessage {
             role: "user".into(),
-            content: Some(plan::EXECUTE_PROMPT.into()),
+            content: Some(raven::plan::EXECUTE_PROMPT.into()),
             tool_calls: None,
             tool_call_id: None,
         };
@@ -550,7 +535,7 @@ async fn headless_run(
         let mut agent = Agent::with_messages(settings, exec_messages)?;
         let (tx, mut rx) = mpsc::channel::<AgentEvent>(64);
         let runner = tokio::spawn(async move {
-            agent.run(plan::EXECUTE_PROMPT, tx).await?;
+            agent.run(raven::plan::EXECUTE_PROMPT, tx).await?;
             Ok::<_, anyhow::Error>(agent.messages)
         });
         while let Some(ev) = rx.recv().await {

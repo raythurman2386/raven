@@ -30,6 +30,19 @@ ratatui = "0.26"
 
 [dev-dependencies]
 tempfile = "3"
+criterion = "0.5"
+
+[[bench]]
+name = "tokenizer"
+harness = false
+
+[[bench]]
+name = "context"
+harness = false
+
+[[bench]]
+name = "repomap"
+harness = false
 
 [profile.release]
 lto = true
