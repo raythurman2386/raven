@@ -1,6 +1,6 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use raven::tokenizer::{count_tokens, history_tokens, message_tokens};
 use raven::agent::ChatMessage;
+use raven::tokenizer::{count_tokens, history_tokens, message_tokens};
 
 fn prose_sample() -> String {
     "The quick brown fox jumps over the lazy dog. ".repeat(2000)
