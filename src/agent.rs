@@ -1110,6 +1110,159 @@ fn args_to_string(args: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::TcpListener as StdTcpListener;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// Read the raw HTTP request headers (everything up to and including the
+    /// `\r\n\r\n` header terminator), waiting until the full body (per
+    /// Content-Length) has arrived. Returns the header block as a String
+    /// (headers only, NOT including body).
+    #[allow(dead_code)]
+    async fn read_http_request(stream: &mut tokio::net::TcpStream) -> String {
+        let mut buf = Vec::new();
+        let mut tmp = [0u8; 1024];
+        loop {
+            let n = stream.read(&mut tmp).await.expect("read from stream");
+            if n == 0 {
+                break;
+            }
+            buf.extend_from_slice(&tmp[..n]);
+            // Check for header terminator.
+            if let Some(header_end) = find_subslice(b"\r\n\r\n", &buf) {
+                let headers = String::from_utf8_lossy(&buf[..header_end + 4]).to_string();
+                // Wait for full body per Content-Length so the client can send it.
+                let content_length = extract_content_length(&headers).unwrap_or(0);
+                let body_start = header_end + 4;
+                while buf.len() < body_start + content_length {
+                    let n = stream.read(&mut tmp).await.expect("read body from stream");
+                    if n == 0 {
+                        break;
+                    }
+                    buf.extend_from_slice(&tmp[..n]);
+                }
+                return headers;
+            }
+        }
+        String::from_utf8_lossy(&buf).to_string()
+    }
+
+    fn find_subslice(needle: &[u8], haystack: &[u8]) -> Option<usize> {
+        haystack.windows(needle.len()).position(|w| w == needle)
+    }
+
+    fn extract_content_length(headers: &str) -> Option<usize> {
+        for line in headers.split("\r\n") {
+            if let Some((name, value)) = line.split_once(':') {
+                if name.trim().eq_ignore_ascii_case("content-length") {
+                    return value.trim().parse::<usize>().ok();
+                }
+            }
+        }
+        None
+    }
+
+    /// Binds a `std::net::TcpListener` to `127.0.0.1:0`, converts to a
+    /// `tokio::net::TcpListener`, spawns a tokio task that for each body in
+    /// `responses`: accepts one connection, reads the request via
+    /// `read_http_request`, and writes back an HTTP 200 response with
+    /// `Content-Type: text/event-stream`, `Content-Length: <body.len()>`,
+    /// blank line, then the body. Returns `(base_url_string, handle)`.
+    #[allow(dead_code)]
+    async fn spawn_mock(responses: Vec<&'static str>) -> (String, tokio::task::JoinHandle<()>) {
+        let std_listener = StdTcpListener::bind("127.0.0.1:0").expect("bind mock listener");
+        let addr = std_listener.local_addr().expect("local addr");
+        std_listener.set_nonblocking(true).expect("set_nonblocking");
+        let listener =
+            tokio::net::TcpListener::from_std(std_listener).expect("convert to tokio listener");
+
+        let handle = tokio::spawn(async move {
+            for body in responses {
+                let (mut stream, _) = listener.accept().await.expect("accept");
+                let _ = read_http_request(&mut stream).await;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\n\
+                     Content-Type: text/event-stream\r\n\
+                     Content-Length: {}\r\n\
+                     \r\n\
+                     {}",
+                    body.len(),
+                    body,
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("write response");
+                stream.flush().await.expect("flush");
+            }
+        });
+
+        (format!("http://{addr}"), handle)
+    }
+
+    /// Same as `spawn_mock` but each entry carries a status code. For status
+    /// 503 use reason `Service Unavailable`, else `OK`. Body string is still
+    /// served after headers.
+    #[allow(dead_code)]
+    async fn spawn_mock_status(
+        responses: Vec<(u16, &'static str)>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let std_listener = StdTcpListener::bind("127.0.0.1:0").expect("bind mock listener");
+        let addr = std_listener.local_addr().expect("local addr");
+        std_listener.set_nonblocking(true).expect("set_nonblocking");
+        let listener =
+            tokio::net::TcpListener::from_std(std_listener).expect("convert to tokio listener");
+
+        let handle = tokio::spawn(async move {
+            for (status, body) in responses {
+                let (mut stream, _) = listener.accept().await.expect("accept");
+                let _ = read_http_request(&mut stream).await;
+                let reason = if status == 503 {
+                    "Service Unavailable"
+                } else {
+                    "OK"
+                };
+                let response = format!(
+                    "HTTP/1.1 {} {}\r\n\
+                     Content-Type: text/event-stream\r\n\
+                     Content-Length: {}\r\n\
+                     \r\n\
+                     {}",
+                    status,
+                    reason,
+                    body.len(),
+                    body,
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("write response");
+                stream.flush().await.expect("flush");
+            }
+        });
+
+        (format!("http://{addr}"), handle)
+    }
+
+    /// Returns a `Settings` configured for tests against a mock server.
+    #[allow(dead_code)]
+    fn settings_for(workspace: &std::path::Path, base_url: &str) -> Settings {
+        Settings {
+            model: "mock-model".into(),
+            base_url: base_url.into(),
+            api_key: None,
+            workspace: workspace.to_path_buf(),
+            max_iterations: 5,
+            plan_first: false,
+            yolo: true,
+            temperature: 0.0,
+            max_tokens: 4096,
+            rules: None,
+            context_window: 128_000,
+            compact_threshold: 0.75,
+            no_stream: false,
+            confirm_shell: false,
+        }
+    }
 
     fn plain(role: &str) -> ChatMessage {
         ChatMessage {
