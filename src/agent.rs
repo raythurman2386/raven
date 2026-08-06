@@ -1550,4 +1550,122 @@ mod tests {
             .any(|e| matches!(e, AgentEvent::Error(msg) if msg.contains("not found"))));
         assert!(!events.iter().any(|e| matches!(e, AgentEvent::Retry { .. })));
     }
+
+    #[tokio::test]
+    async fn verify_requires_run_tests() {
+        let tmp = tempfile::tempdir().unwrap();
+        let edit_round = concat!(
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"write_file\",\"arguments\":\"{\\\"path\\\":\\\"a.rs\\\",\\\"content\\\":\\\"fn main() {}\\\"}\"}}]}}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+        let text_round = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let (base, _h) = spawn_mock(vec![
+            edit_round, text_round, text_round, text_round, text_round,
+        ])
+        .await;
+        let mut s = settings_for(tmp.path(), &base);
+        s.verify = true;
+        let mut agent = Agent::new(s).unwrap();
+        let (tx, mut rx) = mpsc::channel(256);
+        agent.run("edit a.rs", tx).await.unwrap();
+        let mut events = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            events.push(ev);
+        }
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::VerifyRequired)));
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::Done)));
+    }
+
+    #[tokio::test]
+    async fn verify_passes_when_run_tests_called() {
+        let tmp = tempfile::tempdir().unwrap();
+        let edit_round = concat!(
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"write_file\",\"arguments\":\"{\\\"path\\\":\\\"a.rs\\\",\\\"content\\\":\\\"fn main() {}\\\"}\"}}]}}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+        let test_round = concat!(
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_2\",\"type\":\"function\",\"function\":{\"name\":\"run_tests\",\"arguments\":\"{}\"}}]}}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+        let text_round = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"all good\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let (base, _h) = spawn_mock(vec![edit_round, test_round, text_round]).await;
+        let mut s = settings_for(tmp.path(), &base);
+        s.verify = true;
+        let mut agent = Agent::new(s).unwrap();
+        let (tx, mut rx) = mpsc::channel(256);
+        agent.run("edit and verify", tx).await.unwrap();
+        let mut events = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            events.push(ev);
+        }
+        assert!(!events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::VerifyRequired)));
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::Done)));
+    }
+
+    #[tokio::test]
+    async fn verify_off_does_not_gate() {
+        let tmp = tempfile::tempdir().unwrap();
+        let edit_round = concat!(
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"write_file\",\"arguments\":\"{\\\"path\\\":\\\"a.rs\\\",\\\"content\\\":\\\"fn main() {}\\\"}\"}}]}}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+        let text_round = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let (base, _h) = spawn_mock(vec![edit_round, text_round]).await;
+        let mut agent = Agent::new(settings_for(tmp.path(), &base)).unwrap();
+        let (tx, mut rx) = mpsc::channel(256);
+        agent.run("edit a.rs", tx).await.unwrap();
+        let mut events = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            events.push(ev);
+        }
+        assert!(!events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::VerifyRequired)));
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::Done)));
+    }
+
+    #[tokio::test]
+    async fn verify_caps_at_max_attempts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let edit_round = concat!(
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"write_file\",\"arguments\":\"{\\\"path\\\":\\\"a.rs\\\",\\\"content\\\":\\\"fn main() {}\\\"}\"}}]}}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+        let text_round = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let (base, _h) = spawn_mock(vec![
+            edit_round, text_round, text_round, text_round, text_round,
+        ])
+        .await;
+        let mut s = settings_for(tmp.path(), &base);
+        s.verify = true;
+        let mut agent = Agent::new(s).unwrap();
+        let (tx, mut rx) = mpsc::channel(256);
+        agent.run("edit a.rs", tx).await.unwrap();
+        let mut events = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            events.push(ev);
+        }
+        let verify_count = events
+            .iter()
+            .filter(|e| matches!(e, AgentEvent::VerifyRequired))
+            .count();
+        assert_eq!(verify_count, 3);
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::Done)));
+    }
 }
