@@ -4,6 +4,29 @@
 //! [`Sandbox::safe_resolve`] rejects `..` traversal. [`Sandbox::run_shell`]
 //! blocks a set of destructive patterns and uses a clean environment with only
 //! explicitly allowed vars.
+//!
+//! # Shell safety model
+//!
+//! The shell filter uses two complementary mechanisms, neither of which is a
+//! security boundary:
+//!
+//! 1. **Denylist** ([`dangerous_re`]) — a regex that blocks the most obviously
+//!    destructive patterns (recursive root deletes, fork bombs, `curl | sh`,
+//!    etc.). This is a **best-effort guard**, not a security boundary. A
+//!    denylist is inherently incomplete — it can always be bypassed (e.g. a
+//!    recursive delete of a home directory is not blocked even though a
+//!    recursive delete of the root is).
+//!
+//! 2. **Allowlist** ([`safe_command_re`]) — a regex that matches known-safe
+//!    development commands (build tools, version control, file inspection,
+//!    linters, test runners). When `confirm_shell` is enabled (the default,
+//!    non-`--yolo` path), commands matching the allowlist run without a
+//!    confirmation prompt. Anything outside the allowlist requires explicit
+//!    user approval.
+//!
+//! The `--yolo` flag disables confirmation entirely, but the denylist still
+//! applies as a last-resort filter. Neither mechanism replaces OS-level
+//! sandboxing (Landlock/seccomp), which is intentionally out of scope.
 
 use anyhow::{bail, Context, Result};
 use regex::Regex;
@@ -15,11 +38,36 @@ use walkdir::WalkDir;
 pub(crate) const MAX_TOOL_OUTPUT: usize = 12_000;
 const MAX_LINE_LENGTH: usize = 2000;
 
+/// Best-effort denylist for obviously destructive shell commands.
+///
+/// This is **not a security boundary** — a denylist is inherently incomplete
+/// and can always be bypassed. It blocks the most common destructive patterns
+/// (recursive root deletes, filesystem formatting, fork bombs, `dd` to block
+/// devices, `chmod 777` on root, and `curl`/`wget` piped to a shell) as a
+/// first-pass filter. The `--yolo` flag and `confirm_shell` setting provide
+/// the real safety net.
 pub(crate) fn dangerous_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
             r"(?i)(rm\s+(-[a-z]*f[a-z]*\s+)?/|mkfs|: \(\)\s*\{\s*:\|:&\s*\};:|dd\s+if=/dev/(zero|random|urandom)|chmod\s+(-R\s+)?777\s+/|curl\s+.*\|\s*(ba)?sh|wget\s+.*\|\s*(ba)?sh)",
+        )
+        .expect("valid regex")
+    })
+}
+
+/// Allowlist of known-safe development commands.
+///
+/// When `confirm_shell` is enabled (the default, non-`--yolo` path), commands
+/// matching this regex run without a confirmation prompt. Commands outside
+/// this set require explicit user approval. This is a convenience, not a
+/// security boundary — the allowlist can be bypassed by chaining commands
+/// (e.g. `cargo build && rm -rf ~`), which is why the denylist still applies.
+pub fn safe_command_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r"(?i)^\s*(cargo|rustc|rustup|go|node|npm|npx|yarn|pnpm|python|python3|pip|pip3|poetry|pytest|ruff|mypy|black|isort|flake8|eslint|prettier|tsc|jest|vitest|mocha|make|cmake|ninja|meson|gcc|g\+\+|clang|clang\+\+|ld|lld|ar|strip|objcopy|objdump|nm|readelf|size|strings|file|which|type|command|hash|env|printenv|pwd|ls|cat|head|tail|wc|sort|uniq|cut|tr|sed|awk|grep|rg|find|xargs|tee|diff|cmp|comm|patch|tar|gzip|gunzip|bzip2|bunzip2|xz|unxz|zip|unzip|git|hg|svn|fossil|pijul|jj|echo|printf|true|false|test|\[|expr|sleep|date|stat|du|df|basename|dirname|realpath|readlink|mkdir|touch|cp|mv|chmod|chown|id|whoami|uname|hostname|uptime|ps|time|timeout|nice|renice|nohup|exec|source|\.)(\s|$)",
         )
         .expect("valid regex")
     })
@@ -51,8 +99,13 @@ pub(crate) fn normalize_path(p: &Path) -> PathBuf {
 /// A workspace sandbox that confines file operations and shell commands.
 ///
 /// All tool methods resolve paths relative to `workspace` and reject any
-/// target that escapes it. `run_shell` additionally blocks destructive
-/// patterns and strips secret environment variables.
+/// target that escapes it. `run_shell` additionally applies a best-effort
+/// denylist ([`dangerous_re`]) and strips secret environment variables.
+///
+/// The denylist is **not a security boundary** — it can always be bypassed.
+/// The `confirm_shell` setting (off with `--yolo`) provides the real safety
+/// net by requiring user approval for each command. Commands matching the
+/// [`safe_command_re`] allowlist skip the confirmation prompt.
 #[derive(Clone)]
 pub struct Sandbox {
     /// The workspace root; all paths are confined to this directory.
@@ -325,7 +378,13 @@ impl Sandbox {
     ///
     /// `cwd` is forced to the workspace; the environment is cleared and only
     /// explicitly allowed vars (`PATH`, `HOME`, `PWD`, `LANG`) are passed
-    /// through. Dangerous patterns are blocked. Output is capped at 12 000 chars.
+    /// through. The best-effort denylist ([`dangerous_re`]) blocks obviously
+    /// destructive patterns. Output is capped at 12 000 chars.
+    ///
+    /// The denylist is **not a security boundary** — it can always be
+    /// bypassed. The `confirm_shell` setting (off with `--yolo`) provides
+    /// the real safety net by requiring user approval for each command.
+    /// Commands matching the [`safe_command_re`] allowlist skip the prompt.
     pub fn run_shell(&self, command: &str, timeout_secs: u64) -> Result<String> {
         if dangerous_re().is_match(command) {
             return Ok("Error: command blocked by sandbox filter".into());
