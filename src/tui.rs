@@ -44,7 +44,7 @@ use crate::commands;
 use crate::config::Settings;
 use crate::context::history_tokens;
 use crate::plan::{self, AgentState};
-use crate::session::SessionStore;
+use crate::session::{Session, SessionStore};
 
 // ── Theme (Ravenwood emerald-forest) ─────────────────────────────────────
 //
@@ -381,9 +381,39 @@ fn prewrap_lines(lines: &[Line<'static>], width: usize) -> Vec<Line<'static>> {
     out
 }
 
+fn message_to_log_entry(msg: &ChatMessage) -> Option<LogEntry> {
+    match msg.role.as_str() {
+        "user" => msg.content.as_ref().map(|c| LogEntry::user(c.clone())),
+        "assistant" => {
+            if let Some(content) = &msg.content {
+                if !content.is_empty() {
+                    return Some(LogEntry::assistant(content.clone()));
+                }
+            }
+            if let Some(tool_calls) = &msg.tool_calls {
+                let mut text = String::new();
+                for tc in tool_calls {
+                    let args_snip: String = tc.function.arguments.chars().take(60).collect();
+                    text.push_str(&format!("⇢ {}({})\n", tc.function.name, args_snip));
+                }
+                if !text.is_empty() {
+                    return Some(LogEntry::tool(text.trim_end().to_string()));
+                }
+            }
+            None
+        }
+        "tool" => msg.content.as_ref().map(|c| {
+            let preview: String = c.chars().take(200).collect();
+            LogEntry::tool(format!("[tool result] {}", preview))
+        }),
+        "system" => msg.content.as_ref().map(|c| LogEntry::system(c.clone())),
+        _ => None,
+    }
+}
+
 // ── Main TUI ─────────────────────────────────────────────────────────────
 
-pub async fn run_tui(mut settings: Settings) -> Result<()> {
+pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -408,7 +438,29 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
     let mut last_draw = std::time::Instant::now();
 
     let store = SessionStore::for_workspace(&settings.workspace)?;
-    let mut session = store.create(&settings.model)?;
+    let mut session = if let Some(s) = resume_session {
+        state.log.push(LogEntry::system(format!(
+            "resumed session {} ({} messages)",
+            s.summary.id,
+            s.messages.len()
+        )));
+        state.log_dirty = true;
+        state.session_messages = s.messages.clone();
+        state.messages_dirty = true;
+        for msg in &s.messages {
+            if let Some(entry) = message_to_log_entry(msg) {
+                state.log.push(entry);
+            }
+        }
+        state.log.push(LogEntry::system(String::new()));
+        state.log.push(LogEntry::system(
+            "resumed · enter submit · /help · /plan · /model · /new · ctrl+c quit · wheel/pgup scroll",
+        ));
+        state.log_dirty = true;
+        s
+    } else {
+        store.create(&settings.model)?
+    };
 
     let (tx, mut rx) = mpsc::channel::<AgentEvent>(128);
 

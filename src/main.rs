@@ -278,7 +278,7 @@ async fn main() -> Result<()> {
 
     // Default to TUI when no task given
     if (task.is_empty() && !cli.headless) || cli.tui {
-        return raven::tui::run_tui(settings).await;
+        return raven::tui::run_tui(settings, resume_session).await;
     }
 
     if task.is_empty() {
