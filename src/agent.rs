@@ -69,6 +69,43 @@ const SYSTEM_BASE: &str = r#"You are an efficient coding agent. You help with so
 </output>
 "#;
 
+/// Build the system message from settings, including the repo map if applicable.
+fn build_system_message(settings: &Settings) -> ChatMessage {
+    let mut system = SYSTEM_BASE.to_string();
+    system.push_str(&format!(
+        "\n\nWorkspace root: {}\n",
+        settings.workspace.display()
+    ));
+    if let Some(map) = crate::repomap::build_map(&settings.workspace) {
+        system.push('\n');
+        system.push_str(&map);
+        system.push('\n');
+    }
+    let agents = load_agents_md(&settings.workspace);
+    if !agents.is_empty() {
+        system.push_str("\n--- Project instructions (AGENTS.md) ---\n");
+        system.push_str(&agents);
+        system.push('\n');
+    }
+    let mem = memory::load_memory(&settings.workspace);
+    if !mem.is_empty() {
+        system.push_str("\n--- Project memory ---\n");
+        system.push_str(&mem);
+        system.push('\n');
+    }
+    if let Some(rules) = &settings.rules {
+        system.push_str("\n--- Session rules ---\n");
+        system.push_str(rules);
+        system.push('\n');
+    }
+    ChatMessage {
+        role: "system".into(),
+        content: Some(system),
+        tool_calls: None,
+        tool_call_id: None,
+    }
+}
+
 /// A single chat message in the OpenAI conversation format.
 ///
 /// `content` is `None` for assistant messages that only carry tool calls.
@@ -168,6 +205,9 @@ pub struct Agent {
     verified: bool,
     /// Number of times the enforced-verify gate has re-run this turn (capped at 3).
     verify_attempts: u32,
+    /// Set to true when a file-editing tool (write_file/search_replace/apply_patch)
+    /// runs, signalling that the repo map in the system message may be stale.
+    repo_map_stale: bool,
 }
 
 impl Agent {
@@ -178,40 +218,7 @@ impl Agent {
     pub fn new(settings: Settings) -> Result<Self> {
         settings.ensure_workspace()?;
         let sandbox = Sandbox::new(settings.workspace.clone());
-        let mut messages = Vec::new();
-        let mut system = SYSTEM_BASE.to_string();
-        system.push_str(&format!(
-            "\n\nWorkspace root: {}\n",
-            settings.workspace.display()
-        ));
-        if let Some(map) = crate::repomap::build_map(&settings.workspace) {
-            system.push('\n');
-            system.push_str(&map);
-            system.push('\n');
-        }
-        let agents = load_agents_md(&settings.workspace);
-        if !agents.is_empty() {
-            system.push_str("\n--- Project instructions (AGENTS.md) ---\n");
-            system.push_str(&agents);
-            system.push('\n');
-        }
-        let mem = memory::load_memory(&settings.workspace);
-        if !mem.is_empty() {
-            system.push_str("\n--- Project memory ---\n");
-            system.push_str(&mem);
-            system.push('\n');
-        }
-        if let Some(rules) = &settings.rules {
-            system.push_str("\n--- Session rules ---\n");
-            system.push_str(rules);
-            system.push('\n');
-        }
-        messages.push(ChatMessage {
-            role: "system".into(),
-            content: Some(system),
-            tool_calls: None,
-            tool_call_id: None,
-        });
+        let messages = vec![build_system_message(&settings)];
         Ok(Self {
             settings,
             sandbox,
@@ -222,6 +229,7 @@ impl Agent {
             pending_verify: None,
             verified: false,
             verify_attempts: 0,
+            repo_map_stale: false,
             client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(300))
                 .build()
@@ -290,6 +298,17 @@ impl Agent {
         self.verified = false;
         self.verify_attempts = 0;
         let mut edited_any = false;
+
+        // Rebuild the repo map in the system message if files were edited
+        // during a previous turn and the workspace is large enough to have
+        // a map. The stale flag is always cleared so it doesn't persist
+        // forever in small workspaces that never had a map.
+        if self.repo_map_stale {
+            if crate::repomap::should_build(&self.settings.workspace) {
+                self.messages[0] = build_system_message(&self.settings);
+            }
+            self.repo_map_stale = false;
+        }
 
         for iter in 0..self.settings.max_iterations {
             let _ = tx.send(AgentEvent::Iteration(iter + 1)).await;
@@ -663,6 +682,7 @@ impl Agent {
                 ) {
                     edited = true;
                     edited_any = true;
+                    self.repo_map_stale = true;
                 }
 
                 // Track verification: the model dispatched run_tests this turn.
@@ -1831,5 +1851,88 @@ mod tests {
 
         let user_msgs: Vec<_> = agent.messages.iter().filter(|m| m.role == "user").collect();
         assert_eq!(user_msgs.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn repo_map_stale_after_file_edit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let edit_round = concat!(
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"write_file\",\"arguments\":\"{\\\"path\\\":\\\"a.rs\\\",\\\"content\\\":\\\"fn main() {}\\\"}\"}}]}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let text_round = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let (base, _h) = spawn_mock(vec![edit_round, text_round]).await;
+        let mut agent = Agent::new(settings_for(tmp.path(), &base)).unwrap();
+        assert!(!agent.repo_map_stale);
+
+        let (tx, mut rx) = mpsc::channel(256);
+        agent.run("edit a.rs", tx).await.unwrap();
+        while rx.try_recv().is_ok() {}
+
+        assert!(agent.repo_map_stale);
+    }
+
+    #[tokio::test]
+    async fn repo_map_rebuilt_on_next_turn_when_stale() {
+        let tmp = tempfile::tempdir().unwrap();
+        let edit_round = concat!(
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"write_file\",\"arguments\":\"{\\\"path\\\":\\\"a.rs\\\",\\\"content\\\":\\\"fn main() {}\\\"}\"}}]}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let text_round = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let (base, _h) = spawn_mock(vec![edit_round, text_round, text_round]).await;
+        let mut agent = Agent::new(settings_for(tmp.path(), &base)).unwrap();
+
+        let (tx, mut rx) = mpsc::channel(256);
+        agent.run("edit a.rs", tx).await.unwrap();
+        while rx.try_recv().is_ok() {}
+        assert!(agent.repo_map_stale);
+
+        let sys_before = agent.messages[0].content.clone();
+
+        let (tx, mut rx) = mpsc::channel(256);
+        agent.run("next turn", tx).await.unwrap();
+        while rx.try_recv().is_ok() {}
+
+        assert!(!agent.repo_map_stale);
+        let sys_after = agent.messages[0].content.clone();
+        assert_eq!(
+            sys_before, sys_after,
+            "system message should be rebuilt (same content for small workspace)"
+        );
+    }
+
+    #[tokio::test]
+    async fn repo_map_not_rebuilt_when_not_stale() {
+        let tmp = tempfile::tempdir().unwrap();
+        let text_round = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let (base, _h) = spawn_mock(vec![text_round, text_round]).await;
+        let mut agent = Agent::new(settings_for(tmp.path(), &base)).unwrap();
+        assert!(!agent.repo_map_stale);
+
+        let sys_before = agent.messages[0].content.clone();
+
+        let (tx, mut rx) = mpsc::channel(256);
+        agent.run("hello", tx).await.unwrap();
+        while rx.try_recv().is_ok() {}
+        assert!(!agent.repo_map_stale);
+
+        let (tx, mut rx) = mpsc::channel(256);
+        agent.run("hello again", tx).await.unwrap();
+        while rx.try_recv().is_ok() {}
+
+        assert_eq!(
+            agent.messages[0].content, sys_before,
+            "system message unchanged when not stale"
+        );
     }
 }
