@@ -10,7 +10,10 @@
 //! the scalar `name` and `description` fields are read; anything more complex
 //! is out of scope for a mini harness.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
+use std::time::SystemTime;
 
 /// Max chars of a skill body injected into context (keep it bounded).
 const MAX_SKILL_BODY_CHARS: usize = 8000;
@@ -97,12 +100,58 @@ fn walk_skills(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) {
     }
 }
 
+/// Cached skill list keyed by workspace path, invalidated when skills
+/// directories change (tracked via directory mtime).
+#[derive(Debug, Clone)]
+struct CacheEntry {
+    skills: Vec<Skill>,
+    mtime: Option<SystemTime>,
+}
+
+static DISCOVER_CACHE: LazyLock<Mutex<HashMap<PathBuf, CacheEntry>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn skills_dir_mtime(workspace: &Path) -> Option<SystemTime> {
+    let mut max_mtime: Option<SystemTime> = None;
+    let ws_dir = workspace.join(".raven").join("skills");
+    if let Ok(meta) = std::fs::metadata(&ws_dir) {
+        if let Ok(m) = meta.modified() {
+            max_mtime = Some(m);
+        }
+    }
+    if let Some(home) = dirs::home_dir() {
+        let home_dir = home.join(".raven").join("skills");
+        if let Ok(meta) = std::fs::metadata(&home_dir) {
+            if let Ok(m) = meta.modified() {
+                match max_mtime {
+                    Some(existing) if m > existing => max_mtime = Some(m),
+                    None => max_mtime = Some(m),
+                    _ => {}
+                }
+            }
+        }
+    }
+    max_mtime
+}
+
 /// Discover and parse all skills visible to `workspace`.
+///
+/// Results are cached and invalidated only when the skills directories change.
 pub fn discover(workspace: &Path) -> Vec<Skill> {
+    let current_mtime = skills_dir_mtime(workspace);
+
+    {
+        let cache = DISCOVER_CACHE.lock().unwrap();
+        if let Some(entry) = cache.get(workspace) {
+            if entry.mtime == current_mtime {
+                return entry.skills.clone();
+            }
+        }
+    }
+
     let mut skills = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
-    // Workspace skills take priority over global (first-seen-wins on name).
     let mut paths = find_skill_md(workspace);
     if let Some(home) = dirs::home_dir() {
         paths.extend(find_skill_md(&home));
@@ -116,7 +165,6 @@ pub fn discover(workspace: &Path) -> Vec<Skill> {
         if name.is_empty() {
             continue;
         }
-        // First-seen-wins on duplicate names.
         if !seen.insert(name.clone()) {
             continue;
         }
@@ -129,6 +177,16 @@ pub fn discover(workspace: &Path) -> Vec<Skill> {
     }
 
     skills.sort_by(|a, b| a.name.cmp(&b.name));
+
+    let mut cache = DISCOVER_CACHE.lock().unwrap();
+    cache.insert(
+        workspace.to_path_buf(),
+        CacheEntry {
+            skills: skills.clone(),
+            mtime: current_mtime,
+        },
+    );
+
     skills
 }
 
@@ -291,5 +349,29 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let out = load(tmp.path(), "missing");
         assert!(out.contains("not found"));
+    }
+
+    #[test]
+    fn discover_cache_returns_same_result_on_repeat_call() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_skill(tmp.path(), "a", "cache-test", "Cache test skill", "body");
+        let first = discover(tmp.path());
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].name, "cache-test");
+        let second = discover(tmp.path());
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].name, "cache-test");
+    }
+
+    #[test]
+    fn discover_cache_invalidates_on_new_skill() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_skill(tmp.path(), "a", "first-skill", "First", "body");
+        let first = discover(tmp.path());
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].name, "first-skill");
+        write_skill(tmp.path(), "b", "second-skill", "Second", "body");
+        let second = discover(tmp.path());
+        assert_eq!(second.len(), 2);
     }
 }
