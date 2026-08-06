@@ -146,7 +146,10 @@ pub async fn fetch_text(url: &str) -> String {
 
 /// Search the web (keyless, via DuckDuckGo's HTML endpoint) and return a
 /// ranked list of `title — url` lines, capped.
-pub async fn search(query: &str) -> String {
+///
+/// `page` is 1-indexed; `None` or `Some(1)` returns the first page.
+/// Page 2+ adds the `s` (start offset) parameter: `s = (page - 1) * 10`.
+pub async fn search(query: &str, page: Option<u32>) -> String {
     if query.trim().is_empty() {
         return "Error: empty search query".into();
     }
@@ -154,11 +157,15 @@ pub async fn search(query: &str) -> String {
         Ok(c) => c,
         Err(e) => return format!("Error: {e}"),
     };
-    let url = reqwest::Url::parse_with_params(
-        "https://html.duckduckgo.com/html/",
-        &[("q", query.trim())],
-    )
-    .unwrap_or_else(|_| reqwest::Url::parse("https://html.duckduckgo.com/html/").unwrap());
+    let page = page.unwrap_or(1).max(1);
+    let mut params: Vec<(&str, &str)> = vec![("q", query.trim())];
+    let s_val;
+    if page > 1 {
+        s_val = ((page - 1) * 10).to_string();
+        params.push(("s", &s_val));
+    }
+    let url = reqwest::Url::parse_with_params("https://html.duckduckgo.com/html/", &params)
+        .unwrap_or_else(|_| reqwest::Url::parse("https://html.duckduckgo.com/html/").unwrap());
     match client.get(url).send().await {
         Ok(resp) if resp.status().is_success() => {
             let body = match resp.text().await {
@@ -304,7 +311,48 @@ mod tests {
 
     #[tokio::test]
     async fn search_empty_query_errors() {
-        let out = search("   ").await;
+        let out = search("   ", None).await;
         assert!(out.starts_with("Error:"));
+    }
+
+    #[test]
+    fn parse_ddg_results_caps_at_10() {
+        let mut html = String::new();
+        for i in 0..15 {
+            html.push_str(&format!(
+                r#"<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample{}.com">Result {}</a>"#,
+                i, i
+            ));
+        }
+        let out = parse_ddg_results(&html);
+        assert_eq!(out.lines().count(), 10);
+    }
+
+    #[test]
+    fn parse_ddg_results_handles_fewer_than_10() {
+        let html = r#"<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com">Only One</a>"#;
+        let out = parse_ddg_results(html);
+        assert_eq!(out.lines().count(), 1);
+        assert!(out.contains("Only One"));
+    }
+
+    #[test]
+    fn search_url_includes_s_param_for_page_2() {
+        let url = reqwest::Url::parse_with_params(
+            "https://html.duckduckgo.com/html/",
+            &[("q", "test"), ("s", "10")],
+        )
+        .unwrap();
+        assert!(url.as_str().contains("s=10"));
+        assert!(url.as_str().contains("q=test"));
+    }
+
+    #[test]
+    fn search_url_no_s_param_for_page_1() {
+        let url =
+            reqwest::Url::parse_with_params("https://html.duckduckgo.com/html/", &[("q", "test")])
+                .unwrap();
+        assert!(!url.as_str().contains("s="));
+        assert!(url.as_str().contains("q=test"));
     }
 }

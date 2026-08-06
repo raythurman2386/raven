@@ -229,11 +229,12 @@ pub fn tool_definitions() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "web_search",
-                "description": "Search the web and return a ranked list of result titles and URLs. No API key required. Use for current, factual, or unfamiliar topics.",
+                "description": "Search the web and return a ranked list of result titles and URLs (10 per page). No API key required. Use for current, factual, or unfamiliar topics. Use the page parameter to fetch subsequent pages.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "query": { "type": "string", "description": "The search query" }
+                        "query": { "type": "string", "description": "The search query" },
+                        "page": { "type": "integer", "description": "Page number (1-indexed, default 1). Each page returns up to 10 results." }
                     },
                     "required": ["query"]
                 }

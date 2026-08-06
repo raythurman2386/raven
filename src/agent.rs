@@ -620,7 +620,8 @@ impl Agent {
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
-                        crate::web::search(&query).await
+                        let page = args.get("page").and_then(|v| v.as_u64()).map(|p| p as u32);
+                        crate::web::search(&query, page).await
                     } else {
                         let url = args
                             .get("url")
