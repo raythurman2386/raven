@@ -115,6 +115,99 @@ impl LogEntry {
     }
 }
 
+// ── TUI state ────────────────────────────────────────────────────────────
+
+struct TuiState {
+    log: Vec<LogEntry>,
+    log_dirty: bool,
+    cached_log_lines: Vec<Line<'static>>,
+    last_assistant_lines: usize,
+    stream_patch: bool,
+    cached_est_tokens: usize,
+    messages_dirty: bool,
+    input: String,
+    status: String,
+    plan_pending: bool,
+    plan_preview: Vec<String>,
+    running: bool,
+    plan_first: bool,
+    assistant_text: String,
+    agent_state: AgentState,
+    scroll: u16,
+    auto_scroll: bool,
+    quit: bool,
+    tick: u64,
+    live_tool: Option<String>,
+    turn_tool_count: usize,
+    pending_question: Option<tokio::sync::oneshot::Sender<String>>,
+    pending_question_text: Option<String>,
+    session_messages: Vec<ChatMessage>,
+    task_handle: Option<tokio::task::JoinHandle<anyhow::Result<Vec<ChatMessage>>>>,
+}
+
+impl TuiState {
+    fn new(settings: &Settings, app_name: &str, compact_at: usize) -> Self {
+        Self {
+            log: vec![
+                LogEntry::system(format!(
+                    "{app_name} · {} · {}",
+                    settings.model, settings.base_url
+                )),
+                LogEntry::system(format!("workspace {}", settings.workspace.display())),
+                LogEntry::system(format!(
+                    "context {} · compact ~{}",
+                    fmt_tokens(settings.context_window as u64),
+                    fmt_tokens(compact_at as u64),
+                )),
+                LogEntry::system(String::new()),
+                LogEntry::system(
+                    "enter submit · /help · /plan · /model · /new · ctrl+c quit · wheel/pgup scroll",
+                ),
+            ],
+            log_dirty: true,
+            cached_log_lines: Vec::new(),
+            last_assistant_lines: 0,
+            stream_patch: false,
+            cached_est_tokens: 0,
+            messages_dirty: false,
+            input: String::new(),
+            status: "ready".to_string(),
+            plan_pending: false,
+            plan_preview: Vec::new(),
+            running: false,
+            plan_first: settings.plan_first,
+            assistant_text: String::new(),
+            agent_state: AgentState::Idle,
+            scroll: 0,
+            auto_scroll: true,
+            quit: false,
+            tick: 0,
+            live_tool: None,
+            turn_tool_count: 0,
+            pending_question: None,
+            pending_question_text: None,
+            session_messages: Vec::new(),
+            task_handle: None,
+        }
+    }
+
+    fn toggle_plan_mode(&mut self) -> bool {
+        self.plan_first = !self.plan_first;
+        if !self.plan_first {
+            self.plan_pending = false;
+            self.plan_preview.clear();
+            if matches!(
+                self.agent_state,
+                AgentState::AwaitingApproval | AgentState::Planning
+            ) {
+                self.agent_state = AgentState::Idle;
+                self.status = "ready".into();
+            }
+        }
+        self.plan_first
+    }
+}
+
 // ── Formatting helpers ───────────────────────────────────────────────────
 
 fn fmt_tokens(n: u64) -> String {
@@ -191,7 +284,6 @@ fn render_log_lines(log: &[LogEntry]) -> (Vec<Line<'static>>, usize) {
                     ]));
                 }
                 lines.push(Line::from(""));
-                // Non-assistant tail: clears any earlier assistant marker.
                 last_assistant_start = None;
             }
             LogKind::Assistant => {
@@ -262,7 +354,6 @@ fn prewrap_lines(lines: &[Line<'static>], width: usize) -> Vec<Line<'static>> {
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         let mut chars = text.chars().peekable();
         loop {
-            // Consume up to `width` chars (or until a newline).
             let mut seg = String::new();
             let mut took = 0usize;
             while let Some(&c) = chars.peek() {
@@ -280,7 +371,6 @@ fn prewrap_lines(lines: &[Line<'static>], width: usize) -> Vec<Line<'static>> {
             if seg.is_empty() && chars.peek().is_none() {
                 break;
             }
-            // Preserve the original styling on each wrapped segment.
             let seg_style = line.spans.first().map(|s| s.style).unwrap_or_default();
             out.push(Line::from(Span::styled(seg, seg_style)));
             if chars.peek().is_none() {
@@ -305,34 +395,7 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
 
     let app_name = "raven";
 
-    let mut log: Vec<LogEntry> = vec![
-        LogEntry::system(format!(
-            "{app_name} · {} · {}",
-            settings.model, settings.base_url
-        )),
-        LogEntry::system(format!("workspace {}", settings.workspace.display())),
-        LogEntry::system(format!(
-            "context {} · compact ~{}",
-            fmt_tokens(settings.context_window as u64),
-            fmt_tokens(compact_at as u64),
-        )),
-        LogEntry::system(String::new()),
-        LogEntry::system(
-            "enter submit · /help · /plan · /model · /new · ctrl+c quit · wheel/pgup scroll",
-        ),
-    ];
-
-    let mut log_dirty = true;
-    let mut cached_log_lines: Vec<Line<'static>> = Vec::new();
-    // Number of trailing lines owned by the last assistant block. On a
-    // stream patch we truncate to this length and re-render just that block,
-    // instead of re-rendering the entire log for every streamed token.
-    let mut last_assistant_lines: usize = 0;
-    // When only the last assistant line streams, patch it without full rebuild.
-    let mut stream_patch = false;
-
-    let mut cached_est_tokens: usize = 0;
-    let mut messages_dirty = false;
+    let mut state = TuiState::new(&settings, app_name, compact_at);
 
     // Hard cap on rendered log entries so per-frame cost stays bounded for
     // long sessions. Old entries are dropped from the on-screen log only; the
@@ -344,67 +407,27 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
     const DRAW_INTERVAL: std::time::Duration = std::time::Duration::from_millis(60);
     let mut last_draw = std::time::Instant::now();
 
-    let mut input = String::new();
-    let mut status = "ready".to_string();
-    let mut plan_pending = false;
-    let mut plan_preview: Vec<String> = Vec::new();
-    let mut running = false;
-    let mut plan_first = settings.plan_first;
-    let mut assistant_text = String::new();
-    let mut agent_state = AgentState::Idle;
-    let mut scroll: u16 = 0;
-    let mut auto_scroll = true;
-    let mut quit = false;
-
-    // Animation tick for the live-tool spinner (and any pulsing cues).
-    // Increments every redraw while something is running so the spinner
-    // advances; held steady when idle so the UI is perfectly static.
-    let mut tick: u64 = 0;
-
-    // Live tool activity shown in the status strip while a tool runs, plus a
-    // running count of tool calls in the current turn. The live line is
-    // ephemeral; the count collapses into one compact summary line per turn.
-    let mut live_tool: Option<String> = None;
-    let mut turn_tool_count: usize = 0;
-
-    // When the model asks the user a question mid-task, the sender half of a
-    // oneshot is parked here so the input box repurposes to collect the answer.
-    // The agent task blocks awaiting the reply on the receiver.
-    let mut pending_question: Option<tokio::sync::oneshot::Sender<String>> = None;
-    let mut pending_question_text: Option<String> = None;
-
     let store = SessionStore::for_workspace(&settings.workspace)?;
     let mut session = store.create(&settings.model)?;
-    let mut session_messages: Vec<ChatMessage> = Vec::new();
-    let mut task_handle: Option<tokio::task::JoinHandle<anyhow::Result<Vec<ChatMessage>>>> = None;
 
     let (tx, mut rx) = mpsc::channel::<AgentEvent>(128);
 
     loop {
-        // Cap the on-screen log so per-frame cost stays bounded on long
-        // sessions. The session file keeps full history, so dropping from the
-        // view is safe.
-        if log.len() > MAX_LOG_ENTRIES {
-            let drop = log.len() - MAX_LOG_ENTRIES;
-            log.drain(..drop);
-            log_dirty = true;
+        if state.log.len() > MAX_LOG_ENTRIES {
+            let drop = state.log.len() - MAX_LOG_ENTRIES;
+            state.log.drain(..drop);
+            state.log_dirty = true;
         }
 
-        if log_dirty {
-            let (rendered, tail) = render_log_lines(&log);
-            cached_log_lines = rendered;
-            last_assistant_lines = tail;
-            log_dirty = false;
-            stream_patch = false;
-        } else if stream_patch {
-            // Patch only the trailing assistant block instead of re-rendering
-            // the whole log per token. The transcript (log) is the source of
-            // truth — we re-render the LAST assistant entry's text, NOT a
-            // separate scratch buffer. A scratch buffer accumulates assistant
-            // text across all iterations of a multi-tool turn, which diverges
-            // from the per-iteration log entries and drops the tail of a long
-            // final answer.
-            let tail_text = log
+        if state.log_dirty {
+            let (rendered, tail) = render_log_lines(&state.log);
+            state.cached_log_lines = rendered;
+            state.last_assistant_lines = tail;
+            state.log_dirty = false;
+            state.stream_patch = false;
+        } else if state.stream_patch {
+            let tail_text = state
+                .log
                 .iter()
                 .rev()
                 .find(|e| matches!(e.kind, LogKind::Assistant))
@@ -412,55 +435,33 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
                 .unwrap_or("");
             let new_tail = render_assistant_lines(tail_text);
             let new_tail_len = new_tail.len();
-            cached_log_lines.truncate(cached_log_lines.len().saturating_sub(last_assistant_lines));
-            cached_log_lines.extend(new_tail);
-            last_assistant_lines = new_tail_len;
-            stream_patch = false;
+            state.cached_log_lines.truncate(
+                state
+                    .cached_log_lines
+                    .len()
+                    .saturating_sub(state.last_assistant_lines),
+            );
+            state.cached_log_lines.extend(new_tail);
+            state.last_assistant_lines = new_tail_len;
+            state.stream_patch = false;
         }
 
-        if messages_dirty {
-            cached_est_tokens = history_tokens(&session_messages);
-            messages_dirty = false;
+        if state.messages_dirty {
+            state.cached_est_tokens = history_tokens(&state.session_messages);
+            state.messages_dirty = false;
         }
 
-        let est_tokens = cached_est_tokens;
-        let pct = if settings.context_window > 0 {
-            (est_tokens as f64 / settings.context_window as f64) * 100.0
-        } else {
-            0.0
-        };
-        let (state_txt, state_color) = state_label(&agent_state, &status);
-
-        // Throttle full redraws so a burst of streamed tokens (or an idle
-        // loop) doesn't repaint the terminal more than ~16x/sec.
-        let force_draw =
-            log_dirty || messages_dirty || stream_patch || !running || live_tool.is_some();
+        let force_draw = state.log_dirty
+            || state.messages_dirty
+            || state.stream_patch
+            || !state.running
+            || state.live_tool.is_some();
         if force_draw || last_draw.elapsed() >= DRAW_INTERVAL {
-            // Advance the spinner animation only while there's live activity.
-            if running || live_tool.is_some() {
-                tick = tick.wrapping_add(1);
+            if state.running || state.live_tool.is_some() {
+                state.tick = state.tick.wrapping_add(1);
             }
             terminal.draw(|f| {
-                draw_ui(
-                    f,
-                    app_name,
-                    &settings,
-                    &cached_log_lines,
-                    &input,
-                    plan_pending,
-                    &plan_preview,
-                    plan_first,
-                    est_tokens,
-                    pct,
-                    state_txt,
-                    state_color,
-                    live_tool.as_deref(),
-                    pending_question_text.as_deref(),
-                    scroll,
-                    auto_scroll,
-                    tick,
-                    running,
-                );
+                draw_ui(f, app_name, &settings, &state);
             })?;
             last_draw = std::time::Instant::now();
         }
@@ -476,191 +477,136 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
                             break
                         }
                         KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            let on = toggle_plan_mode(
-                                &mut plan_first,
-                                &mut plan_pending,
-                                &mut plan_preview,
-                                &mut agent_state,
-                                &mut status,
-                            );
-                            log.push(LogEntry::system(format!(
+                            let on = state.toggle_plan_mode();
+                            state.log.push(LogEntry::system(format!(
                                 "plan mode {}",
                                 if on { "on" } else { "off" }
                             )));
-                            log_dirty = true;
+                            state.log_dirty = true;
                         }
                         KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            // Save current session, start a fresh one
-                            let _ = store.save_all_messages(&session, &session_messages);
+                            let _ = store.save_all_messages(&session, &state.session_messages);
                             let _ = store.update_summary(&mut session, None);
                             session = store.create(&settings.model)?;
-                            session_messages.clear();
-                            log.clear();
-                            log.push(LogEntry::system(format!(
+                            state.session_messages.clear();
+                            state.log.clear();
+                            state.log.push(LogEntry::system(format!(
                                 "{app_name} · {} · {}",
                                 settings.model, settings.base_url
                             )));
-                            log.push(LogEntry::system(format!(
+                            state.log.push(LogEntry::system(format!(
                                 "workspace {}",
                                 settings.workspace.display()
                             )));
-                            log.push(LogEntry::system(String::new()));
-                            log.push(LogEntry::system(
+                            state.log.push(LogEntry::system(String::new()));
+                            state.log.push(LogEntry::system(
                                 "new session · enter submit · ctrl+n new · ctrl+p plan · ctrl+c quit",
                             ));
-                            log_dirty = true;
-                            plan_preview.clear();
-                            plan_pending = false;
-                            running = false;
-                            agent_state = AgentState::Idle;
-                            status = "ready".into();
-                            assistant_text.clear();
-                            input.clear();
-                            scroll = 0;
-                            auto_scroll = true;
+                            state.log_dirty = true;
+                            state.plan_preview.clear();
+                            state.plan_pending = false;
+                            state.running = false;
+                            state.agent_state = AgentState::Idle;
+                            state.status = "ready".into();
+                            state.assistant_text.clear();
+                            state.input.clear();
+                            state.scroll = 0;
+                            state.auto_scroll = true;
                         }
                         KeyCode::Up => {
-                            scroll = scroll.saturating_add(1);
-                            auto_scroll = false;
+                            state.scroll = state.scroll.saturating_add(1);
+                            state.auto_scroll = false;
                         }
                         KeyCode::Down => {
-                            scroll = scroll.saturating_sub(1);
-                            if scroll == 0 {
-                                auto_scroll = true;
+                            state.scroll = state.scroll.saturating_sub(1);
+                            if state.scroll == 0 {
+                                state.auto_scroll = true;
                             }
                         }
                         KeyCode::PageUp => {
-                            scroll = scroll.saturating_add(10);
-                            auto_scroll = false;
+                            state.scroll = state.scroll.saturating_add(10);
+                            state.auto_scroll = false;
                         }
                         KeyCode::PageDown => {
-                            scroll = scroll.saturating_sub(10);
-                            if scroll == 0 {
-                                auto_scroll = true;
+                            state.scroll = state.scroll.saturating_sub(10);
+                            if state.scroll == 0 {
+                                state.auto_scroll = true;
                             }
                         }
                         KeyCode::Char(c) => {
-                            // Typing is blocked while a task runs EXCEPT when a
-                            // question is pending — the agent is blocked waiting
-                            // for our answer, so we must allow input.
-                            if !running || pending_question.is_some() {
-                                input.push(c);
+                            if !state.running || state.pending_question.is_some() {
+                                state.input.push(c);
                             }
                         }
                         KeyCode::Backspace => {
-                            if !running || pending_question.is_some() {
-                                input.pop();
+                            if !state.running || state.pending_question.is_some() {
+                                state.input.pop();
                             }
                         }
                         KeyCode::Enter => {
-                            if input.trim().is_empty() {
+                            if state.input.trim().is_empty() {
                                 continue;
                             }
-                            let text = input.trim().to_string();
-                            input.clear();
-                            scroll = 0;
-                            auto_scroll = true;
-                            // Fresh turn: reset the per-turn tool-call count.
-                            turn_tool_count = 0;
-                            live_tool = None;
+                            let text = state.input.trim().to_string();
+                            state.input.clear();
+                            state.scroll = 0;
+                            state.auto_scroll = true;
+                            state.turn_tool_count = 0;
+                            state.live_tool = None;
 
-                            // Slash commands take precedence. While a task is
-                            // running they are still honoured (e.g. /stop).
                             if let Some(pc) = commands::parse(&text) {
                                 dispatch_slash_command(
+                                    &mut state,
                                     &pc,
                                     &mut settings,
-                                    &mut log,
-                                    &mut log_dirty,
-                                    &mut plan_first,
-                                    &mut plan_pending,
-                                    &mut plan_preview,
-                                    &mut running,
-                                    &mut agent_state,
-                                    &mut status,
-                                    &mut assistant_text,
-                                    &mut live_tool,
-                                    &mut session_messages,
                                     &store,
                                     &mut session,
-                                    &mut task_handle,
-                                    &mut quit,
                                 )?;
                                 continue;
                             }
 
-                            // If the model asked the user a question, the next
-                            // Enter delivers the typed answer instead of
-                            // submitting a task.
-                            if let Some(reply) = pending_question.take() {
+                            if let Some(reply) = state.pending_question.take() {
                                 let _ = reply.send(text.clone());
-                                pending_question_text = None;
-                                status = "running".into();
+                                state.pending_question_text = None;
+                                state.status = "running".into();
                                 continue;
                             }
 
-                            // If a task is running, non-command text is a
-                            // STEER: interrupt the current turn and start a new
-                            // one with this instruction appended to the session
-                            // so the agent redirects with full context.
-                            if running {
-                                if let Some(handle) = task_handle.take() {
+                            if state.running {
+                                if let Some(handle) = state.task_handle.take() {
                                     handle.abort();
                                 }
-                                log.push(LogEntry::system("⏸ interrupted — redirecting…"));
-                                log_dirty = true;
+                                state
+                                    .log
+                                    .push(LogEntry::system("⏸ interrupted — redirecting…"));
+                                state.log_dirty = true;
                                 start_task(
+                                    &mut state,
                                     &text,
-                                    plan_first,
                                     &settings,
-                                    &mut log,
-                                    &mut log_dirty,
-                                    &mut running,
-                                    &mut agent_state,
-                                    &mut status,
-                                    &mut assistant_text,
-                                    &mut session_messages,
                                     &store,
                                     &session,
-                                    &mut task_handle,
                                     tx.clone(),
                                 )?;
                                 continue;
                             }
 
-                            if plan_pending {
+                            if state.plan_pending {
                                 handle_plan_response(
+                                    &mut state,
                                     &text,
                                     &settings,
-                                    &mut log,
-                                    &mut log_dirty,
-                                    &mut plan_pending,
-                                    &mut plan_preview,
-                                    &mut running,
-                                    &mut agent_state,
-                                    &mut status,
-                                    &mut assistant_text,
-                                    &mut session_messages,
                                     &store,
                                     &session,
-                                    &mut task_handle,
                                     tx.clone(),
                                 )?;
                             } else {
                                 start_task(
+                                    &mut state,
                                     &text,
-                                    plan_first,
                                     &settings,
-                                    &mut log,
-                                    &mut log_dirty,
-                                    &mut running,
-                                    &mut agent_state,
-                                    &mut status,
-                                    &mut assistant_text,
-                                    &mut session_messages,
                                     &store,
                                     &session,
-                                    &mut task_handle,
                                     tx.clone(),
                                 )?;
                             }
@@ -671,38 +617,34 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
                 }
                 Event::Mouse(m) => match m.kind {
                     MouseEventKind::ScrollUp => {
-                        scroll = scroll.saturating_add(3);
-                        auto_scroll = false;
+                        state.scroll = state.scroll.saturating_add(3);
+                        state.auto_scroll = false;
                     }
                     MouseEventKind::ScrollDown => {
-                        scroll = scroll.saturating_sub(3);
-                        if scroll == 0 {
-                            auto_scroll = true;
+                        state.scroll = state.scroll.saturating_sub(3);
+                        if state.scroll == 0 {
+                            state.auto_scroll = true;
                         }
                     }
-                    // Clickable [stop] button in the status strip: clicking it
-                    // aborts the running task exactly like /stop. The button
-                    // hugs the right edge of the status row, which is the row
-                    // just above the (variable-height) input box.
-                    MouseEventKind::Down(MouseButton::Left) if running => {
+                    MouseEventKind::Down(MouseButton::Left) if state.running => {
                         let size = terminal.size().unwrap_or_default();
-                        let input_h = input_box_height(&input, size.width);
+                        let input_h = input_box_height(&state.input, size.width);
                         let status_y = size.height.saturating_sub(input_h).saturating_sub(1);
                         if m.row == status_y
                             && m.column >= size.width.saturating_sub(STOP_BTN.len() as u16)
                         {
-                            if let Some(handle) = task_handle.take() {
+                            if let Some(handle) = state.task_handle.take() {
                                 handle.abort();
-                                let _ = store.save_all_messages(&session, &session_messages);
+                                let _ = store.save_all_messages(&session, &state.session_messages);
                                 let _ = store.update_summary(&mut session, None);
-                                log.push(LogEntry::system("⏹ stopped (click)"));
-                                log_dirty = true;
+                                state.log.push(LogEntry::system("⏹ stopped (click)"));
+                                state.log_dirty = true;
                             }
-                            running = false;
-                            agent_state = AgentState::Idle;
-                            status = "ready".into();
-                            assistant_text.clear();
-                            live_tool = None;
+                            state.running = false;
+                            state.agent_state = AgentState::Idle;
+                            state.status = "ready".into();
+                            state.assistant_text.clear();
+                            state.live_tool = None;
                         }
                     }
                     _ => {}
@@ -715,95 +657,89 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
         while let Ok(ev) = rx.try_recv() {
             match ev {
                 AgentEvent::TextDelta(t) => {
-                    assistant_text.push_str(&t);
-                    if let Some(last) = log.last_mut() {
+                    state.assistant_text.push_str(&t);
+                    if let Some(last) = state.log.last_mut() {
                         if matches!(last.kind, LogKind::Assistant) {
                             last.text.push_str(&t);
-                            stream_patch = true;
+                            state.stream_patch = true;
                         } else {
-                            log.push(LogEntry::assistant(t));
-                            log_dirty = true;
+                            state.log.push(LogEntry::assistant(t));
+                            state.log_dirty = true;
                         }
                     } else {
-                        log.push(LogEntry::assistant(t));
-                        log_dirty = true;
+                        state.log.push(LogEntry::assistant(t));
+                        state.log_dirty = true;
                     }
-                    if auto_scroll {
-                        scroll = 0;
+                    if state.auto_scroll {
+                        state.scroll = 0;
                     }
                 }
                 AgentEvent::ToolStart { name, args } => {
-                    // Ephemeral: show the live tool in the status strip and
-                    // bump the per-turn count. No permanent log line per call.
                     let args_str = if args.is_null() {
                         String::new()
                     } else {
                         args.to_string()
                     };
                     let snip: String = args_str.chars().take(60).collect();
-                    live_tool = Some(format!("⇢ {name}({snip})"));
-                    turn_tool_count += 1;
-                    status = "running".into();
+                    state.live_tool = Some(format!("⇢ {name}({snip})"));
+                    state.turn_tool_count += 1;
+                    state.status = "running".into();
                 }
                 AgentEvent::ToolEnd { name, preview } => {
-                    // Tool finished — clear the live indicator. Keep the count;
-                    // it collapses into a summary line at turn end.
                     let _ = name;
                     let _ = preview;
-                    live_tool = None;
-                    status = "running".into();
+                    state.live_tool = None;
+                    state.status = "running".into();
                 }
                 AgentEvent::Iteration(n) => {
-                    status = format!("thinking… (iter {n})");
+                    state.status = format!("thinking… (iter {n})");
                 }
                 AgentEvent::Compacted {
                     before_tokens,
                     after_tokens,
                 } => {
-                    log.push(LogEntry::system(format!(
+                    state.log.push(LogEntry::system(format!(
                         "⟳ compacted ~{before_tokens} → ~{after_tokens} tokens"
                     )));
-                    log_dirty = true;
+                    state.log_dirty = true;
                 }
                 AgentEvent::Retry { attempt, delay_ms } => {
-                    log.push(LogEntry::system(format!(
+                    state.log.push(LogEntry::system(format!(
                         "⟳ retry {attempt}/3 in {delay_ms}ms"
                     )));
-                    log_dirty = true;
+                    state.log_dirty = true;
                 }
                 AgentEvent::VerifyRequired => {
-                    log.push(LogEntry::system(
+                    state.log.push(LogEntry::system(
                         "⟳ verify required — re-running to enforce run_tests".to_string(),
                     ));
-                    log_dirty = true;
+                    state.log_dirty = true;
                 }
                 AgentEvent::PlanReady => {
-                    // Model signalled the plan is complete. Await the planning
-                    // task, save messages, show the plan, then auto-execute
-                    // without a human approval prompt.
-                    if let Some(handle) = task_handle.take() {
+                    if let Some(handle) = state.task_handle.take() {
                         if let Ok(Ok(msgs)) = handle.await {
-                            session_messages = msgs;
-                            messages_dirty = true;
-                            let _ = store.save_all_messages(&session, &session_messages);
+                            state.session_messages = msgs;
+                            state.messages_dirty = true;
+                            let _ = store.save_all_messages(&session, &state.session_messages);
                             let _ = store.update_summary(&mut session, None);
                         }
                     }
 
-                    if plan_first && agent_state == AgentState::Planning {
-                        let plan = plan::parse_plan(&assistant_text);
-                        plan_preview = plan::format_plan(&plan)
+                    if state.plan_first && state.agent_state == AgentState::Planning {
+                        let plan = plan::parse_plan(&state.assistant_text);
+                        state.plan_preview = plan::format_plan(&plan)
                             .lines()
                             .map(|s| s.to_string())
                             .collect();
-                        log.push(LogEntry::system(String::new()));
-                        log.push(LogEntry::system("plan ready — auto-executing"));
-                        log_dirty = true;
+                        state.log.push(LogEntry::system(String::new()));
+                        state
+                            .log
+                            .push(LogEntry::system("plan ready — auto-executing"));
+                        state.log_dirty = true;
 
-                        // Auto-approve: run the execution phase directly.
-                        running = true;
-                        agent_state = AgentState::Executing;
-                        status = "executing plan…".into();
+                        state.running = true;
+                        state.agent_state = AgentState::Executing;
+                        state.status = "executing plan…".into();
                         let exec_prompt = plan::EXECUTE_PROMPT.to_string();
                         let _ = store.append_message(
                             &session,
@@ -814,110 +750,100 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
                                 tool_call_id: None,
                             },
                         );
-                        assistant_text.clear();
+                        state.assistant_text.clear();
                         let mut agent =
-                            Agent::with_messages(settings.clone(), session_messages.clone())?;
+                            Agent::with_messages(settings.clone(), state.session_messages.clone())?;
                         let tx_exec = tx.clone();
-                        task_handle = Some(tokio::spawn(async move {
+                        state.task_handle = Some(tokio::spawn(async move {
                             agent.run(&exec_prompt, tx_exec).await?;
                             Ok(agent.messages)
                         }));
-                        plan_preview.clear();
+                        state.plan_preview.clear();
                     } else {
-                        plan_preview.clear();
-                        status = "ready".into();
-                        agent_state = AgentState::Idle;
-                        running = false;
-                        assistant_text.clear();
+                        state.plan_preview.clear();
+                        state.status = "ready".into();
+                        state.agent_state = AgentState::Idle;
+                        state.running = false;
+                        state.assistant_text.clear();
                     }
                 }
                 AgentEvent::AskUser { question, reply } => {
-                    // Park the question so the input box repurposes to collect
-                    // the answer. The agent task blocks until we send it back.
-                    log.push(LogEntry::system(format!("❓ {question}")));
-                    log_dirty = true;
-                    pending_question = Some(reply);
-                    pending_question_text = Some(question);
-                    status = "awaiting answer".into();
-                    input.clear();
-                    scroll = 0;
+                    state.log.push(LogEntry::system(format!("❓ {question}")));
+                    state.log_dirty = true;
+                    state.pending_question = Some(reply);
+                    state.pending_question_text = Some(question);
+                    state.status = "awaiting answer".into();
+                    state.input.clear();
+                    state.scroll = 0;
                 }
                 AgentEvent::Done => {
-                    if let Some(handle) = task_handle.take() {
+                    if let Some(handle) = state.task_handle.take() {
                         if let Ok(Ok(msgs)) = handle.await {
-                            session_messages = msgs;
-                            messages_dirty = true;
-                            let _ = store.save_all_messages(&session, &session_messages);
+                            state.session_messages = msgs;
+                            state.messages_dirty = true;
+                            let _ = store.save_all_messages(&session, &state.session_messages);
                             let _ = store.update_summary(&mut session, None);
                         }
                     }
 
-                    if plan_first && agent_state == AgentState::Planning {
-                        let plan = plan::parse_plan(&assistant_text);
-                        plan_preview = plan::format_plan(&plan)
+                    if state.plan_first && state.agent_state == AgentState::Planning {
+                        let plan = plan::parse_plan(&state.assistant_text);
+                        state.plan_preview = plan::format_plan(&plan)
                             .lines()
                             .map(|s| s.to_string())
                             .collect();
-                        log.push(LogEntry::system(String::new()));
-                        log.push(LogEntry::system("plan ready — approve or revise below"));
-                        plan_pending = true;
-                        agent_state = AgentState::AwaitingApproval;
-                        status = "awaiting plan approval".into();
+                        state.log.push(LogEntry::system(String::new()));
+                        state
+                            .log
+                            .push(LogEntry::system("plan ready — approve or revise below"));
+                        state.plan_pending = true;
+                        state.agent_state = AgentState::AwaitingApproval;
+                        state.status = "awaiting plan approval".into();
                     } else {
-                        plan_preview.clear();
-                        status = "ready".into();
-                        agent_state = AgentState::Idle;
+                        state.plan_preview.clear();
+                        state.status = "ready".into();
+                        state.agent_state = AgentState::Idle;
                     }
-                    running = false;
-                    // Force a full re-render from the authoritative `log` on
-                    // turn end. The stream-patch path reads `assistant_text`,
-                    // which we clear below — if a stale stream_patch were left
-                    // pending it would patch the trailing assistant block with
-                    // the now-empty buffer and erase the response that just
-                    // streamed (the "tail of the reply never shows" bug).
-                    // Re-rendering from `log` (which holds the complete text)
-                    // is grok-build's transcript-as-source-of-truth model.
-                    assistant_text.clear();
-                    if turn_tool_count > 0 {
-                        log.push(LogEntry::tool(format!(
+                    state.running = false;
+                    state.assistant_text.clear();
+                    if state.turn_tool_count > 0 {
+                        state.log.push(LogEntry::tool(format!(
                             "⇢ {} tool call{} this turn",
-                            turn_tool_count,
-                            if turn_tool_count == 1 { "" } else { "s" }
+                            state.turn_tool_count,
+                            if state.turn_tool_count == 1 { "" } else { "s" }
                         )));
                     }
-                    turn_tool_count = 0;
-                    live_tool = None;
-                    log_dirty = true;
+                    state.turn_tool_count = 0;
+                    state.live_tool = None;
+                    state.log_dirty = true;
                 }
                 AgentEvent::Error(e) => {
-                    log.push(LogEntry::error(e));
-                    plan_preview.clear();
-                    status = "ready".into();
-                    agent_state = AgentState::Idle;
-                    running = false;
-                    // Same as Done: re-render from `log`, not the scratch
-                    // buffer we're about to clear.
-                    assistant_text.clear();
-                    if turn_tool_count > 0 {
-                        log.push(LogEntry::tool(format!(
+                    state.log.push(LogEntry::error(e));
+                    state.plan_preview.clear();
+                    state.status = "ready".into();
+                    state.agent_state = AgentState::Idle;
+                    state.running = false;
+                    state.assistant_text.clear();
+                    if state.turn_tool_count > 0 {
+                        state.log.push(LogEntry::tool(format!(
                             "⇢ {} tool call{} this turn",
-                            turn_tool_count,
-                            if turn_tool_count == 1 { "" } else { "s" }
+                            state.turn_tool_count,
+                            if state.turn_tool_count == 1 { "" } else { "s" }
                         )));
                     }
-                    turn_tool_count = 0;
-                    live_tool = None;
-                    log_dirty = true;
+                    state.turn_tool_count = 0;
+                    state.live_tool = None;
+                    state.log_dirty = true;
                 }
             }
         }
 
-        if quit {
+        if state.quit {
             break;
         }
     }
 
-    let _ = store.save_all_messages(&session, &session_messages);
+    let _ = store.save_all_messages(&session, &state.session_messages);
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
@@ -929,38 +855,22 @@ pub async fn run_tui(mut settings: Settings) -> Result<()> {
 
 // ── Drawing ──────────────────────────────────────────────────────────────
 
-#[allow(clippy::too_many_arguments)]
-fn draw_ui(
-    f: &mut Frame,
-    app_name: &str,
-    settings: &Settings,
-    log_lines: &[Line<'static>],
-    input: &str,
-    plan_pending: bool,
-    plan_preview: &[String],
-    plan_first: bool,
-    est_tokens: usize,
-    pct: f64,
-    state_txt: &str,
-    state_color: Color,
-    live_tool: Option<&str>,
-    pending_question: Option<&str>,
-    scroll: u16,
-    _auto_scroll: bool,
-    tick: u64,
-    running: bool,
-) {
-    let show_plan = plan_pending && !plan_preview.is_empty();
+fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState) {
+    let pct = if settings.context_window > 0 {
+        (state.cached_est_tokens as f64 / settings.context_window as f64) * 100.0
+    } else {
+        0.0
+    };
+    let (state_txt, state_color) = state_label(&state.agent_state, &state.status);
+
+    let show_plan = state.plan_pending && !state.plan_preview.is_empty();
     let plan_h = if show_plan {
-        (plan_preview.len().saturating_add(2) as u16).clamp(3, 10)
+        (state.plan_preview.len().saturating_add(2) as u16).clamp(3, 10)
     } else {
         0
     };
 
-    // Input box grows with the wrapped line count so long tasks don't clip.
-    // Width available for input = terminal width minus prompt glyph and
-    // borders (left/right padding in the block).
-    let input_h = input_box_height(input, f.size().width);
+    let input_h = input_box_height(&state.input, f.size().width);
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -991,7 +901,7 @@ fn draw_ui(
         Span::styled(
             format!(
                 "{}/{} ({:.0}%)",
-                fmt_tokens(est_tokens as u64),
+                fmt_tokens(state.cached_est_tokens as u64),
                 fmt_tokens(settings.context_window as u64),
                 pct
             ),
@@ -999,28 +909,27 @@ fn draw_ui(
         ),
         Span::styled("  ·  ", Style::default().fg(Theme::DIM)),
         Span::styled(
-            if plan_first {
+            if state.plan_first {
                 "plan-first:on"
             } else {
                 "plan-first:off"
             },
-            Style::default().fg(if plan_first { Theme::PLAN } else { Theme::DIM }),
+            Style::default().fg(if state.plan_first {
+                Theme::PLAN
+            } else {
+                Theme::DIM
+            }),
         ),
     ]);
     f.render_widget(Paragraph::new(top), chunks[0]);
 
-    // Log — pre-wrap each cached line to the content width so ONE display
-    // row == ONE wrapped segment (grok-build's scrollback model). This keeps
-    // the scroll range exact: without pre-wrapping, Paragraph::wrap() expands
-    // long lines to several rows and the scroll math (based on the unwrapped
-    // line count) lands short of the true bottom, making the tail of a long
-    // response unreachable.
-    let content_width = (chunks[1].width.saturating_sub(4)) as usize; // 2 borders + 2 padding
-    let display_lines = prewrap_lines(log_lines, content_width.max(1));
+    // Log
+    let content_width = (chunks[1].width.saturating_sub(4)) as usize;
+    let display_lines = prewrap_lines(&state.cached_log_lines, content_width.max(1));
 
     let log_h = chunks[1].height.saturating_sub(2) as usize;
     let max_scroll = display_lines.len().saturating_sub(log_h);
-    let scroll_eff = (scroll as usize).min(max_scroll);
+    let scroll_eff = (state.scroll as usize).min(max_scroll);
     let offset = max_scroll.saturating_sub(scroll_eff) as u16;
 
     let log_block = Block::default()
@@ -1032,9 +941,10 @@ fn draw_ui(
         .scroll((offset, 0));
     f.render_widget(log_widget, chunks[1]);
 
-    // Plan panel (Grok Build plan viewer lite)
+    // Plan panel
     if show_plan && plan_h > 0 {
-        let mut lines: Vec<Line> = plan_preview
+        let mut lines: Vec<Line> = state
+            .plan_preview
             .iter()
             .map(|l| Line::from(Span::styled(l.clone(), Style::default().fg(Theme::PLAN))))
             .collect();
@@ -1051,11 +961,7 @@ fn draw_ui(
         f.render_widget(plan_widget, chunks[2]);
     }
 
-    // Status strip — state + workspace + live tool activity (ephemeral).
-    // While a tool runs, a spinning braille "glimmer" precedes the tool name so
-    // there's a clear moving cue of what's executing (Grok Build-style). When a
-    // question awaits the user, a pulsing diamond marks the "waiting on you"
-    // state instead.
+    // Status strip
     let mut status_line = vec![
         Span::styled(
             format!(" {state_txt} "),
@@ -1068,28 +974,23 @@ fn draw_ui(
             Style::default().fg(Theme::DIM),
         ),
     ];
-    if let Some(tool) = live_tool {
+    if let Some(tool) = &state.live_tool {
         status_line.push(Span::styled(
-            format!(" {} {}", spinner_frame(tick), tool),
+            format!(" {} {}", spinner_frame(state.tick), tool),
             Style::default().fg(Theme::TOOL),
         ));
     }
-    if pending_question.is_some() {
+    if state.pending_question_text.is_some() {
         status_line.push(Span::styled(
-            format!(" {}", waiting_diamond(tick)),
+            format!(" {}", waiting_diamond(state.tick)),
             Style::default().fg(Theme::PLAN),
         ));
     }
 
-    // Right-align a clickable [stop] button while a task runs (Grok Build
-    // keeps a cancel affordance on the status row). It's rendered as the
-    // last span; a click on it is detected via the status row's Y position
-    // (see the mouse handler) and aborts the running task like /stop.
-    if running {
+    if state.running {
         let status_row_w = chunks[3].width;
         let line_w: usize = status_line.iter().map(|s| s.content.chars().count()).sum();
         let btn_w = STOP_BTN.chars().count();
-        // Pad so the button hugs the right edge of the status row.
         let pad = status_row_w.saturating_sub(line_w as u16 + btn_w as u16 + 1);
         if pad > 0 {
             status_line.push(Span::raw(" ".repeat(pad as usize)));
@@ -1103,18 +1004,17 @@ fn draw_ui(
         chunks[3],
     );
 
-    // Input — prompt glyph like a real agent CLI. When the model asked a
-    // question, the box shows the question and collects the answer.
-    let title = if let Some(q) = pending_question {
+    // Input
+    let title = if let Some(q) = &state.pending_question_text {
         format!(" answer: {q} ")
-    } else if plan_pending {
+    } else if state.plan_pending {
         " approve / revise ".into()
     } else {
         " task ".into()
     };
-    let prompt = if pending_question.is_some() {
+    let prompt = if state.pending_question_text.is_some() {
         "▸ "
-    } else if plan_pending {
+    } else if state.plan_pending {
         "? "
     } else {
         "❯ "
@@ -1123,19 +1023,21 @@ fn draw_ui(
         Span::styled(
             prompt,
             Style::default()
-                .fg(if pending_question.is_some() || plan_pending {
-                    Theme::PLAN
-                } else {
-                    Theme::ACCENT
-                })
+                .fg(
+                    if state.pending_question_text.is_some() || state.plan_pending {
+                        Theme::PLAN
+                    } else {
+                        Theme::ACCENT
+                    },
+                )
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(input.to_string(), Style::default().fg(Theme::FG)),
+        Span::styled(state.input.to_string(), Style::default().fg(Theme::FG)),
     ]);
     let input_w = Paragraph::new(input_line).wrap(Wrap { trim: false }).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(if plan_pending {
+            .border_style(Style::default().fg(if state.plan_pending {
                 Theme::PLAN
             } else {
                 Theme::BORDER
@@ -1192,66 +1094,27 @@ fn stop_span() -> Span<'static> {
 
 // ── Task / plan helpers (keeps the event loop readable) ──────────────────
 
-/// Toggle plan-first mode and, when turning it OFF, clear any stuck
-/// plan-approval state so the input box isn't left stuck in "approve / revise".
-///
-/// `plan_pending` + `plan_preview` describe a plan awaiting human approval.
-/// They are independent of `plan_first` (which only affects the NEXT submit),
-/// so toggling plan off must also drop the pending approval, or the next typed
-/// input still routes to `handle_plan_response` instead of `start_task`.
-fn toggle_plan_mode(
-    plan_first: &mut bool,
-    plan_pending: &mut bool,
-    plan_preview: &mut Vec<String>,
-    agent_state: &mut AgentState,
-    status: &mut String,
-) -> bool {
-    *plan_first = !*plan_first;
-    if !*plan_first {
-        // Turning plan mode off: clear a stuck approval so input isn't trapped.
-        *plan_pending = false;
-        plan_preview.clear();
-        if matches!(
-            *agent_state,
-            AgentState::AwaitingApproval | AgentState::Planning
-        ) {
-            *agent_state = AgentState::Idle;
-            *status = "ready".into();
-        }
-    }
-    *plan_first
-}
-
-#[allow(clippy::too_many_arguments, clippy::ptr_arg)]
 fn start_task(
+    state: &mut TuiState,
     text: &str,
-    plan_first: bool,
     settings: &Settings,
-    log: &mut Vec<LogEntry>,
-    log_dirty: &mut bool,
-    running: &mut bool,
-    agent_state: &mut AgentState,
-    status: &mut String,
-    assistant_text: &mut String,
-    session_messages: &mut Vec<ChatMessage>,
     store: &SessionStore,
     session: &crate::session::Session,
-    task_handle: &mut Option<tokio::task::JoinHandle<anyhow::Result<Vec<ChatMessage>>>>,
     tx: mpsc::Sender<AgentEvent>,
 ) -> Result<()> {
-    *running = true;
-    *status = "running…".into();
-    log.push(LogEntry::user(text.to_string()));
-    *log_dirty = true;
+    state.running = true;
+    state.status = "running…".into();
+    state.log.push(LogEntry::user(text.to_string()));
+    state.log_dirty = true;
 
     let mut prompt = text.to_string();
-    if plan_first {
+    if state.plan_first {
         prompt.push_str(
             "\n\nFirst propose a concise step-by-step plan. You may use read-only tools (list_dir, read_file, grep, search_code, git_status, git_diff, git_log) to inspect the workspace, but you CANNOT edit files or run shell until the plan is approved. Just list the numbered steps.",
         );
-        *agent_state = AgentState::Planning;
+        state.agent_state = AgentState::Planning;
     }
-    assistant_text.clear();
+    state.assistant_text.clear();
 
     let user_msg = ChatMessage {
         role: "user".into(),
@@ -1261,33 +1124,23 @@ fn start_task(
     };
     let _ = store.append_message(session, &user_msg);
 
-    let mut agent = Agent::with_messages(settings.clone(), session_messages.clone())?;
-    if plan_first {
+    let mut agent = Agent::with_messages(settings.clone(), state.session_messages.clone())?;
+    if state.plan_first {
         agent = agent.plan_only();
     }
-    *task_handle = Some(tokio::spawn(async move {
+    state.task_handle = Some(tokio::spawn(async move {
         agent.run(&prompt, tx).await?;
         Ok(agent.messages)
     }));
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments, clippy::ptr_arg)]
 fn handle_plan_response(
+    state: &mut TuiState,
     text: &str,
     settings: &Settings,
-    log: &mut Vec<LogEntry>,
-    log_dirty: &mut bool,
-    plan_pending: &mut bool,
-    plan_preview: &mut Vec<String>,
-    running: &mut bool,
-    agent_state: &mut AgentState,
-    status: &mut String,
-    assistant_text: &mut String,
-    session_messages: &mut Vec<ChatMessage>,
     store: &SessionStore,
     session: &crate::session::Session,
-    task_handle: &mut Option<tokio::task::JoinHandle<anyhow::Result<Vec<ChatMessage>>>>,
     tx: mpsc::Sender<AgentEvent>,
 ) -> Result<()> {
     let low = text.to_lowercase();
@@ -1296,19 +1149,19 @@ fn handle_plan_response(
         "yes" | "y" | "approve" | "go" | "execute" | "ok"
     );
 
-    *plan_pending = false;
-    plan_preview.clear();
-    *running = true;
-    log.push(LogEntry::user(text.to_string()));
-    *log_dirty = true;
+    state.plan_pending = false;
+    state.plan_preview.clear();
+    state.running = true;
+    state.log.push(LogEntry::user(text.to_string()));
+    state.log_dirty = true;
 
     let prompt = if approve {
-        *agent_state = AgentState::Executing;
-        *status = "executing plan…".into();
+        state.agent_state = AgentState::Executing;
+        state.status = "executing plan…".into();
         plan::EXECUTE_PROMPT.to_string()
     } else {
-        *agent_state = AgentState::Planning;
-        *status = "revising plan…".into();
+        state.agent_state = AgentState::Planning;
+        state.status = "revising plan…".into();
         format!("Revise the plan based on this feedback:\n{text}")
     };
 
@@ -1322,13 +1175,12 @@ fn handle_plan_response(
         },
     );
 
-    assistant_text.clear();
-    let mut agent = Agent::with_messages(settings.clone(), session_messages.clone())?;
+    state.assistant_text.clear();
+    let mut agent = Agent::with_messages(settings.clone(), state.session_messages.clone())?;
     if !approve {
-        // Revising the plan: keep the model on the read-only toolset.
         agent = agent.plan_only();
     }
-    *task_handle = Some(tokio::spawn(async move {
+    state.task_handle = Some(tokio::spawn(async move {
         agent.run(&prompt, tx).await?;
         Ok(agent.messages)
     }));
@@ -1340,25 +1192,12 @@ fn handle_plan_response(
 /// Returns `Ok(true)` if the command was handled (the input should not be
 /// treated as a task or plan response). All user-visible feedback is pushed
 /// to the log.
-#[allow(clippy::too_many_arguments, clippy::ptr_arg)]
 fn dispatch_slash_command(
+    state: &mut TuiState,
     pc: &commands::ParsedCommand,
     settings: &mut Settings,
-    log: &mut Vec<LogEntry>,
-    log_dirty: &mut bool,
-    plan_first: &mut bool,
-    plan_pending: &mut bool,
-    plan_preview: &mut Vec<String>,
-    running: &mut bool,
-    agent_state: &mut AgentState,
-    status: &mut String,
-    assistant_text: &mut String,
-    live_tool: &mut Option<String>,
-    session_messages: &mut Vec<ChatMessage>,
     store: &SessionStore,
     session: &mut crate::session::Session,
-    task_handle: &mut Option<tokio::task::JoinHandle<anyhow::Result<Vec<ChatMessage>>>>,
-    quit: &mut bool,
 ) -> Result<bool> {
     match pc.name.as_str() {
         "help" => {
@@ -1368,110 +1207,106 @@ fn dispatch_slash_command(
                 commands::command_help(&pc.args)
                     .unwrap_or_else(|| format!("Unknown command: /{}", pc.args))
             };
-            log.push(LogEntry::system(text));
-            *log_dirty = true;
+            state.log.push(LogEntry::system(text));
+            state.log_dirty = true;
         }
         "plan" => {
-            let on = toggle_plan_mode(plan_first, plan_pending, plan_preview, agent_state, status);
-            log.push(LogEntry::system(format!(
+            let on = state.toggle_plan_mode();
+            state.log.push(LogEntry::system(format!(
                 "plan mode {}",
                 if on { "on" } else { "off" }
             )));
-            *log_dirty = true;
+            state.log_dirty = true;
         }
         "new" => {
-            // Save the current session, then start a fresh one.
-            let _ = store.save_all_messages(session, session_messages);
+            let _ = store.save_all_messages(session, &state.session_messages);
             let _ = store.update_summary(session, None);
             *session = store.create(&settings.model)?;
-            session_messages.clear();
-            log.clear();
-            log.push(LogEntry::system(format!(
+            state.session_messages.clear();
+            state.log.clear();
+            state.log.push(LogEntry::system(format!(
                 "raven · {} · {}",
                 settings.model, settings.base_url
             )));
-            log.push(LogEntry::system(format!(
+            state.log.push(LogEntry::system(format!(
                 "workspace {}",
                 settings.workspace.display()
             )));
-            log.push(LogEntry::system(String::new()));
-            log.push(LogEntry::system(
+            state.log.push(LogEntry::system(String::new()));
+            state.log.push(LogEntry::system(
                 "new session · enter submit · /plan · /model · /new · /help · /quit",
             ));
-            *log_dirty = true;
-            plan_preview.clear();
-            *plan_pending = false;
-            *running = false;
-            *agent_state = AgentState::Idle;
-            *status = "ready".into();
-            assistant_text.clear();
+            state.log_dirty = true;
+            state.plan_preview.clear();
+            state.plan_pending = false;
+            state.running = false;
+            state.agent_state = AgentState::Idle;
+            state.status = "ready".into();
+            state.assistant_text.clear();
         }
         "clear" => {
-            log.clear();
-            *log_dirty = true;
+            state.log.clear();
+            state.log_dirty = true;
         }
         "stop" => {
-            // Interrupt the running task by aborting its spawned future.
-            if let Some(handle) = task_handle.take() {
+            if let Some(handle) = state.task_handle.take() {
                 handle.abort();
-                // Persist whatever the interrupted turn already produced so it
-                // isn't lost on a hard stop.
-                let _ = store.save_all_messages(session, session_messages);
+                let _ = store.save_all_messages(session, &state.session_messages);
                 let _ = store.update_summary(session, None);
-                log.push(LogEntry::system("⏹ stopped (partial turn saved)"));
-                *log_dirty = true;
+                state
+                    .log
+                    .push(LogEntry::system("⏹ stopped (partial turn saved)"));
+                state.log_dirty = true;
             } else {
-                log.push(LogEntry::system("nothing running to stop"));
-                *log_dirty = true;
+                state.log.push(LogEntry::system("nothing running to stop"));
+                state.log_dirty = true;
             }
-            *running = false;
-            *agent_state = AgentState::Idle;
-            *status = "ready".into();
-            assistant_text.clear();
-            *live_tool = None;
+            state.running = false;
+            state.agent_state = AgentState::Idle;
+            state.status = "ready".into();
+            state.assistant_text.clear();
+            state.live_tool = None;
         }
         "model" => {
             let name = pc.args.trim();
             if name.is_empty() {
-                log.push(LogEntry::system(format!(
+                state.log.push(LogEntry::system(format!(
                     "current model: {}  (try /model <name>)",
                     settings.model
                 )));
-                *log_dirty = true;
+                state.log_dirty = true;
             } else {
                 settings.model = name.to_string();
-                // Re-infer the context window and derived max_tokens for the
-                // new model, matching the startup resolution in main.rs.
                 settings.context_window = crate::context::infer_context_window(&settings.model);
                 settings.max_tokens = Settings::derived_max_tokens(settings.context_window);
-                log.push(LogEntry::system(format!(
+                state.log.push(LogEntry::system(format!(
                     "model → {} · context {} · max_tokens {}",
                     settings.model,
                     crate::context::infer_context_window(&settings.model),
                     settings.max_tokens
                 )));
-                *log_dirty = true;
+                state.log_dirty = true;
             }
         }
         "quit" => {
-            *quit = true;
+            state.quit = true;
         }
         "undo" => {
-            // Undo the last commit (non-destructive: `reset --soft HEAD~1`).
             let sandbox = crate::tools::Sandbox::new(settings.workspace.clone());
             match sandbox.git_undo() {
-                Ok(out) => log.push(LogEntry::system(out)),
-                Err(e) => log.push(LogEntry::system(format!("undo failed: {e}"))),
+                Ok(out) => state.log.push(LogEntry::system(out)),
+                Err(e) => state
+                    .log
+                    .push(LogEntry::system(format!("undo failed: {e}"))),
             }
-            *log_dirty = true;
+            state.log_dirty = true;
         }
         _ => {
-            // Unknown command — surface a helpful message.
-            log.push(LogEntry::system(format!(
+            state.log.push(LogEntry::system(format!(
                 "Unknown command: /{}  (try /help)",
                 pc.name
             )));
-            *log_dirty = true;
+            state.log_dirty = true;
         }
     }
     Ok(true)
@@ -1484,72 +1319,65 @@ mod tests {
 
     #[test]
     fn toggle_plan_off_clears_stuck_pending_approval() {
-        // Simulate: plan is ready and awaiting approval, then the user turns
-        // plan mode OFF. The input box must NOT stay trapped in approve/revise.
-        let mut plan_first = true;
-        let mut plan_pending = true;
-        let mut plan_preview = vec!["1. Do X".into()];
-        let mut agent_state = AgentState::AwaitingApproval;
-        let mut status = "awaiting plan approval".into();
+        let mut state = TuiState {
+            plan_first: true,
+            plan_pending: true,
+            plan_preview: vec!["1. Do X".into()],
+            agent_state: AgentState::AwaitingApproval,
+            status: "awaiting plan approval".into(),
+            ..dummy_state()
+        };
 
-        let on = toggle_plan_mode(
-            &mut plan_first,
-            &mut plan_pending,
-            &mut plan_preview,
-            &mut agent_state,
-            &mut status,
-        );
+        let on = state.toggle_plan_mode();
         assert!(!on, "plan mode should be off");
-        assert!(!plan_pending, "pending approval must be cleared");
-        assert!(plan_preview.is_empty(), "plan preview must be cleared");
-        assert_eq!(agent_state, AgentState::Idle, "state must reset to Idle");
-        assert_eq!(status, "ready");
+        assert!(!state.plan_pending, "pending approval must be cleared");
+        assert!(
+            state.plan_preview.is_empty(),
+            "plan preview must be cleared"
+        );
+        assert_eq!(
+            state.agent_state,
+            AgentState::Idle,
+            "state must reset to Idle"
+        );
+        assert_eq!(state.status, "ready");
     }
 
     #[test]
     fn toggle_plan_off_clears_stuck_planning_state() {
-        // Turning plan off mid-planning (no approval yet) must also unstick.
-        let mut plan_first = true;
-        let mut plan_pending = false;
-        let mut plan_preview: Vec<String> = Vec::new();
-        let mut agent_state = AgentState::Planning;
-        let mut status = "planning".into();
+        let mut state = TuiState {
+            plan_first: true,
+            plan_pending: false,
+            plan_preview: Vec::new(),
+            agent_state: AgentState::Planning,
+            status: "planning".into(),
+            ..dummy_state()
+        };
 
-        toggle_plan_mode(
-            &mut plan_first,
-            &mut plan_pending,
-            &mut plan_preview,
-            &mut agent_state,
-            &mut status,
-        );
-        assert_eq!(agent_state, AgentState::Idle);
-        assert_eq!(status, "ready");
+        state.toggle_plan_mode();
+        assert_eq!(state.agent_state, AgentState::Idle);
+        assert_eq!(state.status, "ready");
     }
 
     #[test]
     fn toggle_plan_on_keeps_pending_state() {
-        // Turning plan mode ON when idle must not touch anything else.
-        let mut plan_first = false;
-        let mut plan_pending = false;
-        let mut plan_preview: Vec<String> = Vec::new();
-        let mut agent_state = AgentState::Idle;
-        let mut status = "ready".into();
+        let mut state = TuiState {
+            plan_first: false,
+            plan_pending: false,
+            plan_preview: Vec::new(),
+            agent_state: AgentState::Idle,
+            status: "ready".into(),
+            ..dummy_state()
+        };
 
-        let on = toggle_plan_mode(
-            &mut plan_first,
-            &mut plan_pending,
-            &mut plan_preview,
-            &mut agent_state,
-            &mut status,
-        );
+        let on = state.toggle_plan_mode();
         assert!(on, "plan mode should be on");
-        assert_eq!(agent_state, AgentState::Idle);
-        assert_eq!(status, "ready");
+        assert_eq!(state.agent_state, AgentState::Idle);
+        assert_eq!(state.status, "ready");
     }
 
     #[test]
     fn spinner_frame_cycles() {
-        // The spinner must rotate through distinct frames as the tick grows.
         let f0 = spinner_frame(0);
         let f1 = spinner_frame(4);
         let f2 = spinner_frame(8);
@@ -1573,13 +1401,11 @@ mod tests {
 
     #[test]
     fn input_box_height_baseline() {
-        // Short input at a normal terminal width → single wrapped line + borders.
         assert_eq!(input_box_height("hi", 120), 3);
     }
 
     #[test]
     fn input_box_height_grows_with_multiline_input() {
-        // Multi-line input grows the box, capping at 6 wrapped lines + 2 borders.
         let tall = "line1\nline2\nline3\nline4\nline5\nline6\nline7";
         let h = input_box_height(tall, 120);
         assert!(h >= 4, "multi-line input should grow the box, got {h}");
@@ -1588,34 +1414,27 @@ mod tests {
 
     #[test]
     fn stop_button_hit_region_is_right_edge() {
-        // The button hugs the right edge: the hit region is the last
-        // STOP_BTN.len() columns of the status row.
         let width = 120u16;
         let btn_len = STOP_BTN.len() as u16;
         let region_start = width.saturating_sub(btn_len);
         assert_eq!(region_start, 120 - 6);
-        // The status row Y is computed as term_h - input_h - 1; verify the
-        // arithmetic the handler relies on.
         let term_h = 30u16;
-        let input_h = 3u16; // baseline single-line input box
+        let input_h = 3u16;
         let status_y = term_h.saturating_sub(input_h).saturating_sub(1);
         assert_eq!(status_y, 26);
     }
 
     #[test]
     fn prewrap_lines_splits_long_lines() {
-        // A single 30-char line at width 10 → 3 wrapped display rows.
         let input = vec![Line::from(Span::raw("abcdefghijklmnopqrstuvwxyz"))];
         let out = prewrap_lines(&input, 10);
         assert_eq!(out.len(), 3, "long line should wrap into 3 rows");
-        // Re-joined, the text must be preserved exactly.
         let joined: String = out.iter().map(|l| l.to_string()).collect();
         assert_eq!(joined, "abcdefghijklmnopqrstuvwxyz");
     }
 
     #[test]
     fn prewrap_lines_preserves_newlines() {
-        // A newline forces a row break independent of width.
         let input = vec![Line::from(Span::raw("line1\nline2"))];
         let out = prewrap_lines(&input, 100);
         assert_eq!(out.len(), 2, "newline should split into 2 rows");
@@ -1629,5 +1448,35 @@ mod tests {
         let out = prewrap_lines(&input, 20);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].to_string(), "hi");
+    }
+
+    fn dummy_state() -> TuiState {
+        TuiState {
+            log: Vec::new(),
+            log_dirty: false,
+            cached_log_lines: Vec::new(),
+            last_assistant_lines: 0,
+            stream_patch: false,
+            cached_est_tokens: 0,
+            messages_dirty: false,
+            input: String::new(),
+            status: String::new(),
+            plan_pending: false,
+            plan_preview: Vec::new(),
+            running: false,
+            plan_first: false,
+            assistant_text: String::new(),
+            agent_state: AgentState::Idle,
+            scroll: 0,
+            auto_scroll: true,
+            quit: false,
+            tick: 0,
+            live_tool: None,
+            turn_tool_count: 0,
+            pending_question: None,
+            pending_question_text: None,
+            session_messages: Vec::new(),
+            task_handle: None,
+        }
     }
 }
