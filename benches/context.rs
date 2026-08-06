@@ -53,48 +53,45 @@ fn bench(c: &mut Criterion) {
     let mut g = c.benchmark_group("context");
 
     g.bench_function("compact_plain_200_turns", |b| {
-        let mut msgs = build_history(200, false);
+        let msgs = build_history(200, false);
         b.iter_batched(
             || msgs.clone(),
             |mut m| {
-                tokio::runtime::Runtime::new().unwrap().block_on(compact_if_needed_llm(
-                    &mut m,
-                    8192,
-                    0.1,
-                    |_| Box::pin(async { None }),
-                ))
+                tokio::runtime::Runtime::new()
+                    .unwrap()
+                    .block_on(compact_if_needed_llm(&mut m, 8192, 0.1, |_| {
+                        Box::pin(async { None })
+                    }))
             },
             criterion::BatchSize::SmallInput,
         );
     });
 
     g.bench_function("compact_tool_heavy_100_turns", |b| {
-        let mut msgs = build_history(100, true);
+        let msgs = build_history(100, true);
         b.iter_batched(
             || msgs.clone(),
             |mut m| {
-                tokio::runtime::Runtime::new().unwrap().block_on(compact_if_needed_llm(
-                    &mut m,
-                    8192,
-                    0.1,
-                    |_| Box::pin(async { None }),
-                ))
+                tokio::runtime::Runtime::new()
+                    .unwrap()
+                    .block_on(compact_if_needed_llm(&mut m, 8192, 0.1, |_| {
+                        Box::pin(async { None })
+                    }))
             },
             criterion::BatchSize::SmallInput,
         );
     });
 
     g.bench_function("compact_noop_under_threshold", |b| {
-        let mut msgs = build_history(20, false);
+        let msgs = build_history(20, false);
         b.iter_batched(
             || msgs.clone(),
             |mut m| {
-                tokio::runtime::Runtime::new().unwrap().block_on(compact_if_needed_llm(
-                    &mut m,
-                    128_000,
-                    0.75,
-                    |_| Box::pin(async { None }),
-                ))
+                tokio::runtime::Runtime::new()
+                    .unwrap()
+                    .block_on(compact_if_needed_llm(&mut m, 128_000, 0.75, |_| {
+                        Box::pin(async { None })
+                    }))
             },
             criterion::BatchSize::SmallInput,
         );
