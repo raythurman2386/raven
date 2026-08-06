@@ -921,7 +921,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("Cargo.toml"), "[package]\n").unwrap();
         let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
-        let out = dispatch(&sb, "run_lint", &serde_json::json!({})).unwrap();
+        let out = dispatch(&sb, "run_lint", &serde_json::json!({}))
+            .unwrap_or_else(|e| format!("Tool error: {e}"));
         assert!(out.contains("--- run_lint (cargo)"), "{out}");
     }
 

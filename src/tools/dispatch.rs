@@ -10,7 +10,7 @@ use super::TodoItem;
 fn anyhow_to_tool_error(e: anyhow::Error, path: &str, operation: &str) -> ToolError {
     for cause in e.chain() {
         if let Some(io) = cause.downcast_ref::<std::io::Error>() {
-            return ToolError::io(path, operation, io.kind().into());
+            return ToolError::io(path, operation, io.kind(), io.to_string());
         }
     }
     ToolError::Other(format!("{e:#}"))
@@ -151,5 +151,17 @@ pub fn dispatch(
         }
         other => return Ok(format!("Unknown tool: {}", other)),
     };
-    res.map_err(|e| anyhow_to_tool_error(e, name, name))
+    let file_path = extract_file_path(name, args);
+    res.map_err(|e| anyhow_to_tool_error(e, &file_path, name))
+}
+
+fn extract_file_path(name: &str, args: &serde_json::Value) -> String {
+    match name {
+        "list_dir" | "read_file" | "search_replace" | "write_file" | "grep" => args
+            .get("path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        _ => String::new(),
+    }
 }
