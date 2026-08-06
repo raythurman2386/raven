@@ -1484,4 +1484,22 @@ mod tests {
             .any(|e| matches!(e, AgentEvent::TextDelta(s) if s == "plain json answer")));
         assert!(events.iter().any(|e| matches!(e, AgentEvent::Done)));
     }
+
+    #[tokio::test]
+    async fn model_not_found_no_retry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err_body = r#"{"error":"model 'nope' not found"}"#;
+        let (base, _h) = spawn_mock_status(vec![(404, err_body)]).await;
+        let mut agent = Agent::new(settings_for(tmp.path(), &base)).unwrap();
+        let (tx, mut rx) = mpsc::channel(256);
+        agent.run("go", tx).await.unwrap();
+        let mut events = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            events.push(ev);
+        }
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Error(msg) if msg.contains("not found"))));
+        assert!(!events.iter().any(|e| matches!(e, AgentEvent::Retry { .. })));
+    }
 }
