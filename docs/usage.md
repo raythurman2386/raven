@@ -241,6 +241,24 @@ automatically runs the linter and feeds any errors back to the model as a
 reminder on the *next* request — so the agent self-corrects before you see the
 damage. On a clean lint pass nothing is injected, keeping the loop quiet.
 
+### Enforced verification (`--verify`)
+
+Raven enforces that the agent runs the test suite after editing files before it
+can finish a turn. When a turn calls `write_file`/`search_replace`/`apply_patch`
+and the model finishes **without** calling `run_tests`, Raven injects a recovery
+reminder and re-runs the turn (capped at 3 attempts) instead of finishing — so
+the agent cannot "forget" to verify its changes. This mirrors Grok Build's
+`CompletionRequirement` (must-call-tool + recovery re-run).
+
+- **On by default** in both the TUI and headless mode.
+- Disable with `--no-verify` on the CLI, or `verify = false` in
+  `.raven/config.toml` / `~/.raven/config.toml`.
+- In the TUI, a `⟳ verify required` line appears in the log and the model's
+  `run_tests` call shows in the status strip with the spinner. In headless mode,
+  a `[verify required]` notice is printed.
+- The gate only fires when the turn actually edited files — read-only and
+  Q&A turns never trigger it, so it stays efficient.
+
 ### Session durability
 
 Session files are written atomically with a **unique temp name**
