@@ -588,11 +588,12 @@ pub(crate) fn wait_for_child(
     });
 
     let start = std::time::Instant::now();
+    let deadline = std::time::Duration::from_secs(timeout_secs);
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => {
-                if start.elapsed().as_secs() > timeout_secs {
+                if start.elapsed() >= deadline {
                     let _ = child.kill();
                     let _ = child.wait();
                     return None;

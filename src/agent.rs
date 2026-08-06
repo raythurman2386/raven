@@ -1212,12 +1212,64 @@ mod tests {
         None
     }
 
-    /// Binds a `std::net::TcpListener` to `127.0.0.1:0`, converts to a
-    /// `tokio::net::TcpListener`, spawns a tokio task that for each body in
-    /// `responses`: accepts one connection, reads the request via
-    /// `read_http_request`, and writes back an HTTP 200 response with
-    /// `Content-Type: text/event-stream`, `Content-Length: <body.len()>`,
-    /// blank line, then the body. Returns `(base_url_string, handle)`.
+    /// Serve the given responses (status, reason, body) over the listener,
+    /// keep-alive aware.
+    ///
+    /// The agent uses a shared `reqwest::Client` that reuses one TCP
+    /// connection across requests. A naive one-connection-per-response mock
+    /// races: after the mock writes a response and drops the stream, the
+    /// client may already have sent its next request on that same connection,
+    /// where it sits unread while the mock blocks on `accept()` for a new
+    /// connection that never comes — hanging the agent until it times out and
+    /// ends the run with `Error` instead of `Done`. To avoid that, read
+    /// multiple requests per connection, serving the next scripted response
+    /// each time, until the connection closes. Once the scripted responses are
+    /// exhausted, serve a benign empty fallback so an extra request (a verify
+    /// retry, a timing shift) never hits a connection-refused → retry →
+    /// `OllamaUnreachable` path.
+    async fn serve_mock(
+        listener: &tokio::net::TcpListener,
+        responses: Vec<(u16, &'static str, &'static str)>,
+    ) {
+        let mut next = 0usize;
+        loop {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            loop {
+                // Read one request. If the connection closed (client done),
+                // break to accept the next connection.
+                if read_http_request(&mut stream).await.is_empty() {
+                    break;
+                }
+                let (status, reason, body) = match responses.get(next) {
+                    Some(&(s, r, b)) => {
+                        next += 1;
+                        (s, r, b)
+                    }
+                    None => (200, "OK", ""),
+                };
+                let response = format!(
+                    "HTTP/1.1 {} {}\r\n\
+                     Content-Type: text/event-stream\r\n\
+                     Content-Length: {}\r\n\
+                     \r\n\
+                     {}",
+                    status,
+                    reason,
+                    body.len(),
+                    body,
+                );
+                if stream.write_all(response.as_bytes()).await.is_err() {
+                    break;
+                }
+                if stream.flush().await.is_err() {
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Spawn a mock HTTP server that serves the given SSE bodies in order.
+    /// Returns `(base_url_string, handle)`.
     #[allow(dead_code)]
     async fn spawn_mock(responses: Vec<&'static str>) -> (String, tokio::task::JoinHandle<()>) {
         let std_listener = StdTcpListener::bind("127.0.0.1:0").expect("bind mock listener");
@@ -1226,25 +1278,10 @@ mod tests {
         let listener =
             tokio::net::TcpListener::from_std(std_listener).expect("convert to tokio listener");
 
+        let scripted: Vec<(u16, &'static str, &'static str)> =
+            responses.into_iter().map(|b| (200, "OK", b)).collect();
         let handle = tokio::spawn(async move {
-            for body in responses {
-                let (mut stream, _) = listener.accept().await.expect("accept");
-                let _ = read_http_request(&mut stream).await;
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\n\
-                     Content-Type: text/event-stream\r\n\
-                     Content-Length: {}\r\n\
-                     \r\n\
-                     {}",
-                    body.len(),
-                    body,
-                );
-                stream
-                    .write_all(response.as_bytes())
-                    .await
-                    .expect("write response");
-                stream.flush().await.expect("flush");
-            }
+            serve_mock(&listener, scripted).await;
         });
 
         (format!("http://{addr}"), handle)
@@ -1263,32 +1300,19 @@ mod tests {
         let listener =
             tokio::net::TcpListener::from_std(std_listener).expect("convert to tokio listener");
 
-        let handle = tokio::spawn(async move {
-            for (status, body) in responses {
-                let (mut stream, _) = listener.accept().await.expect("accept");
-                let _ = read_http_request(&mut stream).await;
+        let scripted: Vec<(u16, &'static str, &'static str)> = responses
+            .into_iter()
+            .map(|(status, body)| {
                 let reason = match status {
                     503 => "Service Unavailable",
                     429 => "Too Many Requests",
                     _ => "OK",
                 };
-                let response = format!(
-                    "HTTP/1.1 {} {}\r\n\
-                     Content-Type: text/event-stream\r\n\
-                     Content-Length: {}\r\n\
-                     \r\n\
-                     {}",
-                    status,
-                    reason,
-                    body.len(),
-                    body,
-                );
-                stream
-                    .write_all(response.as_bytes())
-                    .await
-                    .expect("write response");
-                stream.flush().await.expect("flush");
-            }
+                (status, reason, body)
+            })
+            .collect();
+        let handle = tokio::spawn(async move {
+            serve_mock(&listener, scripted).await;
         });
 
         (format!("http://{addr}"), handle)
