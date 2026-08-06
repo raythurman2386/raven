@@ -1267,10 +1267,10 @@ mod tests {
             for (status, body) in responses {
                 let (mut stream, _) = listener.accept().await.expect("accept");
                 let _ = read_http_request(&mut stream).await;
-                let reason = if status == 503 {
-                    "Service Unavailable"
-                } else {
-                    "OK"
+                let reason = match status {
+                    503 => "Service Unavailable",
+                    429 => "Too Many Requests",
+                    _ => "OK",
                 };
                 let response = format!(
                     "HTTP/1.1 {} {}\r\n\
@@ -1714,5 +1714,97 @@ mod tests {
             .iter()
             .any(|e| matches!(e, AgentEvent::VerifyRequired)));
         assert!(events.iter().any(|e| matches!(e, AgentEvent::Done)));
+    }
+
+    #[tokio::test]
+    async fn retries_on_429_then_succeeds() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ok_body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"recovered\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let (base, _h) = spawn_mock_status(vec![(429, "rate limited"), (200, ok_body)]).await;
+        let mut agent = Agent::new(settings_for(tmp.path(), &base)).unwrap();
+        let (tx, mut rx) = mpsc::channel(256);
+        agent.run("ping", tx).await.unwrap();
+        let mut events = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            events.push(ev);
+        }
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Retry { attempt: 1, .. })));
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::Done)));
+    }
+
+    #[tokio::test]
+    async fn compaction_triggers_when_context_exceeds_threshold() {
+        let tmp = tempfile::tempdir().unwrap();
+        let summarizer_body =
+            r#"{"choices":[{"message":{"role":"assistant","content":"summary"}}]}"#;
+        let agent_body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let (base, _h) = spawn_mock(vec![summarizer_body, agent_body]).await;
+        let mut s = settings_for(tmp.path(), &base);
+        s.context_window = 500;
+        s.compact_threshold = 0.5;
+        let mut agent = Agent::new(s).unwrap();
+        let (tx, mut rx) = mpsc::channel(256);
+        agent.run("hello", tx).await.unwrap();
+        let mut events = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            events.push(ev);
+        }
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Compacted { .. })));
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::Done)));
+    }
+
+    #[tokio::test]
+    async fn multi_turn_conversation() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.rs"), "fn main() {}\n").unwrap();
+        let turn1 = concat!(
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"a.rs\\\"}\"}}]}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let turn2 = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"File looks good.\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let turn3 = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"All done.\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let (base, _h) = spawn_mock(vec![turn1, turn2, turn3]).await;
+        let mut agent = Agent::new(settings_for(tmp.path(), &base)).unwrap();
+
+        let (tx, mut rx) = mpsc::channel(256);
+        agent.run("read a.rs", tx).await.unwrap();
+        let mut events1 = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            events1.push(ev);
+        }
+        assert!(events1
+            .iter()
+            .any(|e| matches!(e, AgentEvent::ToolStart { name, .. } if name == "read_file")));
+        assert!(events1.iter().any(|e| matches!(e, AgentEvent::Done)));
+
+        let (tx, mut rx) = mpsc::channel(256);
+        agent.run("what do you think?", tx).await.unwrap();
+        let mut events2 = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            events2.push(ev);
+        }
+        assert!(events2
+            .iter()
+            .any(|e| matches!(e, AgentEvent::TextDelta(s) if s == "All done.")));
+        assert!(events2.iter().any(|e| matches!(e, AgentEvent::Done)));
+
+        let user_msgs: Vec<_> = agent.messages.iter().filter(|m| m.role == "user").collect();
+        assert_eq!(user_msgs.len(), 2);
     }
 }
