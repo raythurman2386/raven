@@ -1442,4 +1442,25 @@ mod tests {
             .iter()
             .any(|m| m.role == "tool" && m.content.as_deref().unwrap_or("").contains("fn main")));
     }
+
+    #[tokio::test]
+    async fn retries_on_5xx_then_succeeds() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ok_body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"recovered\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let (base, _h) = spawn_mock_status(vec![(503, "oops"), (200, ok_body)]).await;
+        let mut agent = Agent::new(settings_for(tmp.path(), &base)).unwrap();
+        let (tx, mut rx) = mpsc::channel(256);
+        agent.run("ping", tx).await.unwrap();
+        let mut events = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            events.push(ev);
+        }
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Retry { attempt: 1, .. })));
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::Done)));
+    }
 }
