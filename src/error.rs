@@ -20,6 +20,41 @@ pub fn cap_http_body(body: String) -> String {
     truncated
 }
 
+/// Errors that occur during tool execution (filesystem, subprocess, etc.).
+///
+/// Carries structured context (path, operation, underlying error) so callers
+/// can distinguish transient vs. deterministic failures instead of matching
+/// on flat strings.
+#[derive(Debug, Error)]
+pub enum ToolError {
+    /// A filesystem I/O error with path and operation context.
+    #[error("IO error {operation} '{path}': {source}")]
+    Io {
+        path: String,
+        operation: String,
+        #[source]
+        source: std::io::Error,
+    },
+    /// Any other tool error (validation, timeout, not-found, subprocess, etc.).
+    #[error("{0}")]
+    Other(String),
+}
+
+impl ToolError {
+    /// Create an `Io` variant with path and operation context.
+    pub fn io(
+        path: impl Into<String>,
+        operation: impl Into<String>,
+        source: std::io::Error,
+    ) -> Self {
+        ToolError::Io {
+            path: path.into(),
+            operation: operation.into(),
+            source,
+        }
+    }
+}
+
 /// Errors that can occur during the agent loop.
 #[derive(Debug, Error)]
 pub enum AgentError {

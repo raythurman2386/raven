@@ -443,7 +443,7 @@ mod tests {
     #[test]
     fn dispatch_unknown_tool_returns_error() {
         let sb = sandbox();
-        let result = dispatch(&sb, "nonexistent_tool", &serde_json::json!({}));
+        let result = dispatch(&sb, "nonexistent_tool", &serde_json::json!({})).unwrap();
         assert!(result.contains("Unknown tool"));
     }
 
@@ -509,7 +509,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("test.txt"), "content").unwrap();
         let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
-        let result = dispatch(&sb, "read_file", &serde_json::json!({"path": "test.txt"}));
+        let result = dispatch(&sb, "read_file", &serde_json::json!({"path": "test.txt"})).unwrap();
         assert!(result.contains("content"));
     }
 
@@ -521,7 +521,8 @@ mod tests {
             &sb,
             "write_file",
             &serde_json::json!({"path": "out.txt", "content": "data"}),
-        );
+        )
+        .unwrap();
         assert!(result.contains("Wrote"));
         assert_eq!(
             std::fs::read_to_string(tmp.path().join("out.txt")).unwrap(),
@@ -920,7 +921,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("Cargo.toml"), "[package]\n").unwrap();
         let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
-        let out = dispatch(&sb, "run_lint", &serde_json::json!({}));
+        let out = dispatch(&sb, "run_lint", &serde_json::json!({})).unwrap();
         assert!(out.contains("--- run_lint (cargo)"), "{out}");
     }
 

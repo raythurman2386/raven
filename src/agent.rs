@@ -756,7 +756,8 @@ impl Agent {
                 }
 
                 handles.push(tokio::task::spawn_blocking(move || {
-                    let result = dispatch(&sandbox, &name, &args);
+                    let result = dispatch(&sandbox, &name, &args)
+                        .unwrap_or_else(|e| format!("Tool error: {e}"));
                     (id, name, result, cache_key)
                 }));
             }
