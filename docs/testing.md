@@ -12,7 +12,7 @@ cargo test
 
 - **Unit tests** (`#[cfg(test)] mod tests` in each source file):
   - `src/config.rs` — context window inference, max_tokens derivation, AGENTS.md loading, config.toml parsing
-  - `src/agent.rs` — ephemeral reminder computation (loop-breaker, iteration nudge)
+  - `src/agent.rs` — ephemeral reminder computation (loop-breaker, iteration nudge); **mock-server integration tests** for the full `Agent::run` loop (streaming text, tool-call dispatch, 5xx retry, non-streaming JSON, model-not-found fails-fast) against a fake `/chat/completions` endpoint
   - `src/commands.rs` — slash-command parsing, alias resolution, registry uniqueness, help rendering
   - `src/context.rs` — token estimation, compaction (preserves system message, reduces tokens, keeps tool-call/result pairs), tool-result pruning
   - `src/tools.rs` — sandbox path confinement (including symlink-escape rejection), list_dir, read_file, write_file, search_replace, grep, run_shell (dangerous command blocking, API key stripping), dispatch routing, glob matching, unified diff parsing, apply_patch
@@ -75,9 +75,12 @@ rate on logging-only or display-only code.
 
 ## What is NOT tested
 
-- **Live Ollama API calls** — the agent HTTP/streaming loop requires a running
-  Ollama server. These are not tested in CI. Manual testing via `--headless` mode.
+- **Live Ollama API calls** — real model responses require a running Ollama
+  server and are not exercised in CI. The HTTP/streaming loop *is* covered by
+  mock-server integration tests (see above); live behavior is tested manually
+  via `--headless` mode.
 - **TUI rendering** — ratatui/crossterm integration is not unit-tested. The TUI
   is exercised manually.
-- **Network retries** — the retry-with-backoff logic is tested manually by
+- **Network retries against a real host** — the retry-with-backoff logic is
+  covered against the mock (a scripted 503), and the connection-refused path by
   pointing at an unreachable host.
