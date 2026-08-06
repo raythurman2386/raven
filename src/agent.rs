@@ -1403,4 +1403,43 @@ mod tests {
         assert_eq!(last.role, "assistant");
         assert_eq!(last.content.as_deref(), Some("Hello"));
     }
+
+    #[tokio::test]
+    async fn stream_tool_call_then_answer() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.rs"), "fn main() {}\n").unwrap();
+        // Round 1: SSE with a read_file tool call (no content delta).
+        let tool_round = concat!(
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"a.rs\\\"}\"}}]}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        // Round 2: SSE with the final text answer.
+        let final_round = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Done reading.\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let (base, _h) = spawn_mock(vec![tool_round, final_round]).await;
+        let mut agent = Agent::new(settings_for(tmp.path(), &base)).unwrap();
+        let (tx, mut rx) = mpsc::channel(256);
+        agent.run("read a.rs", tx).await.unwrap();
+        let mut events = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            events.push(ev);
+        }
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::ToolStart { name, .. } if name == "read_file")));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::ToolEnd { name, preview } if name == "read_file" && preview.contains("fn main"))));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::TextDelta(s) if s == "Done reading.")));
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::Done)));
+        // The tool result was injected into conversation history.
+        assert!(agent
+            .messages
+            .iter()
+            .any(|m| m.role == "tool" && m.content.as_deref().unwrap_or("").contains("fn main")));
+    }
 }
