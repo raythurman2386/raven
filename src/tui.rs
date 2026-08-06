@@ -129,6 +129,7 @@ struct TuiState {
     status: String,
     plan_pending: bool,
     plan_preview: Vec<String>,
+    active_plan: Option<crate::plan::Plan>,
     running: bool,
     plan_first: bool,
     assistant_text: String,
@@ -174,6 +175,7 @@ impl TuiState {
             status: "ready".to_string(),
             plan_pending: false,
             plan_preview: Vec::new(),
+            active_plan: None,
             running: false,
             plan_first: settings.plan_first,
             assistant_text: String::new(),
@@ -779,6 +781,7 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
 
                     if state.plan_first && state.agent_state == AgentState::Planning {
                         let plan = plan::parse_plan(&state.assistant_text);
+                        state.active_plan = Some(plan.clone());
                         state.plan_preview = plan::format_plan(&plan)
                             .lines()
                             .map(|s| s.to_string())
@@ -804,7 +807,8 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                         );
                         state.assistant_text.clear();
                         let mut agent =
-                            Agent::with_messages(settings.clone(), state.session_messages.clone())?;
+                            Agent::with_messages(settings.clone(), state.session_messages.clone())?
+                                .with_plan(plan);
                         let tx_exec = tx.clone();
                         state.task_handle = Some(tokio::spawn(async move {
                             agent.run(&exec_prompt, tx_exec).await?;
@@ -818,6 +822,12 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                         state.running = false;
                         state.assistant_text.clear();
                     }
+                }
+                AgentEvent::PlanProgress(plan) => {
+                    state.plan_preview = plan::format_plan(&plan)
+                        .lines()
+                        .map(|s| s.to_string())
+                        .collect();
                 }
                 AgentEvent::AskUser { question, reply } => {
                     state.log.push(LogEntry::system(format!("❓ {question}")));
@@ -840,6 +850,7 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
 
                     if state.plan_first && state.agent_state == AgentState::Planning {
                         let plan = plan::parse_plan(&state.assistant_text);
+                        state.active_plan = Some(plan.clone());
                         state.plan_preview = plan::format_plan(&plan)
                             .lines()
                             .map(|s| s.to_string())
@@ -1229,7 +1240,11 @@ fn handle_plan_response(
 
     state.assistant_text.clear();
     let mut agent = Agent::with_messages(settings.clone(), state.session_messages.clone())?;
-    if !approve {
+    if approve {
+        if let Some(plan) = state.active_plan.take() {
+            agent = agent.with_plan(plan);
+        }
+    } else {
         agent = agent.plan_only();
     }
     state.task_handle = Some(tokio::spawn(async move {
@@ -1515,6 +1530,7 @@ mod tests {
             status: String::new(),
             plan_pending: false,
             plan_preview: Vec::new(),
+            active_plan: None,
             running: false,
             plan_first: false,
             assistant_text: String::new(),

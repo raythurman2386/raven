@@ -430,6 +430,7 @@ async fn headless_run(
                 eprintln!("\nError: {}", e);
                 break;
             }
+            AgentEvent::PlanProgress(_) => {}
         }
     }
     let first_messages = runner.await.ok().and_then(|r| r.ok());
@@ -532,7 +533,7 @@ async fn headless_run(
         };
         store.append_message(&session, &exec_msg)?;
 
-        let mut agent = Agent::with_messages(settings, exec_messages)?;
+        let mut agent = Agent::with_messages(settings, exec_messages)?.with_plan(plan);
         let (tx, mut rx) = mpsc::channel::<AgentEvent>(64);
         let runner = tokio::spawn(async move {
             agent.run(raven::plan::EXECUTE_PROMPT, tx).await?;
@@ -565,6 +566,9 @@ async fn headless_run(
                 }
                 AgentEvent::Retry { attempt, delay_ms } => {
                     eprintln!("[retry {}/3 in {}ms]", attempt, delay_ms);
+                }
+                AgentEvent::PlanProgress(plan) => {
+                    eprintln!("\n{}", raven::plan::format_plan(&plan));
                 }
                 AgentEvent::Done | AgentEvent::Error(_) => break,
                 _ => {}
