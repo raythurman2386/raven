@@ -52,7 +52,7 @@ mod selection;
 mod status;
 
 use blocks::{AssistantBlock, BlockKind, ErrorBlock, SystemBlock, ToolBlock, UserBlock};
-use render::{message_to_log_entry, prewrap_visible, render_assistant_lines, render_blocks};
+use render::{message_to_block, prewrap_visible, render_assistant_lines, render_blocks};
 use selection::{
     apply_selection_highlight, copy_to_clipboard, selection_text, word_bounds, DisplayPos,
     Selection,
@@ -97,49 +97,6 @@ impl Theme {
     }
     const fn dim_b() -> u8 {
         0x89
-    }
-}
-
-// ── Log model ────────────────────────────────────────────────────────────
-
-#[derive(Clone)]
-enum LogKind {
-    User,
-    Assistant,
-    Tool,
-    System,
-}
-
-#[derive(Clone)]
-struct LogEntry {
-    kind: LogKind,
-    text: String,
-}
-
-impl LogEntry {
-    fn user(s: impl Into<String>) -> Self {
-        Self {
-            kind: LogKind::User,
-            text: s.into(),
-        }
-    }
-    fn assistant(s: impl Into<String>) -> Self {
-        Self {
-            kind: LogKind::Assistant,
-            text: s.into(),
-        }
-    }
-    fn tool(s: impl Into<String>) -> Self {
-        Self {
-            kind: LogKind::Tool,
-            text: s.into(),
-        }
-    }
-    fn system(s: impl Into<String>) -> Self {
-        Self {
-            kind: LogKind::System,
-            text: s.into(),
-        }
     }
 }
 
@@ -314,10 +271,8 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
         state.session_messages = s.messages.clone();
         state.messages_dirty = true;
         for msg in &s.messages {
-            if let Some(entry) = message_to_log_entry(msg) {
-                state
-                    .blocks
-                    .push(BlockKind::from_kind(entry.kind, entry.text));
+            if let Some(block) = message_to_block(msg) {
+                state.blocks.push(block);
             }
         }
         state.push_system(String::new());

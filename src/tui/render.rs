@@ -1,17 +1,17 @@
-//! Log rendering: convert `LogEntry`s into pre-wrapped display lines.
+//! Log rendering: convert `BlockKind`s into pre-wrapped display lines.
 //!
-//! The current flat-log model renders every entry into display lines on each
-//! dirty frame. This module is the seam where the block-based virtualization
-//! (Tasks 1-2) will land; for now it preserves the existing behavior.
+//! `render_blocks` flattens the block scrollback into display lines, and
+//! `prewrap_visible` pre-wraps only the visible window each frame so a long
+//! session stays O(viewport) to render.
 
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::agent::ChatMessage;
 
-use super::blocks::{BlockKind, ToolBlock};
+use super::blocks::{AssistantBlock, BlockKind, SystemBlock, ToolBlock, UserBlock};
 use super::status::spinner_frame;
-use super::{LogEntry, Theme};
+use super::Theme;
 
 /// Render every block into display lines, returning the count of trailing
 /// lines owned by the *last* assistant block (0 if the log ends on any other
@@ -128,16 +128,23 @@ fn tool_style(t: &ToolBlock, tick: u64) -> Style {
     }
 }
 
-/// Render just one assistant text block into display lines (for streaming).
+/// Render just one assistant text block into display lines (for streaming),
+/// including the "Raven" tag so the streaming patch matches `render_blocks`.
 pub fn render_assistant_lines(text: &str) -> Vec<Line<'static>> {
-    text.lines()
-        .map(|part| {
-            Line::from(Span::styled(
-                part.to_string(),
-                Style::default().fg(Theme::FG),
-            ))
-        })
-        .collect()
+    let mut lines = Vec::with_capacity(text.lines().count().saturating_add(1));
+    lines.push(Line::from(Span::styled(
+        "Raven",
+        Style::default()
+            .fg(Theme::ACCENT)
+            .add_modifier(Modifier::BOLD),
+    )));
+    for part in text.lines() {
+        lines.push(Line::from(Span::styled(
+            part.to_string(),
+            Style::default().fg(Theme::FG),
+        )));
+    }
+    lines
 }
 
 /// Pre-wrap each log line to `width` columns so one display row maps to one
@@ -259,14 +266,17 @@ pub fn prewrap_visible(
     (out, offset as u16)
 }
 
-/// Convert a persisted chat message into a log entry for display.
-pub fn message_to_log_entry(msg: &ChatMessage) -> Option<LogEntry> {
+/// Convert a persisted chat message into a display block.
+pub fn message_to_block(msg: &ChatMessage) -> Option<BlockKind> {
     match msg.role.as_str() {
-        "user" => msg.content.as_ref().map(|c| LogEntry::user(c.clone())),
+        "user" => msg
+            .content
+            .as_ref()
+            .map(|c| BlockKind::User(UserBlock::new(c.clone()))),
         "assistant" => {
             if let Some(content) = &msg.content {
                 if !content.is_empty() {
-                    return Some(LogEntry::assistant(content.clone()));
+                    return Some(BlockKind::Assistant(AssistantBlock::new(content.clone())));
                 }
             }
             if let Some(tool_calls) = &msg.tool_calls {
@@ -276,16 +286,19 @@ pub fn message_to_log_entry(msg: &ChatMessage) -> Option<LogEntry> {
                     text.push_str(&format!("⇢ {}({})\n", tc.function.name, args_snip));
                 }
                 if !text.is_empty() {
-                    return Some(LogEntry::tool(text.trim_end().to_string()));
+                    return Some(BlockKind::Tool(ToolBlock::new(text.trim_end().to_string())));
                 }
             }
             None
         }
         "tool" => msg.content.as_ref().map(|c| {
             let preview: String = c.chars().take(200).collect();
-            LogEntry::tool(format!("[tool result] {}", preview))
+            BlockKind::Tool(ToolBlock::new(format!("[tool result] {}", preview)))
         }),
-        "system" => msg.content.as_ref().map(|c| LogEntry::system(c.clone())),
+        "system" => msg
+            .content
+            .as_ref()
+            .map(|c| BlockKind::System(SystemBlock::new(c.clone()))),
         _ => None,
     }
 }
@@ -358,6 +371,17 @@ mod tests {
             first.contains("Raven"),
             "assistant block should be tagged Raven, got {first:?}"
         );
+    }
+
+    #[test]
+    fn render_assistant_lines_includes_raven_tag() {
+        // The streaming patch must match `render_blocks` (tag + text) so the
+        // "Raven" tag doesn't flicker out mid-stream.
+        let lines = render_assistant_lines("hello\nworld");
+        assert_eq!(lines.len(), 3, "tag + 2 text lines");
+        assert!(lines[0].to_string().contains("Raven"));
+        assert_eq!(lines[1].to_string(), "hello");
+        assert_eq!(lines[2].to_string(), "world");
     }
 
     #[test]
