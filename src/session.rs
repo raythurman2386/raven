@@ -45,6 +45,11 @@ const SUMMARY_FILE: &str = "summary.json";
 const MESSAGES_FILE: &str = "messages.jsonl";
 const SESSION_FORMAT_VERSION: u32 = 1;
 
+/// The current session format version. Sessions with a higher version are
+/// from a newer release and cannot be loaded; sessions with a lower version
+/// are migrated through the version chain on load.
+pub const CURRENT_SESSION_FORMAT_VERSION: u32 = SESSION_FORMAT_VERSION;
+
 /// Manages session storage for a workspace.
 pub struct SessionStore {
     sessions_dir: PathBuf,
@@ -108,6 +113,7 @@ impl SessionStore {
         }
         let summary_str = std::fs::read_to_string(&summary_path)?;
         let summary: SessionSummary = serde_json::from_str(&summary_str)?;
+        let summary = migrate_summary(summary)?;
 
         let messages_path = dir.join(MESSAGES_FILE);
         let messages = if messages_path.exists() {
@@ -196,6 +202,32 @@ impl SessionStore {
         let content = serde_json::to_string_pretty(summary)?;
         write_atomic(&path, content.as_bytes())
     }
+}
+
+/// Validate and migrate a session summary to the current format version.
+///
+/// Returns an error if the session was written by a newer version of Raven
+/// (version > CURRENT_SESSION_FORMAT_VERSION). Sessions with a lower version
+/// are migrated through the version chain.
+fn migrate_summary(mut summary: SessionSummary) -> Result<SessionSummary> {
+    if summary.version > CURRENT_SESSION_FORMAT_VERSION {
+        bail!(
+            "Session format version {} is newer than this build ({}). \
+             Upgrade Raven to load this session.",
+            summary.version,
+            CURRENT_SESSION_FORMAT_VERSION
+        );
+    }
+
+    // Version chain: add migration steps here as the format evolves.
+    // Example for a future v1 → v2 migration:
+    // if summary.version < 2 {
+    //     // transform fields, rename keys, etc.
+    //     summary.version = 2;
+    // }
+
+    summary.version = CURRENT_SESSION_FORMAT_VERSION;
+    Ok(summary)
 }
 
 /// Load messages from a JSONL file.
@@ -451,6 +483,92 @@ mod tests {
             assert!(id.starts_with(base), "ID must start with timestamp: {id}");
             assert_eq!(id.len(), base.len() + 5, "ID length mismatch: {id}");
         }
+    }
+
+    // ── Version migration ──────────────────────────────────────────────
+
+    #[test]
+    fn migrate_summary_passes_current_version() {
+        let summary = SessionSummary {
+            version: CURRENT_SESSION_FORMAT_VERSION,
+            id: "test".into(),
+            created_at: "2026-01-01T00:00:00".into(),
+            updated_at: "2026-01-01T00:00:00".into(),
+            model: "test-model".into(),
+            title: String::new(),
+        };
+        let migrated = migrate_summary(summary).unwrap();
+        assert_eq!(migrated.version, CURRENT_SESSION_FORMAT_VERSION);
+    }
+
+    #[test]
+    fn migrate_summary_upgrades_older_version() {
+        let summary = SessionSummary {
+            version: 0,
+            id: "test".into(),
+            created_at: "2026-01-01T00:00:00".into(),
+            updated_at: "2026-01-01T00:00:00".into(),
+            model: "test-model".into(),
+            title: String::new(),
+        };
+        let migrated = migrate_summary(summary).unwrap();
+        assert_eq!(migrated.version, CURRENT_SESSION_FORMAT_VERSION);
+    }
+
+    #[test]
+    fn migrate_summary_rejects_newer_version() {
+        let summary = SessionSummary {
+            version: CURRENT_SESSION_FORMAT_VERSION + 1,
+            id: "test".into(),
+            created_at: "2026-01-01T00:00:00".into(),
+            updated_at: "2026-01-01T00:00:00".into(),
+            model: "test-model".into(),
+            title: String::new(),
+        };
+        let err = migrate_summary(summary).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("newer than this build"),
+            "expected 'newer than this build' in error: {msg}"
+        );
+    }
+
+    #[test]
+    fn load_rejects_newer_format_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = SessionStore::for_workspace(tmp.path()).unwrap();
+        let session = store.create("test-model").unwrap();
+
+        // Overwrite summary.json with a future version
+        let mut future = session.summary.clone();
+        future.version = CURRENT_SESSION_FORMAT_VERSION + 1;
+        let path = store.session_dir(&session.summary.id).join(SUMMARY_FILE);
+        let content = serde_json::to_string_pretty(&future).unwrap();
+        std::fs::write(&path, content).unwrap();
+
+        let err = store.load(&session.summary.id).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("newer than this build"),
+            "expected 'newer than this build' in error: {msg}"
+        );
+    }
+
+    #[test]
+    fn load_migrates_older_format_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = SessionStore::for_workspace(tmp.path()).unwrap();
+        let session = store.create("test-model").unwrap();
+
+        // Overwrite summary.json with an older version
+        let mut old = session.summary.clone();
+        old.version = 0;
+        let path = store.session_dir(&session.summary.id).join(SUMMARY_FILE);
+        let content = serde_json::to_string_pretty(&old).unwrap();
+        std::fs::write(&path, content).unwrap();
+
+        let loaded = store.load(&session.summary.id).unwrap();
+        assert_eq!(loaded.summary.version, CURRENT_SESSION_FORMAT_VERSION);
     }
 
     #[test]
