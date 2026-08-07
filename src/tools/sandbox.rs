@@ -37,6 +37,7 @@ use walkdir::WalkDir;
 
 pub(crate) const MAX_TOOL_OUTPUT: usize = 12_000;
 const MAX_LINE_LENGTH: usize = 2000;
+const REPLACE_ALL_WARN_THRESHOLD: usize = 20;
 
 /// Best-effort denylist for obviously destructive shell commands.
 ///
@@ -348,6 +349,14 @@ impl Sandbox {
             let count = content.matches(old_string).count();
             if count == 0 {
                 return Ok(format!("Error: old_string not found in {}", path));
+            }
+            if count > REPLACE_ALL_WARN_THRESHOLD {
+                return Ok(format!(
+                    "Warning: replace_all would match {} occurrences in {} (threshold: {}). \
+                     Provide a more specific old_string to narrow the match, \
+                     or use individual search_replace calls for targeted edits.",
+                    count, path, REPLACE_ALL_WARN_THRESHOLD
+                ));
             }
             let new_content = content.replace(old_string, new_string);
             std::fs::write(&p, &new_content)?;
