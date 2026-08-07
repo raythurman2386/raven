@@ -853,6 +853,44 @@ mod tests {
     }
 
     #[test]
+    fn git_commit_excludes_raven_sessions() {
+        let (_tmp, sb) = git_sandbox();
+        std::fs::create_dir_all(sb.workspace.join(".raven/sessions/abc123")).unwrap();
+        std::fs::write(
+            sb.workspace.join(".raven/sessions/abc123/messages.jsonl"),
+            "session data",
+        )
+        .unwrap();
+        sb.write_file("src/main.rs", "fn main() {}").unwrap();
+        let out = sb.git_commit("add main.rs").unwrap();
+        assert!(!out.contains("Error"), "commit should succeed: {out}");
+        let log = sb.git_log(5).unwrap();
+        assert!(log.contains("add main.rs"), "commit in log: {log}");
+        let status = sb.git_status().unwrap();
+        assert!(
+            status.contains(".raven/"),
+            ".raven/ should remain unstaged: {status}"
+        );
+    }
+
+    #[test]
+    fn git_commit_excludes_data_dir() {
+        let (_tmp, sb) = git_sandbox();
+        std::fs::create_dir_all(sb.workspace.join("data")).unwrap();
+        std::fs::write(sb.workspace.join("data/notes.json"), "runtime data").unwrap();
+        sb.write_file("src/lib.rs", "pub fn add() {}").unwrap();
+        let out = sb.git_commit("add lib.rs").unwrap();
+        assert!(!out.contains("Error"), "commit should succeed: {out}");
+        let log = sb.git_log(5).unwrap();
+        assert!(log.contains("add lib.rs"), "commit in log: {log}");
+        let status = sb.git_status().unwrap();
+        assert!(
+            status.contains("data/"),
+            "data/ should remain unstaged: {status}"
+        );
+    }
+
+    #[test]
     fn git_commit_in_full_toolset_not_plan_toolset() {
         let full = tool_definitions();
         let full_names: Vec<String> = full
