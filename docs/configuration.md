@@ -50,7 +50,7 @@ Layered TOML config, loaded from the workspace first (higher priority), then the
 | `context_window` | inferred from model | Override the model's context window size (tokens) |
 | `compact_threshold` | `0.75` | Fraction of usable context at which compaction triggers |
 | `max_iterations` | `30` | Max agent iterations per run |
-| `plan_first` | `true` | Propose a plan before executing |
+| `mode` | `plan` | Interaction mode: `plan`, `agent`, or `chat` |
 | `temperature` | `0.2` | Sampling temperature |
 | `no_stream` | `false` | Disable streaming (single request per turn) |
 | `verify` | `true` | Enforce verification gate (agent must run tests after edits) |
@@ -62,7 +62,7 @@ host = "http://localhost:11434/v1"
 context_window = 131072
 compact_threshold = 0.75
 max_iterations = 30
-plan_first = true
+mode = "plan"
 temperature = 0.2
 no_stream = false
 verify = true

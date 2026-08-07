@@ -42,7 +42,7 @@ use tokio::sync::mpsc;
 
 use crate::agent::{Agent, AgentEvent, ChatMessage};
 use crate::commands;
-use crate::config::Settings;
+use crate::config::{Mode, Settings};
 use crate::context::history_tokens;
 use crate::plan::{self, AgentState};
 use crate::session::{Session, SessionStore};
@@ -366,7 +366,7 @@ struct TuiState {
     plan_preview: Vec<String>,
     active_plan: Option<crate::plan::Plan>,
     running: bool,
-    plan_first: bool,
+    mode: Mode,
     assistant_text: String,
     agent_state: AgentState,
     scroll: u16,
@@ -400,7 +400,7 @@ impl TuiState {
                 )),
                 LogEntry::system(String::new()),
                 LogEntry::system(
-                    "enter submit · /help · /plan · /model · /new · ctrl+c quit · wheel/pgup scroll",
+                    "enter submit · /help · /model · /new · shift+tab mode · ctrl+c quit · wheel/pgup scroll",
                 ),
             ],
             log_dirty: true,
@@ -415,7 +415,7 @@ impl TuiState {
             plan_preview: Vec::new(),
             active_plan: None,
             running: false,
-            plan_first: settings.plan_first,
+            mode: settings.mode,
             assistant_text: String::new(),
             agent_state: AgentState::Idle,
             scroll: 0,
@@ -434,9 +434,9 @@ impl TuiState {
         }
     }
 
-    fn toggle_plan_mode(&mut self) -> bool {
-        self.plan_first = !self.plan_first;
-        if !self.plan_first {
+    fn cycle_mode(&mut self) -> Mode {
+        self.mode = self.mode.next();
+        if !self.mode.plans_first() {
             self.plan_pending = false;
             self.plan_preview.clear();
             if matches!(
@@ -447,7 +447,7 @@ impl TuiState {
                 self.status = "ready".into();
             }
         }
-        self.plan_first
+        self.mode
     }
 }
 
@@ -697,7 +697,7 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
         }
         state.log.push(LogEntry::system(String::new()));
         state.log.push(LogEntry::system(
-            "resumed · enter submit · /help · /plan · /model · /new · ctrl+c quit · wheel/pgup scroll",
+            "resumed · enter submit · /help · /model · /new · shift+tab mode · ctrl+c quit · wheel/pgup scroll",
         ));
         state.log_dirty = true;
         s
@@ -771,12 +771,11 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             break
                         }
-                        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            let on = state.toggle_plan_mode();
-                            state.log.push(LogEntry::system(format!(
-                                "plan mode {}",
-                                if on { "on" } else { "off" }
-                            )));
+                        KeyCode::BackTab => {
+                            let m = state.cycle_mode();
+                            state
+                                .log
+                                .push(LogEntry::system(format!("mode: {}", m.label())));
                             state.log_dirty = true;
                         }
                         KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -795,7 +794,7 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                             )));
                             state.log.push(LogEntry::system(String::new()));
                             state.log.push(LogEntry::system(
-                                "new session · enter submit · ctrl+n new · ctrl+p plan · ctrl+c quit",
+                                "new session · enter submit · ctrl+n new · shift+tab mode · ctrl+c quit",
                             ));
                             state.log_dirty = true;
                             state.plan_preview.clear();
@@ -992,7 +991,7 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                         }
                     }
 
-                    if state.plan_first && state.agent_state == AgentState::Planning {
+                    if state.mode.plans_first() && state.agent_state == AgentState::Planning {
                         let plan = plan::parse_plan(&state.assistant_text);
                         state.active_plan = Some(plan.clone());
                         state.plan_preview = plan::format_plan(&plan)
@@ -1061,7 +1060,7 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                         }
                     }
 
-                    if state.plan_first && state.agent_state == AgentState::Planning {
+                    if state.mode.plans_first() && state.agent_state == AgentState::Planning {
                         let plan = plan::parse_plan(&state.assistant_text);
                         state.active_plan = Some(plan.clone());
                         state.plan_preview = plan::format_plan(&plan)
@@ -1196,18 +1195,6 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState)
             Style::default().fg(usage_color(pct)),
         ),
         Span::styled("  ·  ", Style::default().fg(Theme::DIM)),
-        Span::styled(
-            if state.plan_first {
-                "plan-first:on"
-            } else {
-                "plan-first:off"
-            },
-            Style::default().fg(if state.plan_first {
-                Theme::PLAN
-            } else {
-                Theme::DIM
-            }),
-        ),
     ]);
     f.render_widget(Paragraph::new(top), chunks[0]);
 
@@ -1578,7 +1565,7 @@ fn start_task(
     state.log_dirty = true;
 
     let mut prompt = text.to_string();
-    if state.plan_first {
+    if state.mode.plans_first() {
         prompt.push_str(
             "\n\nFirst propose a concise step-by-step plan. You may use read-only tools (list_dir, read_file, grep, search_code, git_status, git_diff, git_log) to inspect the workspace, but you CANNOT edit files or run shell until the plan is approved. Just list the numbered steps.",
         );
@@ -1595,7 +1582,7 @@ fn start_task(
     let _ = store.append_message(session, &user_msg);
 
     let mut agent = Agent::with_messages(settings.clone(), state.session_messages.clone())?;
-    if state.plan_first {
+    if state.mode.read_only() {
         agent = agent.plan_only();
     }
     state.task_handle = Some(tokio::spawn(async move {
@@ -1684,14 +1671,6 @@ fn dispatch_slash_command(
             state.log.push(LogEntry::system(text));
             state.log_dirty = true;
         }
-        "plan" => {
-            let on = state.toggle_plan_mode();
-            state.log.push(LogEntry::system(format!(
-                "plan mode {}",
-                if on { "on" } else { "off" }
-            )));
-            state.log_dirty = true;
-        }
         "new" => {
             let _ = store.save_all_messages(session, &state.session_messages);
             let _ = store.update_summary(session, None);
@@ -1708,7 +1687,7 @@ fn dispatch_slash_command(
             )));
             state.log.push(LogEntry::system(String::new()));
             state.log.push(LogEntry::system(
-                "new session · enter submit · /plan · /model · /new · /help · /quit",
+                "new session · enter submit · /model · /new · /help · /quit",
             ));
             state.log_dirty = true;
             state.plan_preview.clear();
@@ -1792,9 +1771,9 @@ mod tests {
     use crate::plan::AgentState;
 
     #[test]
-    fn toggle_plan_off_clears_stuck_pending_approval() {
+    fn cycle_mode_clears_stuck_pending_approval_when_leaving_plan() {
         let mut state = TuiState {
-            plan_first: true,
+            mode: Mode::Plan,
             plan_pending: true,
             plan_preview: vec!["1. Do X".into()],
             agent_state: AgentState::AwaitingApproval,
@@ -1802,8 +1781,8 @@ mod tests {
             ..dummy_state()
         };
 
-        let on = state.toggle_plan_mode();
-        assert!(!on, "plan mode should be off");
+        let m = state.cycle_mode();
+        assert_eq!(m, Mode::Agent, "plan should cycle to agent");
         assert!(!state.plan_pending, "pending approval must be cleared");
         assert!(
             state.plan_preview.is_empty(),
@@ -1818,9 +1797,9 @@ mod tests {
     }
 
     #[test]
-    fn toggle_plan_off_clears_stuck_planning_state() {
+    fn cycle_mode_clears_stuck_planning_state_when_leaving_plan() {
         let mut state = TuiState {
-            plan_first: true,
+            mode: Mode::Plan,
             plan_pending: false,
             plan_preview: Vec::new(),
             agent_state: AgentState::Planning,
@@ -1828,15 +1807,15 @@ mod tests {
             ..dummy_state()
         };
 
-        state.toggle_plan_mode();
+        state.cycle_mode();
         assert_eq!(state.agent_state, AgentState::Idle);
         assert_eq!(state.status, "ready");
     }
 
     #[test]
-    fn toggle_plan_on_keeps_pending_state() {
+    fn cycle_mode_cycles_through_all_three() {
         let mut state = TuiState {
-            plan_first: false,
+            mode: Mode::Plan,
             plan_pending: false,
             plan_preview: Vec::new(),
             agent_state: AgentState::Idle,
@@ -1844,8 +1823,9 @@ mod tests {
             ..dummy_state()
         };
 
-        let on = state.toggle_plan_mode();
-        assert!(on, "plan mode should be on");
+        assert_eq!(state.cycle_mode(), Mode::Agent);
+        assert_eq!(state.cycle_mode(), Mode::Chat);
+        assert_eq!(state.cycle_mode(), Mode::Plan);
         assert_eq!(state.agent_state, AgentState::Idle);
         assert_eq!(state.status, "ready");
     }
@@ -2148,7 +2128,7 @@ mod tests {
             plan_preview: Vec::new(),
             active_plan: None,
             running: false,
-            plan_first: false,
+            mode: Mode::Agent,
             assistant_text: String::new(),
             agent_state: AgentState::Idle,
             scroll: 0,

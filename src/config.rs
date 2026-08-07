@@ -17,6 +17,50 @@ use anyhow::Result;
 use serde::Deserialize;
 use std::path::PathBuf;
 
+/// The user-facing interaction mode for a session.
+///
+/// - [`Mode::Plan`] — propose a plan first (read-only toolset), then execute
+///   after approval. This is the default.
+/// - [`Mode::Agent`] — full toolset, no plan step. The model works directly.
+/// - [`Mode::Chat`] — read-only toolset, no plan step. For Q&A / exploration
+///   without modifying the workspace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum Mode {
+    Plan,
+    Agent,
+    Chat,
+}
+
+impl Mode {
+    /// The next mode when cycling forward (Shift+Tab in the TUI).
+    pub fn next(self) -> Mode {
+        match self {
+            Mode::Plan => Mode::Agent,
+            Mode::Agent => Mode::Chat,
+            Mode::Chat => Mode::Plan,
+        }
+    }
+
+    /// Whether this mode proposes a plan before executing.
+    pub fn plans_first(self) -> bool {
+        matches!(self, Mode::Plan)
+    }
+
+    /// Whether this mode restricts the toolset to read-only.
+    pub fn read_only(self) -> bool {
+        matches!(self, Mode::Plan | Mode::Chat)
+    }
+
+    /// Human-readable label for the mode.
+    pub fn label(self) -> &'static str {
+        match self {
+            Mode::Plan => "plan",
+            Mode::Agent => "agent",
+            Mode::Chat => "chat",
+        }
+    }
+}
+
 /// Runtime configuration for an [`crate::agent::Agent`].
 ///
 /// Constructed from CLI flags + environment variables in `crate::main`.
@@ -38,7 +82,7 @@ pub struct Settings {
     pub api_key: Option<String>,
     pub workspace: PathBuf,
     pub max_iterations: usize,
-    pub plan_first: bool,
+    pub mode: Mode,
     pub yolo: bool,
     pub temperature: f32,
     pub max_tokens: u32,
@@ -189,7 +233,7 @@ pub struct ConfigFile {
     pub context_window: Option<usize>,
     pub compact_threshold: Option<f32>,
     pub max_iterations: Option<usize>,
-    pub plan_first: Option<bool>,
+    pub mode: Option<Mode>,
     pub temperature: Option<f32>,
     /// Disable streaming and use a single non-streaming request instead.
     pub no_stream: Option<bool>,
@@ -219,7 +263,7 @@ pub fn load_config_file(workspace: &std::path::Path) -> ConfigFile {
         context_window: ws.context_window.or(global.context_window),
         compact_threshold: ws.compact_threshold.or(global.compact_threshold),
         max_iterations: ws.max_iterations.or(global.max_iterations),
-        plan_first: ws.plan_first.or(global.plan_first),
+        mode: ws.mode.or(global.mode),
         temperature: ws.temperature.or(global.temperature),
         no_stream: ws.no_stream.or(global.no_stream),
         verify: ws.verify.or(global.verify),

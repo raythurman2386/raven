@@ -30,7 +30,7 @@ fn help_succeeds_and_lists_flags() {
     assert!(status.success(), "--help should exit 0");
     assert!(out.contains("raven"), "help should name the binary");
     for flag in [
-        "--no-plan",
+        "--mode",
         "--context-window",
         "--no-stream",
         "--resume",
@@ -71,10 +71,11 @@ fn session_persistence_roundtrip() {
     let ws_path = ws.path().to_str().unwrap();
 
     // Point at an unreachable host so the run fails fast but still persists
-    // the session metadata. Force no-plan to keep the run single-turn.
+    // the session metadata. Force agent mode to keep the run single-turn.
     let (out, _, _) = run(&[
         "--headless",
-        "--no-plan",
+        "--mode",
+        "agent",
         "--host",
         "http://127.0.0.1:1/v1",
         "-w",

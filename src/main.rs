@@ -37,11 +37,29 @@ use std::path::PathBuf;
 use raven::agent::{run_parallel, Agent, ChatMessage};
 use raven::config::{
     default_api_key, default_base_url, default_max_iter, default_model, env_compact_threshold,
-    env_context_window, load_config_file, Settings,
+    env_context_window, load_config_file, Mode, Settings,
 };
 use raven::context::{fetch_context_window, infer_context_window};
 use raven::runner;
 use raven::session::{Session, SessionStore};
+
+/// CLI value for the `--mode` flag.
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+enum ModeArg {
+    Plan,
+    Agent,
+    Chat,
+}
+
+impl From<ModeArg> for Mode {
+    fn from(m: ModeArg) -> Mode {
+        match m {
+            ModeArg::Plan => Mode::Plan,
+            ModeArg::Agent => Mode::Agent,
+            ModeArg::Chat => Mode::Chat,
+        }
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -78,9 +96,9 @@ struct Cli {
     #[arg(short, long)]
     workspace: Option<PathBuf>,
 
-    /// Skip plan-first mode
-    #[arg(long)]
-    no_plan: bool,
+    /// Interaction mode: plan (default), agent, or chat
+    #[arg(long, value_enum)]
+    mode: Option<ModeArg>,
 
     /// Skip all confirmations
     #[arg(long)]
@@ -199,7 +217,7 @@ async fn main() -> Result<()> {
     let max_tokens = Settings::derived_max_tokens(context_window);
 
     let max_iterations = cfg.max_iterations.unwrap_or_else(default_max_iter);
-    let plan_first = cfg.plan_first.unwrap_or(true) && !cli.no_plan;
+    let mode = cli.mode.map(Mode::from).or(cfg.mode).unwrap_or(Mode::Plan);
     let temperature = cfg.temperature.unwrap_or(0.2);
 
     let settings = Settings {
@@ -208,7 +226,7 @@ async fn main() -> Result<()> {
         api_key,
         workspace,
         max_iterations,
-        plan_first,
+        mode,
         yolo: cli.yolo,
         temperature,
         max_tokens,
@@ -302,9 +320,9 @@ async fn main() -> Result<()> {
 /// Run a single task in headless (non-interactive) mode.
 ///
 /// Prints agent text deltas, tool calls, and iteration markers to stdout.
-/// When `settings.plan_first` is on (and not `--yolo`), the first run produces
-/// a plan, then prompts for `[Y/n]` approval on stdin before executing it.
-/// Approval is accepted for empty input, `y`, `yes`, or `ok`.
+/// When `settings.mode` is [`Mode::Plan`] (and not `--yolo`), the first run
+/// produces a plan, then prompts for `[Y/n]` approval on stdin before
+/// executing it. Approval is accepted for empty input, `y`, `yes`, or `ok`.
 async fn headless_run(
     settings: Settings,
     task: &str,
@@ -345,14 +363,17 @@ async fn headless_run(
     };
     store.append_message(&session, &user_msg)?;
 
-    let plan_first = settings.plan_first && !settings.yolo;
+    // Plan mode runs the plan-approval flow; Chat mode uses the read-only
+    // toolset but skips the plan step. `--yolo` disables the plan flow.
+    let plan_first = settings.mode.plans_first() && !settings.yolo;
+    let read_only = settings.mode.read_only();
 
     let mut agent = if session.messages.is_empty() {
         Agent::new(settings.clone())?
     } else {
         Agent::with_messages(settings.clone(), session.messages.clone())?
     };
-    if plan_first {
+    if read_only {
         agent = agent.plan_only();
     }
 

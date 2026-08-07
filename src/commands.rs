@@ -1,6 +1,6 @@
 //! Slash-command framework for the TUI.
 //!
-//! Slash commands (`/plan`, `/new`, `/help`, ...) are the primary way to drive
+//! Slash commands (`/new`, `/help`, ...) are the primary way to drive
 //! the interactive UI — unlike Ctrl+letter shortcuts they work identically in
 //! an editor-like terminal and are self-discoverable via `/help`.
 //!
@@ -45,12 +45,6 @@ pub fn commands() -> Vec<CommandSpec> {
             aliases: &["h", "?"],
             summary: "Show this help, or details for one command: /help <cmd>",
             arg_help: Some("[command]"),
-        },
-        CommandSpec {
-            name: "plan",
-            aliases: &["p"],
-            summary: "Toggle plan-first mode on/off",
-            arg_help: None,
         },
         CommandSpec {
             name: "new",
@@ -181,16 +175,16 @@ mod tests {
 
     #[test]
     fn parse_known_command() {
-        let pc = parse("/plan").unwrap();
-        assert_eq!(pc.name, "plan");
+        let pc = parse("/new").unwrap();
+        assert_eq!(pc.name, "new");
         assert!(pc.args.is_empty());
     }
 
     #[test]
     fn parse_command_with_args() {
-        let pc = parse("/help  plan").unwrap();
+        let pc = parse("/help  new").unwrap();
         assert_eq!(pc.name, "help");
-        assert_eq!(pc.args, "plan");
+        assert_eq!(pc.args, "new");
     }
 
     #[test]
@@ -275,7 +269,7 @@ mod tests {
 
     #[test]
     fn command_help_known_and_unknown() {
-        assert!(command_help("plan").is_some());
+        assert!(command_help("new").is_some());
         assert!(command_help("q").is_some(), "alias should resolve");
         assert!(command_help("does_not_exist").is_none());
     }

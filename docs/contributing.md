@@ -195,7 +195,7 @@ CommandSpec {
 ### 2. Handle it in the TUI dispatcher
 
 In [`src/tui.rs`](../src/tui.rs), add a match arm in `dispatch_slash_command`.
-It receives the parsed command, shared UI state (`log`, `plan_first`,
+It receives the parsed command, shared UI state (`log`, `mode`,
 `session`, `quit`, ...), and `&SessionStore` — push any user-visible feedback
 to `log`.
 

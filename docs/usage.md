@@ -14,6 +14,27 @@ Day-to-day workflows for **Raven**. See the [root README](../README.md) for inst
 
 Force headless with no task using `--headless` (exits with an error if no prompt is given).
 
+### Interaction modes
+
+Within a session, Raven runs in one of three **interaction modes**, which control
+whether the model proposes a plan first and which tools it can use:
+
+| Mode | Plan first? | Toolset | Use case |
+|---|---|---|---|
+| `plan` | Yes | Read-only | Propose a plan, approve, then execute (default) |
+| `agent` | No | Full | Work directly with all tools |
+| `chat` | No | Read-only | Q&A / exploration without modifying the workspace |
+
+Choose the mode with `--mode <plan|agent|chat>` on the CLI, or cycle with
+`Shift+Tab` in the TUI. The default is `plan`.
+
+```bash
+raven --mode agent -p "Refactor the auth module"   # full tools, no plan
+raven --mode chat -p "Explain the architecture"     # read-only, no plan
+```
+
+`--yolo` implies `--mode agent` (no plan step, no confirmations).
+
 ---
 
 ## Headless one-shot
@@ -46,14 +67,14 @@ raven -p "Refactor the auth module"
 #   ── Plan ready. Approve? [Y/n] ──
 # Press Enter (or y/yes/ok) to execute; anything else aborts.
 
-# Skip planning entirely
-raven --no-plan -p "Fix the typo in config.rs"
+# Skip planning entirely (full tools, no plan step)
+raven --mode agent -p "Fix the typo in config.rs"
 
 # Skip ALL confirmations (fully autonomous)
 raven --yolo -p "Write unit tests for auth"
 ```
 
-`--yolo` implies `--no-plan` (no approval step).
+`--yolo` implies `--mode agent` (no approval step).
 
 ### Model-driven auto-execution
 
@@ -116,7 +137,7 @@ raven --tui    # force TUI even with a task
 |---|---|
 | Type + `Enter` | Submit a task |
 | `Backspace` | Edit input |
-| `Ctrl+P` | Toggle plan mode (also `/plan`) |
+| `Shift+Tab` | Cycle mode: plan → agent → chat |
 | `Ctrl+C` / `Esc` | Quit |
 
 ### Slash commands
@@ -128,7 +149,6 @@ host. Type one and press `Enter`; `/help` lists everything.
 | Command | Aliases | Action |
 |---|---|---|
 | `/help [cmd]` | `/h`, `/?` | List all commands, or detail one |
-| `/plan` | `/p` | Toggle plan-first mode |
 | `/new` | `/n` | Save the current session and start a fresh one |
 | `/clear` | `/c` | Clear the on-screen log (history preserved) |
 | `/model <name>` | `/m` | Switch the model for subsequent turns |

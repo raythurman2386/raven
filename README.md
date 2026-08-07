@@ -79,8 +79,8 @@ raven "add a test"          # also works
 # Model / workspace
 raven -m qwen2.5-coder:14b -w /path/to/project -p "Fix the tests"
 
-# Skip plan approval
-raven --no-plan -p "Refactor utils"
+# Skip plan approval (full tools, no plan step)
+raven --mode agent -p "Refactor utils"
 
 # Fully autonomous (no confirmations)
 raven --yolo -p "Write unit tests for auth"
@@ -127,7 +127,7 @@ host = "http://localhost:11434/v1"
 context_window = 131072
 compact_threshold = 0.75
 max_iterations = 30
-plan_first = true
+mode = "plan"
 temperature = 0.2
 no_stream = false
 ```

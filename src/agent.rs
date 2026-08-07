@@ -1349,6 +1349,7 @@ fn args_to_string(args: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Mode;
     use std::net::TcpListener as StdTcpListener;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -1515,7 +1516,7 @@ mod tests {
             api_key: None,
             workspace: workspace.to_path_buf(),
             max_iterations: 5,
-            plan_first: false,
+            mode: Mode::Agent,
             yolo: true,
             temperature: 0.0,
             max_tokens: 4096,
