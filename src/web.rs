@@ -181,25 +181,43 @@ pub async fn search(query: &str, page: Option<u32>) -> String {
 
 /// Parse DuckDuckGo's HTML search results into `title — url` lines.
 ///
-/// Result links are `<a class="result__a" href="...">Title</a>`; the URL is a
-/// redirect (`//duckduckgo.com/l/?uddg=<urlencoded>`), which we decode.
+/// Two-tier strategy:
+/// 1. Primary: extract `<a class="result__a" href="...">Title</a>` links.
+/// 2. Fallback: if the primary parser finds nothing, scan the raw HTML for
+///    `uddg=` redirect URLs and extract their decoded targets.
+///
+/// Both tiers decode the DuckDuckGo redirect (`//duckduckgo.com/l/?uddg=<urlencoded>`).
 fn parse_ddg_results(html: &str) -> String {
+    let lines = parse_ddg_primary(html);
+    if !lines.is_empty() {
+        return lines.join("\n");
+    }
+    let fallback = parse_ddg_fallback(html);
+    if fallback.is_empty() {
+        "No results found.".to_string()
+    } else {
+        fallback.join("\n")
+    }
+}
+
+fn parse_ddg_primary(html: &str) -> Vec<String> {
     let mut lines = Vec::new();
     let mut rest = html;
     while let Some(rel) = rest.find("result__a") {
-        // Find the href
         let after = &rest[rel..];
-        let href_start = match after.find("href=\"") {
-            Some(h) => rel + h + 6,
-            None => break,
+        let (href_start, quote_char) = if let Some(h) = after.find("href=\"") {
+            (rel + h + 6, '"')
+        } else if let Some(h) = after.find("href='") {
+            (rel + h + 6, '\'')
+        } else {
+            break;
         };
-        let href_end = match html[href_start..].find('"') {
+        let href_end = match html[href_start..].find(quote_char) {
             Some(e) => href_start + e,
             None => break,
         };
         let href = &html[href_start..href_end];
 
-        // Find the title text between the anchor tags.
         let title_start = match html[href_end..].find('>') {
             Some(g) => href_end + g + 1,
             None => break,
@@ -217,11 +235,67 @@ fn parse_ddg_results(html: &str) -> String {
             break;
         }
     }
-    if lines.is_empty() {
-        "No results found.".to_string()
-    } else {
-        lines.join("\n")
+    lines
+}
+
+fn parse_ddg_fallback(html: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut rest = html;
+    while let Some(pos) = rest.find("uddg=") {
+        let after = &rest[pos..];
+        let val_start = pos + 5;
+        let val_end = match after[5..].find('&') {
+            Some(e) => val_start + e,
+            None => match after[5..].find('"') {
+                Some(e) => val_start + e,
+                None => match after[5..].find('\'') {
+                    Some(e) => val_start + e,
+                    None => after.len(),
+                },
+            },
+        };
+        let encoded = &rest[val_start..val_end];
+        let decoded = match urlencoding_percent_decode(encoded) {
+            Ok(s) => s,
+            Err(_) => {
+                rest = &rest[val_end..];
+                continue;
+            }
+        };
+        if !decoded.is_empty()
+            && (decoded.starts_with("http://") || decoded.starts_with("https://"))
+        {
+            lines.push(decoded);
+        }
+        rest = &rest[val_end..];
+        if lines.len() >= 10 {
+            break;
+        }
     }
+    lines
+}
+
+fn urlencoding_percent_decode(s: &str) -> Result<String, ()> {
+    let mut out = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = &s[i + 1..i + 3];
+            if let Ok(v) = u8::from_str_radix(hex, 16) {
+                out.push(v as char);
+                i += 3;
+                continue;
+            }
+        }
+        if bytes[i] == b'+' {
+            out.push(' ');
+        } else {
+            out.push(bytes[i] as char);
+        }
+        i += 1;
+    }
+    Ok(out)
 }
 
 /// Decode a DuckDuckGo redirect URL (`//duckduckgo.com/l/?uddg=<urlencoded>`)
@@ -354,5 +428,51 @@ mod tests {
                 .unwrap();
         assert!(!url.as_str().contains("s="));
         assert!(url.as_str().contains("q=test"));
+    }
+
+    #[test]
+    fn parse_ddg_primary_handles_single_quote_href() {
+        let html = r#"<a class="result__a" href='//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com'>Test</a>"#;
+        let out = parse_ddg_results(html);
+        assert!(out.contains("Test"));
+        assert!(out.contains("https://example.com"));
+    }
+
+    #[test]
+    fn parse_ddg_fallback_extracts_uddg_urls() {
+        let html = r#"<div>uddg=https%3A%2F%2Fexample.com&rut=abc</div><span>uddg=https%3A%2F%2Fother.org"</span>"#;
+        let out = parse_ddg_results(html);
+        assert!(out.contains("https://example.com"));
+        assert!(out.contains("https://other.org"));
+    }
+
+    #[test]
+    fn parse_ddg_fallback_skips_non_http_urls() {
+        let html = r#"uddg=ftp%3A%2F%2Fbad.com"#;
+        let out = parse_ddg_results(html);
+        assert_eq!(out, "No results found.");
+    }
+
+    #[test]
+    fn parse_ddg_fallback_caps_at_10() {
+        let mut html = String::new();
+        for i in 0..15 {
+            html.push_str(&format!("uddg=https%3A%2F%2Fexample{}.com&", i));
+        }
+        let out = parse_ddg_results(&html);
+        assert_eq!(out.lines().count(), 10);
+    }
+
+    #[test]
+    fn urlencoding_percent_decode_handles_plus() {
+        assert_eq!(
+            urlencoding_percent_decode("hello+world").unwrap(),
+            "hello world"
+        );
+    }
+
+    #[test]
+    fn urlencoding_percent_decode_handles_percent() {
+        assert_eq!(urlencoding_percent_decode("a%20b%2Fc").unwrap(), "a b/c");
     }
 }
