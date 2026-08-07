@@ -308,6 +308,135 @@ mod tests {
     }
 
     #[test]
+    fn extracts_js_symbols() {
+        let mut syms = Vec::new();
+        extract_symbols(
+            "function greet(name) {}\nconst PI = 3.14;\nclass Shape {}\n",
+            "js",
+            std::path::Path::new("x.js"),
+            &mut syms,
+        );
+        let names: Vec<String> = syms.iter().map(|s| s.name.clone()).collect();
+        assert!(names.contains(&"greet".to_string()));
+        assert!(names.contains(&"PI".to_string()));
+        assert!(names.contains(&"Shape".to_string()));
+    }
+
+    #[test]
+    fn extracts_go_symbols() {
+        let mut syms = Vec::new();
+        extract_symbols(
+            "func Hello() {\n}\n\ntype Foo struct {\n}\n",
+            "go",
+            std::path::Path::new("m.go"),
+            &mut syms,
+        );
+        let names: Vec<String> = syms.iter().map(|s| s.name.clone()).collect();
+        assert!(names.contains(&"Hello".to_string()));
+        assert!(names.contains(&"Foo".to_string()));
+    }
+
+    #[test]
+    fn extracts_c_symbols() {
+        let mut syms = Vec::new();
+        extract_symbols(
+            "int main(int argc, char** argv) {\n}\n\nclass Foo {\n};\nstruct Bar {\n};\nenum Baz {\n};\n",
+            "cpp",
+            std::path::Path::new("m.cpp"),
+            &mut syms,
+        );
+        let names: Vec<String> = syms.iter().map(|s| s.name.clone()).collect();
+        assert!(names.contains(&"main".to_string()));
+        assert!(names.contains(&"Foo".to_string()));
+        assert!(names.contains(&"Bar".to_string()));
+        assert!(names.contains(&"Baz".to_string()));
+    }
+
+    #[test]
+    fn extracts_ruby_symbols() {
+        let mut syms = Vec::new();
+        extract_symbols(
+            "def hello\nend\n\nclass World\nend\n",
+            "rb",
+            std::path::Path::new("m.rb"),
+            &mut syms,
+        );
+        let names: Vec<String> = syms.iter().map(|s| s.name.clone()).collect();
+        assert!(names.contains(&"hello".to_string()));
+        assert!(names.contains(&"World".to_string()));
+    }
+
+    #[test]
+    fn extracts_php_symbols() {
+        let mut syms = Vec::new();
+        extract_symbols(
+            "function hello() {\n}\n\nclass World {\n}\n",
+            "php",
+            std::path::Path::new("m.php"),
+            &mut syms,
+        );
+        let names: Vec<String> = syms.iter().map(|s| s.name.clone()).collect();
+        assert!(names.contains(&"hello".to_string()));
+        assert!(names.contains(&"World".to_string()));
+    }
+
+    #[test]
+    fn extracts_swift_symbols() {
+        let mut syms = Vec::new();
+        extract_symbols(
+            "func greet() {\n}\n\nclass Person {\n}\n",
+            "swift",
+            std::path::Path::new("m.swift"),
+            &mut syms,
+        );
+        let names: Vec<String> = syms.iter().map(|s| s.name.clone()).collect();
+        assert!(names.contains(&"greet".to_string()));
+        assert!(names.contains(&"Person".to_string()));
+    }
+
+    #[test]
+    fn extracts_kotlin_symbols() {
+        let mut syms = Vec::new();
+        extract_symbols(
+            "fun greet() {\n}\n\nclass Person {\n}\n",
+            "kt",
+            std::path::Path::new("m.kt"),
+            &mut syms,
+        );
+        let names: Vec<String> = syms.iter().map(|s| s.name.clone()).collect();
+        assert!(names.contains(&"greet".to_string()));
+        assert!(names.contains(&"Person".to_string()));
+    }
+
+    #[test]
+    fn extracts_csharp_symbols() {
+        let mut syms = Vec::new();
+        extract_symbols(
+            "void Greet() {\n}\n\nclass Person {\n}\n",
+            "cs",
+            std::path::Path::new("m.cs"),
+            &mut syms,
+        );
+        let names: Vec<String> = syms.iter().map(|s| s.name.clone()).collect();
+        assert!(names.contains(&"Greet".to_string()));
+        assert!(names.contains(&"Person".to_string()));
+    }
+
+    #[test]
+    fn extracts_shell_symbols() {
+        let mut syms = Vec::new();
+        extract_symbols(
+            "hello() {\n}\n\nfunction world {\n}\n",
+            "sh",
+            std::path::Path::new("m.sh"),
+            &mut syms,
+        );
+        let names: Vec<String> = syms.iter().map(|s| s.name.clone()).collect();
+        assert!(names.contains(&"hello".to_string()));
+        assert!(names.contains(&"world".to_string()));
+    }
+
+    #[test]
     fn map_caps_at_max_chars() {
         let tmp = tempfile::tempdir().unwrap();
         // Create enough files to cross MIN_FILES_FOR_MAP so build_map runs.
