@@ -599,6 +599,22 @@ impl Sandbox {
             || self.workspace.join("setup.py").exists()
     }
 
+    /// Whether a shell command is a test, typecheck, or lint invocation.
+    ///
+    /// Used by the enforced-verify gate to credit `run_shell`-based
+    /// verification (e.g. `npm test`, `cargo clippy`, `pytest`) the same
+    /// way it credits the `run_tests` tool.
+    pub fn is_verification_command(command: &str) -> bool {
+        static RE: OnceLock<Regex> = OnceLock::new();
+        let re = RE.get_or_init(|| {
+            Regex::new(
+                r"(?i)^\s*(cargo\s+(test|clippy|fmt\s+--\s*check)|npm\s+(test|run\s+(test|typecheck|lint))|npx\s+(jest|vitest|mocha|tsc)|yarn\s+(test|typecheck|lint)|pnpm\s+(test|typecheck|lint)|pytest|python3?\s+-m\s+pytest|tsc(\s|$)|eslint(\s|$)|prettier\s+--\s*check|ruff\s+check|mypy(\s|$)|flake8(\s|$)|go\s+test|make\s+test|dotnet\s+test|zig\s+build\s+test|deno\s+test|bun\s+test)"
+            )
+            .expect("valid regex")
+        });
+        re.is_match(command)
+    }
+
     /// Auto-detect and run the project's linter / type checker.
     ///
     /// Non-mutating: reports problems without fixing them. Prefers the fastest
