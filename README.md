@@ -71,6 +71,11 @@ raven
 raven -p "Explain the structure of this repository"
 raven "Add a README and .gitignore"
 
+# NOTE: positional args only capture the first word unless quoted.
+# `raven add a test` captures just "add" — use quotes or -p for multi-word tasks.
+raven -p "add a test"       # recommended
+raven "add a test"          # also works
+
 # Model / workspace
 raven -m qwen2.5-coder:14b -w /path/to/project -p "Fix the tests"
 
