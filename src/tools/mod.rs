@@ -297,6 +297,22 @@ mod tests {
     }
 
     #[test]
+    fn search_replace_all_exceeds_threshold_warns() {
+        let tmp = tempfile::tempdir().unwrap();
+        let content = "dup\n".repeat(25);
+        std::fs::write(tmp.path().join("file.rs"), &content).unwrap();
+        let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
+        let out = sb.search_replace("file.rs", "dup", "x", true).unwrap();
+        assert!(out.contains("Warning"));
+        assert!(out.contains("25"));
+        assert!(out.contains("threshold"));
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("file.rs")).unwrap(),
+            content
+        );
+    }
+
+    #[test]
     fn search_replace_not_found() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("file.rs"), "content\n").unwrap();
