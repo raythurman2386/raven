@@ -363,6 +363,50 @@ mod tests {
     }
 
     #[test]
+    fn prewrap_visible_window_renders_without_double_scroll() {
+        // Regression: `prewrap_visible` already slices to the visible window.
+        // Rendering those lines through a Paragraph with scroll((0,0)) must
+        // show exactly the window — NOT scroll it again (which would push the
+        // content off-screen). This mirrors the draw path in `draw_ui`.
+        use ratatui::backend::TestBackend;
+        use ratatui::widgets::{Block, Borders, Padding, Paragraph};
+        use ratatui::Terminal;
+
+        let lines = mk(&["aaaa", "bbbb", "cccc"]);
+        // viewport 2 rows, auto-follow bottom (scroll=0) → window = ["bbbb","cccc"]
+        let (visible, _offset) = prewrap_visible(&lines, 10, 0, 2);
+        assert_eq!(
+            visible.iter().map(|l| l.to_string()).collect::<Vec<_>>(),
+            vec!["bbbb", "cccc"]
+        );
+
+        // Render the window through a Paragraph with scroll((0,0)) — the same
+        // as the fixed draw path. Terminal is 3 rows tall so the bottom border
+        // (1 row) leaves 2 content rows.
+        let backend = TestBackend::new(10, 3);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let area = f.size();
+                let widget = Paragraph::new(visible.clone())
+                    .block(
+                        Block::default()
+                            .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
+                            .padding(Padding::horizontal(1)),
+                    )
+                    .scroll((0, 0));
+                f.render_widget(widget, area);
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        // Content starts at x=2 (left border + padding), y=0. Read 4 cols.
+        let row0: String = (2..6).map(|x| buf.get(x, 0).symbol().to_string()).collect();
+        let row1: String = (2..6).map(|x| buf.get(x, 1).symbol().to_string()).collect();
+        assert_eq!(row0, "bbbb", "row 0 should be 'bbbb', got {row0:?}");
+        assert_eq!(row1, "cccc", "row 1 should be 'cccc', got {row1:?}");
+    }
+
+    #[test]
     fn render_blocks_adds_raven_tag() {
         let blocks = vec![BlockKind::Assistant(AssistantBlock::new("hi".to_string()))];
         let (lines, _tail) = render_blocks(&blocks, 0);

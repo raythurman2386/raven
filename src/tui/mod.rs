@@ -801,8 +801,11 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState)
     let content_width = (chunks[1].width.saturating_sub(4)) as usize;
     let log_h = chunks[1].height.saturating_sub(2) as usize;
     // Virtualized: pre-wrap only the visible window of the log, not the whole
-    // history. `prewrap_visible` returns the visible lines + the scroll offset.
-    let (display_lines, offset) = prewrap_visible(
+    // history. `prewrap_visible` returns the visible lines (already sliced to
+    // the viewport) plus the scroll offset. The offset is used only for mouse
+    // hit-testing (`current_display`); the Paragraph must NOT scroll again,
+    // or the visible window would be pushed off-screen.
+    let (display_lines, _offset) = prewrap_visible(
         &state.cached_log_lines,
         content_width.max(1),
         state.scroll as usize,
@@ -818,7 +821,7 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState)
         .padding(Padding::horizontal(1));
     let log_widget = Paragraph::new(display_lines)
         .block(log_block)
-        .scroll((offset, 0));
+        .scroll((0, 0));
     f.render_widget(log_widget, chunks[1]);
 
     // Plan panel
