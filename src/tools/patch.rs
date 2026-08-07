@@ -161,6 +161,10 @@ impl Sandbox {
             if new_content.starts_with("Error:") {
                 return Ok(new_content);
             }
+            let mut bak_name = path.file_name().unwrap_or_default().to_os_string();
+            bak_name.push(".bak");
+            let bak_path = path.with_file_name(bak_name);
+            std::fs::copy(&path, &bak_path).context("create backup before patch")?;
             std::fs::write(&path, new_content)?;
             changed_files.push(hunk.file_path.clone());
         }

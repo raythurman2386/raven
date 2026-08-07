@@ -567,6 +567,34 @@ mod tests {
     }
 
     #[test]
+    fn apply_patch_creates_backup() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("file.rs"), "line1\nold\nline3\n").unwrap();
+        let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
+        let patch = "--- a/file.rs\n+++ b/file.rs\n@@ -1,3 +1,3 @@\n line1\n-old\n+new\n line3\n";
+        let result = sb.apply_patch(patch).unwrap();
+        assert!(result.contains("Patched"));
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("file.rs.bak")).unwrap(),
+            "line1\nold\nline3\n"
+        );
+    }
+
+    #[test]
+    fn apply_patch_creates_backup_no_extension() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("Makefile"), "line1\nold\nline3\n").unwrap();
+        let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
+        let patch = "--- a/Makefile\n+++ b/Makefile\n@@ -1,3 +1,3 @@\n line1\n-old\n+new\n line3\n";
+        let result = sb.apply_patch(patch).unwrap();
+        assert!(result.contains("Patched"));
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("Makefile.bak")).unwrap(),
+            "line1\nold\nline3\n"
+        );
+    }
+
+    #[test]
     fn apply_patch_rejects_context_mismatch() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("file.rs"), "line1\nWRONG\nline3\n").unwrap();
