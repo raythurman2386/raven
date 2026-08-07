@@ -700,7 +700,7 @@ fn shell_command(command: &str) -> Command {
 /// `SystemRoot`, `PATH`, `USERPROFILE`, `HOMEDRIVE`, `HOMEPATH`, `TEMP`,
 /// `TMP`, `COMSPEC`, and `PATHEXT` so that `cmd.exe` and common tools can
 /// start.
-fn setup_shell_env(cmd: &mut Command, workspace: &std::path::Path) {
+fn setup_shell_env(cmd: &mut Command, _workspace: &std::path::Path) {
     cmd.env_clear();
     #[cfg(windows)]
     {
@@ -722,7 +722,7 @@ fn setup_shell_env(cmd: &mut Command, workspace: &std::path::Path) {
     }
     #[cfg(not(windows))]
     {
-        cmd.env("PWD", workspace);
+        cmd.env("PWD", _workspace);
         for key in &["PATH", "HOME", "LANG"] {
             if let Ok(val) = std::env::var(key) {
                 cmd.env(key, val);
