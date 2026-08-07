@@ -46,6 +46,7 @@ use crate::context::history_tokens;
 use crate::plan::{self, AgentState};
 use crate::session::{Session, SessionStore};
 
+mod blocks;
 mod render;
 mod selection;
 mod status;
