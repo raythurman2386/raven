@@ -223,8 +223,13 @@ async fn main() -> Result<()> {
     if let Some(tasks) = cli.parallel {
         println!("Running {} parallel sub-agents…", tasks.len());
         let reports = run_parallel(&settings, tasks).await?;
-        for (i, r) in reports.iter().enumerate() {
-            println!("\n══ Sub-agent {} ══\n{}\n", i, r);
+        for r in &reports {
+            println!(
+                "\n══ Sub-agent {} ══ ({:.1}s)\n{}\n",
+                r.index,
+                r.elapsed.as_secs_f64(),
+                r.text
+            );
         }
         return Ok(());
     }

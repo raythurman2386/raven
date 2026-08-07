@@ -1150,7 +1150,15 @@ async fn summarize_request(
     }
 }
 
-/// Run several focused sub-agents in parallel and return their final text.
+/// Report from a single parallel sub-agent.
+#[derive(Debug, Clone)]
+pub struct SubAgentReport {
+    pub index: usize,
+    pub text: String,
+    pub elapsed: std::time::Duration,
+}
+
+/// Run several focused sub-agents in parallel and return their final reports.
 ///
 /// Each sub-agent gets its own isolated git worktree on a unique branch so
 /// that `git add -A` and `git commit` only stage and commit that sub-agent's
@@ -1159,7 +1167,10 @@ async fn summarize_request(
 ///
 /// If the workspace is not a git repository, sub-agents share the workspace
 /// directly (no isolation).
-pub async fn run_parallel(settings: &Settings, tasks: Vec<String>) -> Result<Vec<String>> {
+///
+/// Live progress (tool calls, text deltas) is streamed to stderr with a
+/// `[sub-agent N]` prefix so the user can observe concurrent execution.
+pub async fn run_parallel(settings: &Settings, tasks: Vec<String>) -> Result<Vec<SubAgentReport>> {
     let sandbox = Sandbox::new(settings.workspace.clone());
     let is_git = sandbox.is_git_repo().unwrap_or(false);
 
@@ -1180,7 +1191,9 @@ pub async fn run_parallel(settings: &Settings, tasks: Vec<String>) -> Result<Vec
         let s = settings.clone();
         let branch_name = format!("raven-sub-{}-{}", i, timestamp);
         let wt_dir = worktree_dir.as_ref().map(|d| d.path().to_path_buf());
+        eprintln!("[sub-agent {}] starting: {}", i, task);
         let handle = tokio::spawn(async move {
+            let start = std::time::Instant::now();
             let (agent_settings, cleanup) = if let Some(ref wt_base) = wt_dir {
                 let wt_path = wt_base.join(format!("sub-{}", i));
                 let sandbox = Sandbox::new(s.workspace.clone());
@@ -1212,26 +1225,50 @@ pub async fn run_parallel(settings: &Settings, tasks: Vec<String>) -> Result<Vec
             let mut out = String::new();
             while let Some(ev) = rx.recv().await {
                 match ev {
-                    AgentEvent::TextDelta(t) => out.push_str(&t),
+                    AgentEvent::TextDelta(t) => {
+                        out.push_str(&t);
+                        eprint!("{}", t);
+                        let _ = std::io::Write::flush(&mut std::io::stderr());
+                    }
+                    AgentEvent::ToolStart { name, args } => {
+                        eprintln!("\n[sub-agent {}] → {}({})", i, name, args);
+                    }
+                    AgentEvent::ToolEnd { name, preview } => {
+                        eprintln!(
+                            "[sub-agent {}]   [{}] {}",
+                            i,
+                            name,
+                            preview.chars().take(200).collect::<String>()
+                        );
+                    }
+                    AgentEvent::Iteration(n) => {
+                        eprintln!("[sub-agent {}] [iter {}]", i, n);
+                    }
                     AgentEvent::Done | AgentEvent::Error(_) => break,
                     _ => {}
                 }
             }
             let _ = runner.await;
-            Ok::<_, anyhow::Error>((out, cleanup))
+            let elapsed = start.elapsed();
+            Ok::<_, anyhow::Error>((out, cleanup, elapsed))
         });
         handles.push((i, handle));
     }
 
-    let mut results = vec![String::new(); handles.len()];
+    let mut results: Vec<SubAgentReport> = Vec::with_capacity(handles.len());
     let mut branches_to_merge: Vec<(usize, String, Sandbox)> = Vec::new();
     for (i, h) in handles {
-        let (out, cleanup) = h.await??;
-        results[i] = out;
+        let (out, cleanup, elapsed) = h.await??;
+        results.push(SubAgentReport {
+            index: i,
+            text: out,
+            elapsed,
+        });
         if let Some((branch_name, sandbox)) = cleanup {
             branches_to_merge.push((i, branch_name, sandbox));
         }
     }
+    results.sort_by_key(|r| r.index);
 
     if is_git {
         for (_i, branch_name, sandbox) in &branches_to_merge {
