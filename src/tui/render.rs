@@ -4,18 +4,23 @@
 //! dirty frame. This module is the seam where the block-based virtualization
 //! (Tasks 1-2) will land; for now it preserves the existing behavior.
 
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::agent::ChatMessage;
 
-use super::blocks::BlockKind;
+use super::blocks::{BlockKind, ToolBlock};
+use super::status::spinner_frame;
 use super::{LogEntry, Theme};
 
 /// Render every block into display lines, returning the count of trailing
 /// lines owned by the *last* assistant block (0 if the log ends on any other
 /// kind). Mirrors `render_log_lines` but operates on the block model.
-pub fn render_blocks(blocks: &[BlockKind]) -> (Vec<Line<'static>>, usize) {
+///
+/// `tick` drives the tool-call "glimmer": an active tool renders bright orange
+/// with a spinner; a recently-finished tool fades toward dim over ~50 ticks
+/// (~1s at 60ms/frame); an old tool stays dim.
+pub fn render_blocks(blocks: &[BlockKind], tick: u64) -> (Vec<Line<'static>>, usize) {
     let mut lines = Vec::with_capacity(blocks.len().saturating_mul(2));
     let mut last_assistant_start: Option<usize> = None;
     for b in blocks {
@@ -38,6 +43,12 @@ pub fn render_blocks(blocks: &[BlockKind]) -> (Vec<Line<'static>>, usize) {
             }
             BlockKind::Assistant(a) => {
                 last_assistant_start = Some(lines.len());
+                lines.push(Line::from(Span::styled(
+                    "Raven",
+                    Style::default()
+                        .fg(Theme::ACCENT)
+                        .add_modifier(Modifier::BOLD),
+                )));
                 for part in a.text().lines() {
                     lines.push(Line::from(Span::styled(
                         part.to_string(),
@@ -46,9 +57,15 @@ pub fn render_blocks(blocks: &[BlockKind]) -> (Vec<Line<'static>>, usize) {
                 }
             }
             BlockKind::Tool(t) => {
+                let style = tool_style(t, tick);
+                let prefix = if t.active {
+                    format!("{} ", spinner_frame(tick))
+                } else {
+                    String::new()
+                };
                 lines.push(Line::from(Span::styled(
-                    t.text().to_string(),
-                    Style::default().fg(Theme::TOOL),
+                    format!("{prefix}{}", t.text()),
+                    style,
                 )));
                 last_assistant_start = None;
             }
@@ -79,6 +96,36 @@ pub fn render_blocks(blocks: &[BlockKind]) -> (Vec<Line<'static>>, usize) {
         None => 0,
     };
     (lines, tail_count)
+}
+
+/// Style for a tool block based on its glimmer phase.
+///
+/// - `active` → bright orange + bold (the "glimmer" while running).
+/// - finished within the last `GLIMMER_TICKS` → interpolate toward dim.
+/// - otherwise → dimmed.
+fn tool_style(t: &ToolBlock, tick: u64) -> Style {
+    const GLIMMER_TICKS: u64 = 50; // ~1s at 60ms/frame
+    if t.active {
+        return Style::default()
+            .fg(Theme::TOOL)
+            .add_modifier(Modifier::BOLD);
+    }
+    match t.end_tick {
+        Some(end) => {
+            let age = tick.wrapping_sub(end);
+            if age < GLIMMER_TICKS {
+                // Fade from TOOL toward DIM as the glimmer ages.
+                let t = age as f32 / GLIMMER_TICKS as f32;
+                let mix = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t) as u8;
+                let (r1, g1, b1) = (Theme::tool_r(), Theme::tool_g(), Theme::tool_b());
+                let (r2, g2, b2) = (Theme::dim_r(), Theme::dim_g(), Theme::dim_b());
+                Style::default().fg(Color::Rgb(mix(r1, r2), mix(g1, g2), mix(b1, b2)))
+            } else {
+                Style::default().fg(Theme::DIM)
+            }
+        }
+        None => Style::default().fg(Theme::DIM),
+    }
 }
 
 /// Render just one assistant text block into display lines (for streaming).
@@ -246,6 +293,7 @@ pub fn message_to_log_entry(msg: &ChatMessage) -> Option<LogEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::blocks::AssistantBlock;
 
     fn mk(texts: &[&str]) -> Vec<Line<'static>> {
         texts
@@ -299,5 +347,57 @@ mod tests {
         let (visible, offset) = prewrap_visible(&[], 10, 0, 5);
         assert!(visible.is_empty());
         assert_eq!(offset, 0);
+    }
+
+    #[test]
+    fn render_blocks_adds_raven_tag() {
+        let blocks = vec![BlockKind::Assistant(AssistantBlock::new("hi".to_string()))];
+        let (lines, _tail) = render_blocks(&blocks, 0);
+        let first = lines[0].to_string();
+        assert!(
+            first.contains("Raven"),
+            "assistant block should be tagged Raven, got {first:?}"
+        );
+    }
+
+    #[test]
+    fn render_blocks_active_tool_glimmers() {
+        let mut tb = ToolBlock::new("⇢ read_file(x)".to_string());
+        tb.active = true;
+        let blocks = vec![BlockKind::Tool(tb)];
+        let (lines, _tail) = render_blocks(&blocks, 0);
+        let text = lines[0].to_string();
+        assert!(
+            text.contains("⇢ read_file(x)"),
+            "tool text should render, got {text:?}"
+        );
+        // Active tool should be bold (glimmer).
+        assert!(lines[0].spans[0]
+            .style
+            .add_modifier
+            .contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn render_blocks_finished_tool_fades_to_dim() {
+        // Freshly finished → mid-fade (not dim yet).
+        let mut tb = ToolBlock::new("⇢ read_file(x)".to_string());
+        tb.active = false;
+        tb.end_tick = Some(0);
+        let blocks = vec![BlockKind::Tool(tb)];
+        let (lines, _tail) = render_blocks(&blocks, 10);
+        let style = lines[0].spans[0].style;
+        assert!(
+            !style.add_modifier.contains(Modifier::BOLD),
+            "finished tool should not be bold"
+        );
+
+        // Old finished → fully dim.
+        let mut tb2 = ToolBlock::new("⇢ read_file(x)".to_string());
+        tb2.active = false;
+        tb2.end_tick = Some(0);
+        let blocks2 = vec![BlockKind::Tool(tb2)];
+        let (lines2, _tail) = render_blocks(&blocks2, 1000);
+        assert_eq!(lines2[0].spans[0].style.fg, Some(Theme::DIM));
     }
 }

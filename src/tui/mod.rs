@@ -77,6 +77,27 @@ impl Theme {
     const BORDER: Color = Color::Rgb(0x4A, 0x5A, 0x4D); // bg4
     const STATUS_BG: Color = Color::Rgb(0x1F, 0x24, 0x1F); // bg1
     const SELECT_BG: Color = Color::Rgb(0x3A, 0x4F, 0x3D); // bg visual selection
+
+    /// Red channel of the tool (orange) accent, for glimmer interpolation.
+    const fn tool_r() -> u8 {
+        0xE6
+    }
+    const fn tool_g() -> u8 {
+        0x98
+    }
+    const fn tool_b() -> u8 {
+        0x75
+    }
+    /// Red channel of the dim (grey1) color, for glimmer interpolation.
+    const fn dim_r() -> u8 {
+        0x85
+    }
+    const fn dim_g() -> u8 {
+        0x92
+    }
+    const fn dim_b() -> u8 {
+        0x89
+    }
 }
 
 // ── Log model ────────────────────────────────────────────────────────────
@@ -319,7 +340,7 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
         }
 
         if state.log_dirty {
-            let (rendered, tail) = render_blocks(&state.blocks);
+            let (rendered, tail) = render_blocks(&state.blocks, state.tick);
             state.cached_log_lines = rendered;
             state.last_assistant_lines = tail;
             state.log_dirty = false;
@@ -544,12 +565,23 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                     state.live_tool = Some(format!("⇢ {name}({snip})"));
                     state.turn_tool_count += 1;
                     state.status = "running".into();
+                    // Push an inline tool block that glimmers while active.
+                    let mut tb = ToolBlock::new(format!("⇢ {name}({snip})"));
+                    tb.active = true;
+                    state.blocks.push(BlockKind::Tool(tb));
+                    state.log_dirty = true;
                 }
                 AgentEvent::ToolEnd { name, preview } => {
                     let _ = name;
                     let _ = preview;
                     state.live_tool = None;
                     state.status = "running".into();
+                    // Mark the last tool block finished so it fades to dim.
+                    if let Some(BlockKind::Tool(tb)) = state.blocks.last_mut() {
+                        tb.active = false;
+                        tb.end_tick = Some(state.tick);
+                    }
+                    state.log_dirty = true;
                 }
                 AgentEvent::Iteration(n) => {
                     state.status = format!("thinking… (iter {n})");
