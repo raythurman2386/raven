@@ -32,7 +32,8 @@ use anyhow::{bail, Context, Result};
 use regex::Regex;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Mutex, OnceLock};
 use walkdir::WalkDir;
 
 pub(crate) const MAX_TOOL_OUTPUT: usize = 12_000;
@@ -425,6 +426,10 @@ impl Sandbox {
     }
 
     /// Regex content search (Grok Build `grep` semantics, pure-Rust fallback).
+    ///
+    /// Walks the workspace collecting file paths, then searches them in
+    /// parallel. Files larger than 1 MiB are skipped to avoid dominating the
+    /// search. Returns early once `max_results` matches are found.
     pub fn grep(
         &self,
         pattern: &str,
@@ -445,6 +450,8 @@ impl Sandbox {
             return Ok(format!("Error: {} does not exist", path));
         }
 
+        const MAX_FILE_SIZE: u64 = 1_048_576;
+
         let skip = [
             ".git",
             "node_modules",
@@ -455,9 +462,8 @@ impl Sandbox {
             "dist",
             "build",
         ];
-        let mut results = Vec::new();
-        let mut searched = 0u32;
 
+        let mut files: Vec<PathBuf> = Vec::new();
         for entry in WalkDir::new(&search_root)
             .into_iter()
             .filter_entry(|e| {
@@ -472,27 +478,61 @@ impl Sandbox {
             if !entry.file_type().is_file() {
                 continue;
             }
-            let p = entry.path();
+            let p = entry.path().to_path_buf();
             if let Some(inc) = include {
-                if !super::glob_matches(p, inc) {
+                if !super::glob_matches(&p, inc) {
                     continue;
                 }
             }
-            searched += 1;
-            let Ok(text) = std::fs::read_to_string(p) else {
+            if p.metadata()
+                .map(|m| m.len() > MAX_FILE_SIZE)
+                .unwrap_or(true)
+            {
                 continue;
-            };
-            for (i, line) in text.lines().enumerate() {
-                if re.is_match(line) {
-                    let rel = p.strip_prefix(&self.workspace).unwrap_or(p);
-                    let snippet: String = line.trim().chars().take(220).collect();
-                    results.push(format!("{}:{}: {}", rel.display(), i + 1, snippet));
-                    if results.len() >= max_results {
-                        return Ok(results.join("\n"));
-                    }
-                }
             }
+            files.push(p);
         }
+
+        let searched = files.len() as u32;
+        let results: Mutex<Vec<String>> = Mutex::new(Vec::new());
+        let done = AtomicBool::new(false);
+        let next = AtomicU32::new(0);
+
+        std::thread::scope(|s| {
+            let num_threads = std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4)
+                .min(files.len().max(1));
+            for _ in 0..num_threads {
+                s.spawn(|| loop {
+                    if done.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    let idx = next.fetch_add(1, Ordering::Relaxed) as usize;
+                    if idx >= files.len() {
+                        return;
+                    }
+                    let p = &files[idx];
+                    let Ok(text) = std::fs::read_to_string(p) else {
+                        continue;
+                    };
+                    for (i, line) in text.lines().enumerate() {
+                        if re.is_match(line) {
+                            let rel = p.strip_prefix(&self.workspace).unwrap_or(p);
+                            let snippet: String = line.trim().chars().take(220).collect();
+                            let mut r = results.lock().unwrap();
+                            r.push(format!("{}:{}: {}", rel.display(), i + 1, snippet));
+                            if r.len() >= max_results {
+                                done.store(true, Ordering::Relaxed);
+                                return;
+                            }
+                        }
+                    }
+                });
+            }
+        });
+
+        let results = results.into_inner().unwrap();
         Ok(if results.is_empty() {
             format!("No matches (searched {} files)", searched)
         } else {
