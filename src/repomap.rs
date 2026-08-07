@@ -47,24 +47,24 @@ pub struct Symbol {
     pub line: usize,
 }
 
-/// Per-extension regex patterns (unanchored; first matching line wins).
+/// Per-extension regex patterns (line-anchored; first matching line wins).
 /// Keys are file extensions (without the dot).
 fn patterns_for(ext: &str) -> &'static [&'static str] {
     match ext {
         // Rust
         "rs" => &[
-            r"\bpub\s+(?:async\s+)?fn\s+([a-zA-Z_][a-zA-Z0-9_]*)",
-            r"\b(?:async\s+)?fn\s+([a-zA-Z_][a-zA-Z0-9_]*)",
-            r"\bpub\s+struct\s+([A-Z][a-zA-Z0-9_]*)",
-            r"\bstruct\s+([A-Z][a-zA-Z0-9_]*)",
-            r"\bpub\s+enum\s+([A-Z][a-zA-Z0-9_]*)",
-            r"\benum\s+([A-Z][a-zA-Z0-9_]*)",
-            r"\bpub\s+trait\s+([A-Z][a-zA-Z0-9_]*)",
-            r"\btrait\s+([A-Z][a-zA-Z0-9_]*)",
-            r"\bimpl\s+([A-Z][a-zA-Z0-9_]*)",
-            r"\bpub\s+const\s+([A-Z_][A-Z0-9_]*)",
-            r"\bconst\s+([A-Z_][A-Z0-9_]*)",
-            r"\bpub\s+type\s+([A-Z][a-zA-Z0-9_]*)",
+            r"^\s*\bpub\s+(?:async\s+)?fn\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+            r"^\s*\b(?:async\s+)?fn\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+            r"^\s*\bpub\s+struct\s+([A-Z][a-zA-Z0-9_]*)",
+            r"^\s*\bstruct\s+([A-Z][a-zA-Z0-9_]*)",
+            r"^\s*\bpub\s+enum\s+([A-Z][a-zA-Z0-9_]*)",
+            r"^\s*\benum\s+([A-Z][a-zA-Z0-9_]*)",
+            r"^\s*\bpub\s+trait\s+([A-Z][a-zA-Z0-9_]*)",
+            r"^\s*\btrait\s+([A-Z][a-zA-Z0-9_]*)",
+            r"^\s*\bimpl\s+([A-Z][a-zA-Z0-9_]*)",
+            r"^\s*\bpub\s+const\s+([A-Z_][A-Z0-9_]*)",
+            r"^\s*\bconst\s+([A-Z_][A-Z0-9_]*)",
+            r"^\s*\bpub\s+type\s+([A-Z][a-zA-Z0-9_]*)",
         ],
         // Python
         "py" => &[
@@ -73,11 +73,11 @@ fn patterns_for(ext: &str) -> &'static [&'static str] {
         ],
         // JS/TS
         "js" | "ts" | "jsx" | "tsx" => &[
-            r"(?:export\s+)?(?:async\s+)?function\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\(",
-            r"(?:export\s+)?const\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*=\s*[\(\[\{a-zA-Z_$0-9]",
-            r"(?:export\s+)?class\s+([A-Za-z_$][a-zA-Z0-9_$]*)",
-            r"(?:export\s+)?interface\s+([A-Za-z_$][a-zA-Z0-9_$]*)",
-            r"(?:export\s+)?type\s+([A-Za-z_$][a-zA-Z0-9_$]*)\s*=",
+            r"^\s*(?:export\s+)?(?:async\s+)?function\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\(",
+            r"^\s*(?:export\s+)?const\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*=\s*[\(\[\{a-zA-Z_$0-9]",
+            r"^\s*(?:export\s+)?class\s+([A-Za-z_$][a-zA-Z0-9_$]*)",
+            r"^\s*(?:export\s+)?interface\s+([A-Za-z_$][a-zA-Z0-9_$]*)",
+            r"^\s*(?:export\s+)?type\s+([A-Za-z_$][a-zA-Z0-9_$]*)\s*=",
         ],
         // Go
         "go" => &[
@@ -324,6 +324,37 @@ mod tests {
         assert!(map.ends_with("</repo_map>"));
         assert!(map.chars().count() <= MAX_MAP_CHARS + 40);
         assert!(map.contains("fn_0"));
+    }
+
+    #[test]
+    fn rust_patterns_skip_comments_and_strings() {
+        let mut syms = Vec::new();
+        extract_symbols(
+            "// pub fn commented_out() {}\n/* fn block_comment() {} */\nlet s = \"fn not_a_fn() {}\";\npub fn real_fn() {}\n",
+            "rs",
+            std::path::Path::new("test.rs"),
+            &mut syms,
+        );
+        let names: Vec<String> = syms.iter().map(|s| s.name.clone()).collect();
+        assert!(names.contains(&"real_fn".to_string()));
+        assert!(!names.contains(&"commented_out".to_string()));
+        assert!(!names.contains(&"block_comment".to_string()));
+        assert!(!names.contains(&"not_a_fn".to_string()));
+    }
+
+    #[test]
+    fn js_patterns_skip_comments_and_strings() {
+        let mut syms = Vec::new();
+        extract_symbols(
+            "// function commented() {}\nconst s = 'function inString() {}';\nfunction real() {}\n",
+            "js",
+            std::path::Path::new("test.js"),
+            &mut syms,
+        );
+        let names: Vec<String> = syms.iter().map(|s| s.name.clone()).collect();
+        assert!(names.contains(&"real".to_string()));
+        assert!(!names.contains(&"commented".to_string()));
+        assert!(!names.contains(&"inString".to_string()));
     }
 
     #[test]
