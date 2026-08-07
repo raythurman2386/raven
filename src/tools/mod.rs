@@ -97,9 +97,12 @@ fn summarize_todos(todos: &[TodoItem]) -> String {
 #[cfg(test)]
 mod tests {
     use super::patch::parse_unified_diff;
-    use super::sandbox::{dangerous_re, safe_command_re, truncate_output, wait_for_child};
+    #[cfg(unix)]
+    use super::sandbox::wait_for_child;
+    use super::sandbox::{dangerous_re, safe_command_re, truncate_output};
     use super::*;
     use std::io::Write;
+    #[cfg(unix)]
     use std::process::Command;
 
     fn sandbox() -> Sandbox {
@@ -140,7 +143,9 @@ mod tests {
     #[test]
     fn safe_resolve_blocks_symlink_escape_write() {
         let tmp = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
         let outside = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
         let ws = tmp.path().canonicalize().unwrap();
         #[cfg(unix)]
         {
@@ -156,13 +161,17 @@ mod tests {
                 "file must not be written outside the workspace"
             );
         }
+        let _ = tmp;
     }
 
     #[test]
     fn safe_resolve_blocks_symlink_escape_read() {
         let tmp = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
         let outside = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
         std::fs::write(outside.path().join("secret.txt"), "top secret").unwrap();
+        #[cfg(unix)]
         let ws = tmp.path().canonicalize().unwrap();
         #[cfg(unix)]
         {
@@ -174,6 +183,7 @@ mod tests {
                 "read through symlink should be rejected"
             );
         }
+        let _ = tmp;
     }
 
     #[test]
@@ -417,6 +427,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn run_shell_uses_clean_environment() {
         let tmp = tempfile::tempdir().unwrap();
         let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
@@ -440,6 +451,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn run_shell_passes_allowed_env_vars() {
         let tmp = tempfile::tempdir().unwrap();
         let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
@@ -661,6 +673,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn wait_for_child_times_out() {
         let mut child = Command::new("sh")
             .arg("-c")
@@ -683,6 +696,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn wait_for_child_completes() {
         let mut child = Command::new("sh")
             .arg("-c")
@@ -789,7 +803,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
         sb.run_shell(
-            "git init -q && git config user.email test@test && git config user.name test",
+            "git init -q && git config user.email test@test && git config user.name test && git config core.autocrlf false",
             20,
         )
         .unwrap();

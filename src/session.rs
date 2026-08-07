@@ -287,12 +287,14 @@ pub fn now_iso_public() -> String {
 
 /// Generate a collision-proof session ID by appending the process ID and a
 /// monotonic counter suffix to the ISO timestamp
-/// (e.g. `2026-08-06T00:06:18-12345-0001`).
+/// (e.g. `2026-08-06T00-06-18-12345-0001`). Colons are replaced with hyphens
+/// so the ID is safe to use as a filename on Windows.
 fn generate_session_id(iso: &str) -> String {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let pid = std::process::id();
-    format!("{iso}-{pid}-{n:04x}")
+    let safe_iso = iso.replace(':', "-");
+    format!("{safe_iso}-{pid}-{n:04x}")
 }
 
 /// Generate an ISO 8601 timestamp string (UTC, second precision).
@@ -490,14 +492,18 @@ mod tests {
     #[test]
     fn generate_session_id_is_unique() {
         let base = "2026-08-06T00:06:18";
+        let safe_base = "2026-08-06T00-06-18";
         let ids: Vec<String> = (0..100).map(|_| generate_session_id(base)).collect();
         let mut dedup = ids.clone();
         dedup.sort();
         dedup.dedup();
         assert_eq!(ids.len(), dedup.len(), "all 100 IDs must be unique");
         for id in &ids {
-            assert!(id.starts_with(base), "ID must start with timestamp: {id}");
-            let suffix = id.strip_prefix(&format!("{base}-")).unwrap();
+            assert!(
+                id.starts_with(safe_base),
+                "ID must start with timestamp: {id}"
+            );
+            let suffix = id.strip_prefix(&format!("{safe_base}-")).unwrap();
             let (pid_str, counter_str) = suffix.split_once('-').unwrap();
             let pid: u32 = pid_str.parse().unwrap();
             assert!(pid > 0, "PID must be non-zero: {id}");
@@ -509,7 +515,7 @@ mod tests {
     #[test]
     fn generate_session_id_includes_pid() {
         let id = generate_session_id("2026-08-06T00:06:18");
-        let suffix = id.strip_prefix("2026-08-06T00:06:18-").unwrap();
+        let suffix = id.strip_prefix("2026-08-06T00-06-18-").unwrap();
         let (pid_str, _counter_str) = suffix.split_once('-').unwrap();
         let pid: u32 = pid_str.parse().unwrap();
         assert!(pid > 0, "PID must be non-zero: {id}");
@@ -518,14 +524,11 @@ mod tests {
     #[test]
     fn generate_session_id_different_pids_produce_different_ids() {
         let base = "2026-08-06T00:06:18";
+        let safe_base = "2026-08-06T00-06-18";
         let id1 = generate_session_id(base);
-        // Simulate a different PID by constructing an ID with a different PID
-        // and the same counter. The real PID is always the same in one process,
-        // so we verify the format includes a PID component that would differ
-        // across processes.
-        let suffix1 = id1.strip_prefix(&format!("{base}-")).unwrap();
+        let suffix1 = id1.strip_prefix(&format!("{safe_base}-")).unwrap();
         let (_pid1, counter1) = suffix1.split_once('-').unwrap();
-        let simulated = format!("{base}-99999-{counter1}");
+        let simulated = format!("{safe_base}-99999-{counter1}");
         assert_ne!(id1, simulated, "different PID must produce different ID");
     }
 
