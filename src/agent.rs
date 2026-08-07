@@ -1271,14 +1271,36 @@ pub async fn run_parallel(settings: &Settings, tasks: Vec<String>) -> Result<Vec
     results.sort_by_key(|r| r.index);
 
     if is_git {
-        for (_i, branch_name, sandbox) in &branches_to_merge {
-            match sandbox.merge_branch(branch_name) {
-                Ok(_) => tracing::info!("merged branch {} into main", branch_name),
-                Err(e) => tracing::warn!("failed to merge branch {}: {}", branch_name, e),
+        let mut conflicted: Vec<(usize, String)> = Vec::new();
+        for (i, branch_name, sandbox) in &branches_to_merge {
+            let _ = sandbox.merge_branch(branch_name);
+            if sandbox.has_merge_conflicts().unwrap_or(false) {
+                let _ = sandbox.abort_merge();
+                conflicted.push((*i, branch_name.clone()));
+                tracing::warn!(
+                    "merge conflict for sub-agent {} (branch {}), merge aborted",
+                    i,
+                    branch_name
+                );
+            } else {
+                tracing::info!("merged branch {} into main", branch_name);
             }
         }
         for (_i, branch_name, sandbox) in &branches_to_merge {
             let _ = sandbox.delete_branch(branch_name);
+        }
+        if !conflicted.is_empty() {
+            let names: Vec<String> = conflicted
+                .iter()
+                .map(|(i, b)| format!("sub-agent {} (branch {})", i, b))
+                .collect();
+            anyhow::bail!(
+                "merge conflicts detected for {} sub-agent(s): {}. \
+                 The working tree has been restored to its pre-merge state. \
+                 To avoid conflicts, assign disjoint files to each sub-agent.",
+                conflicted.len(),
+                names.join(", ")
+            );
         }
     }
 

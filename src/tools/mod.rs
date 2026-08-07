@@ -1056,6 +1056,86 @@ mod tests {
     }
 
     #[test]
+    fn merge_conflict_detection_after_conflicting_edits() {
+        let (_tmp, sb) = git_sandbox();
+        sb.write_file("shared.txt", "line1\nline2\nline3\n")
+            .unwrap();
+        sb.git_commit("initial").unwrap();
+
+        let wt_dir = tempfile::tempdir().unwrap();
+        let wt_path_a = wt_dir.path().join("sub-a");
+        let wt_path_b = wt_dir.path().join("sub-b");
+
+        sb.create_worktree("raven-sub-a", &wt_path_a).unwrap();
+        sb.create_worktree("raven-sub-b", &wt_path_b).unwrap();
+
+        let sb_a = Sandbox::new(wt_path_a);
+        let sb_b = Sandbox::new(wt_path_b);
+
+        sb_a.search_replace("shared.txt", "line2\n", "line2-a\n", false)
+            .unwrap();
+        sb_a.git_commit("sub-a: modify line2").unwrap();
+
+        sb_b.search_replace("shared.txt", "line2\n", "line2-b\n", false)
+            .unwrap();
+        sb_b.git_commit("sub-b: modify line2").unwrap();
+
+        sb.merge_branch("raven-sub-a").unwrap();
+        assert!(!sb.has_merge_conflicts().unwrap());
+
+        let _ = sb.merge_branch("raven-sub-b");
+        assert!(sb.has_merge_conflicts().unwrap());
+
+        sb.abort_merge().unwrap();
+        assert!(!sb.has_merge_conflicts().unwrap());
+
+        sb.delete_branch("raven-sub-a").unwrap();
+        sb.delete_branch("raven-sub-b").unwrap();
+    }
+
+    #[test]
+    fn abort_merge_restores_clean_working_tree() {
+        let (_tmp, sb) = git_sandbox();
+        sb.write_file("shared.txt", "line1\nline2\nline3\n")
+            .unwrap();
+        sb.git_commit("initial").unwrap();
+
+        let wt_dir = tempfile::tempdir().unwrap();
+        let wt_path_a = wt_dir.path().join("sub-a");
+        let wt_path_b = wt_dir.path().join("sub-b");
+
+        sb.create_worktree("raven-sub-a", &wt_path_a).unwrap();
+        sb.create_worktree("raven-sub-b", &wt_path_b).unwrap();
+
+        let sb_a = Sandbox::new(wt_path_a);
+        let sb_b = Sandbox::new(wt_path_b);
+
+        sb_a.search_replace("shared.txt", "line2\n", "line2-a\n", false)
+            .unwrap();
+        sb_a.git_commit("sub-a: modify line2").unwrap();
+
+        sb_b.search_replace("shared.txt", "line2\n", "line2-b\n", false)
+            .unwrap();
+        sb_b.git_commit("sub-b: modify line2").unwrap();
+
+        sb.merge_branch("raven-sub-a").unwrap();
+        let _ = sb.merge_branch("raven-sub-b");
+        assert!(sb.has_merge_conflicts().unwrap());
+
+        sb.abort_merge().unwrap();
+        assert!(!sb.has_merge_conflicts().unwrap());
+
+        let content = sb.read_file("shared.txt", 1, 10).unwrap();
+        assert!(content.contains("line2-a"));
+        assert!(!content.contains("<<<<<<<"));
+        assert!(!content.contains("======="));
+        assert!(!content.contains(">>>>>>>"));
+
+        sb.delete_branch("raven-sub-a").unwrap();
+        sb.delete_branch("raven-sub-b").unwrap();
+    }
+
+    #[test]
     fn run_lint_no_project_returns_message() {
         let tmp = tempfile::tempdir().unwrap();
         let sb = Sandbox::new(tmp.path().canonicalize().unwrap());

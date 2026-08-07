@@ -98,6 +98,17 @@ impl Sandbox {
         self.run_git(&["merge", branch_name, "--no-edit"])
     }
 
+    /// Check whether the working tree has unresolved merge conflicts.
+    pub fn has_merge_conflicts(&self) -> Result<bool> {
+        let status = self.run_git(&["status", "--porcelain=v1"])?;
+        Ok(status.lines().any(|l| l.starts_with("UU ")))
+    }
+
+    /// Abort an in-progress merge and return to the pre-merge state.
+    pub fn abort_merge(&self) -> Result<String> {
+        self.run_git(&["merge", "--abort"])
+    }
+
     /// Remove a git worktree, even if it has uncommitted changes.
     pub fn remove_worktree(&self, worktree_path: &std::path::Path) -> Result<()> {
         let path_str = worktree_path.to_string_lossy();
