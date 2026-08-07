@@ -803,7 +803,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
         sb.run_shell(
-            "git init -q && git config user.email test@test && git config user.name test",
+            "git init -q && git config user.email test@test && git config user.name test && git config core.autocrlf false",
             20,
         )
         .unwrap();
