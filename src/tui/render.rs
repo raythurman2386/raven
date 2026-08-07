@@ -131,6 +131,87 @@ pub fn prewrap_lines(lines: &[Line<'static>], width: usize) -> Vec<Line<'static>
     out
 }
 
+/// Number of wrapped rows a single logical line occupies at `width` columns.
+/// Matches `prewrap_lines` semantics (char-count based, `\n` forces a break).
+fn wrapped_row_count(text: &str, width: usize) -> usize {
+    let w = width.max(1);
+    if text.is_empty() {
+        return 1;
+    }
+    let mut rows = 0usize;
+    for seg in text.split('\n') {
+        if seg.is_empty() {
+            rows += 1;
+        } else {
+            rows += seg.chars().count().div_ceil(w);
+        }
+    }
+    rows
+}
+
+/// Pre-wrap only the *visible window* of `lines`, given a scroll offset (in
+/// display rows) and a viewport height. Returns the visible pre-wrapped lines
+/// and the number of rows scrolled past (the `Paragraph::scroll` offset).
+///
+/// This is the virtualization win: instead of pre-wrapping the whole history
+/// every frame, we walk the logical lines accumulating wrapped-row counts
+/// until we reach the scroll offset, then pre-wrap only the visible slice.
+/// The walk is O(lines-before-scroll) but cheap (row counting, no allocation);
+/// the pre-wrap itself is O(viewport).
+pub fn prewrap_visible(
+    lines: &[Line<'static>],
+    width: usize,
+    scroll: usize,
+    viewport_h: usize,
+) -> (Vec<Line<'static>>, u16) {
+    if lines.is_empty() || viewport_h == 0 {
+        return (Vec::new(), 0);
+    }
+    // Total wrapped rows across all lines.
+    let total_rows: usize = lines
+        .iter()
+        .map(|l| {
+            let text: String = l.spans.iter().map(|s| s.content.as_ref()).collect();
+            wrapped_row_count(&text, width)
+        })
+        .sum();
+    let max_scroll = total_rows.saturating_sub(viewport_h);
+    let scroll_eff = scroll.min(max_scroll);
+    // The Paragraph scroll offset is inverted: 0 = top, max_scroll = bottom.
+    let offset = max_scroll.saturating_sub(scroll_eff);
+
+    // Walk logical lines, skipping `offset` wrapped rows, collecting up to
+    // `viewport_h` wrapped rows.
+    let mut out = Vec::with_capacity(viewport_h);
+    let mut rows_skipped = 0usize;
+    let mut collecting = false;
+    for line in lines {
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        let n = wrapped_row_count(&text, width);
+        if !collecting {
+            if rows_skipped + n <= offset {
+                rows_skipped += n;
+                continue;
+            }
+            collecting = true;
+        }
+        // Pre-wrap this line, but only keep the rows that fall in the window.
+        let wrapped = prewrap_lines(std::slice::from_ref(line), width);
+        let start_row = offset.saturating_sub(rows_skipped);
+        rows_skipped += n;
+        for row in wrapped.into_iter().skip(start_row) {
+            if out.len() >= viewport_h {
+                break;
+            }
+            out.push(row);
+        }
+        if out.len() >= viewport_h {
+            break;
+        }
+    }
+    (out, offset as u16)
+}
+
 /// Convert a persisted chat message into a log entry for display.
 pub fn message_to_log_entry(msg: &ChatMessage) -> Option<LogEntry> {
     match msg.role.as_str() {
@@ -159,5 +240,64 @@ pub fn message_to_log_entry(msg: &ChatMessage) -> Option<LogEntry> {
         }),
         "system" => msg.content.as_ref().map(|c| LogEntry::system(c.clone())),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mk(texts: &[&str]) -> Vec<Line<'static>> {
+        texts
+            .iter()
+            .map(|t| Line::from(Span::styled(t.to_string(), Style::default())))
+            .collect()
+    }
+
+    #[test]
+    fn prewrap_visible_bottom_shows_tail() {
+        let lines = mk(&["aaaa", "bbbb", "cccc"]);
+        // viewport 2 rows, scroll 0 → bottom (auto-follow), offset = max_scroll = 1
+        let (visible, offset) = prewrap_visible(&lines, 10, 0, 2);
+        assert_eq!(offset, 1);
+        let text: Vec<String> = visible.iter().map(|l| l.to_string()).collect();
+        assert_eq!(text, vec!["bbbb", "cccc"]);
+    }
+
+    #[test]
+    fn prewrap_visible_scrolled_to_top_shows_head() {
+        let lines = mk(&["aaaa", "bbbb", "cccc"]);
+        // viewport 2 rows, scroll 1 → top, offset 0
+        let (visible, offset) = prewrap_visible(&lines, 10, 1, 2);
+        assert_eq!(offset, 0);
+        let text: Vec<String> = visible.iter().map(|l| l.to_string()).collect();
+        assert_eq!(text, vec!["aaaa", "bbbb"]);
+    }
+
+    #[test]
+    fn prewrap_visible_wraps_long_lines() {
+        let lines = mk(&["abcdefghijklmnop"]);
+        // width 5 → 4 wrapped rows; viewport 2, scroll 0 → bottom, offset 2
+        let (visible, offset) = prewrap_visible(&lines, 5, 0, 2);
+        assert_eq!(offset, 2);
+        let text: Vec<String> = visible.iter().map(|l| l.to_string()).collect();
+        assert_eq!(text, vec!["klmno", "p"]);
+    }
+
+    #[test]
+    fn prewrap_visible_scroll_clamped_to_top() {
+        let lines = mk(&["aaaa", "bbbb", "cccc"]);
+        // scroll way past the end → clamp to max_scroll (1), offset = 0 (top)
+        let (visible, offset) = prewrap_visible(&lines, 10, 99, 2);
+        assert_eq!(offset, 0);
+        let text: Vec<String> = visible.iter().map(|l| l.to_string()).collect();
+        assert_eq!(text, vec!["aaaa", "bbbb"]);
+    }
+
+    #[test]
+    fn prewrap_visible_empty() {
+        let (visible, offset) = prewrap_visible(&[], 10, 0, 5);
+        assert!(visible.is_empty());
+        assert_eq!(offset, 0);
     }
 }

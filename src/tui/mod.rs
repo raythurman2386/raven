@@ -52,7 +52,7 @@ mod selection;
 mod status;
 
 use blocks::{AssistantBlock, BlockKind, ErrorBlock, SystemBlock, ToolBlock, UserBlock};
-use render::{message_to_log_entry, prewrap_lines, render_assistant_lines, render_blocks};
+use render::{message_to_log_entry, prewrap_visible, render_assistant_lines, render_blocks};
 use selection::{
     apply_selection_highlight, copy_to_clipboard, selection_text, word_bounds, DisplayPos,
     Selection,
@@ -788,12 +788,15 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState)
 
     // Log
     let content_width = (chunks[1].width.saturating_sub(4)) as usize;
-    let display_lines = prewrap_lines(&state.cached_log_lines, content_width.max(1));
-
     let log_h = chunks[1].height.saturating_sub(2) as usize;
-    let max_scroll = display_lines.len().saturating_sub(log_h);
-    let scroll_eff = (state.scroll as usize).min(max_scroll);
-    let offset = max_scroll.saturating_sub(scroll_eff) as u16;
+    // Virtualized: pre-wrap only the visible window of the log, not the whole
+    // history. `prewrap_visible` returns the visible lines + the scroll offset.
+    let (display_lines, offset) = prewrap_visible(
+        &state.cached_log_lines,
+        content_width.max(1),
+        state.scroll as usize,
+        log_h,
+    );
 
     // Apply selection highlight to the visible display lines.
     let display_lines = apply_selection_highlight(display_lines, state.selection);
@@ -1023,12 +1026,13 @@ fn mouse_to_display_pos(m: &MouseEvent, log_rect: Rect) -> Option<DisplayPos> {
 /// draw path so hit-testing agrees.
 fn current_display(state: &TuiState, log_rect: Rect) -> (Vec<Line<'static>>, u16) {
     let content_width = (log_rect.width.saturating_sub(4)) as usize;
-    let display_lines = prewrap_lines(&state.cached_log_lines, content_width.max(1));
     let log_h = log_rect.height.saturating_sub(2) as usize;
-    let max_scroll = display_lines.len().saturating_sub(log_h);
-    let scroll_eff = (state.scroll as usize).min(max_scroll);
-    let offset = max_scroll.saturating_sub(scroll_eff) as u16;
-    (display_lines, offset)
+    prewrap_visible(
+        &state.cached_log_lines,
+        content_width.max(1),
+        state.scroll as usize,
+        log_h,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1345,6 +1349,7 @@ fn dispatch_slash_command(
 mod tests {
     use super::*;
     use crate::plan::AgentState;
+    use render::prewrap_lines;
 
     #[test]
     fn cycle_mode_clears_stuck_pending_approval_when_leaving_plan() {
