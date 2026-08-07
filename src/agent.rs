@@ -715,6 +715,7 @@ impl Agent {
                     edited = true;
                     edited_any = true;
                     self.repo_map_stale = true;
+                    self.tool_cache.clear();
                 }
 
                 // Track verification: the model dispatched run_tests this turn.
