@@ -567,6 +567,7 @@ impl Sandbox {
         let mut child = Command::new(cmd)
             .args(&args)
             .current_dir(&self.workspace)
+            .env("CI", "true")
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
