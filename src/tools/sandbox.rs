@@ -592,12 +592,29 @@ impl Sandbox {
     /// Whether the workspace has a detectable test runner (Cargo, npm, or
     /// pytest). Mirrors the detection in [`Self::run_tests`]. Used by the
     /// enforced-verify gate to skip when there is nothing to run.
+    ///
+    /// For npm projects, also requires `node_modules` to exist so the gate
+    /// doesn't loop on scaffolding tasks where deps aren't installed yet.
+    /// For Python projects, checks that `pytest` is on PATH.
     pub fn has_test_runner(&self) -> bool {
-        self.workspace.join("Cargo.toml").exists()
-            || self.workspace.join("package.json").exists()
-            || self.workspace.join("pytest.ini").exists()
+        if self.workspace.join("Cargo.toml").exists() {
+            return true;
+        }
+        if self.workspace.join("package.json").exists() {
+            return self.workspace.join("node_modules").is_dir();
+        }
+        if self.workspace.join("pytest.ini").exists()
             || self.workspace.join("pyproject.toml").exists()
             || self.workspace.join("setup.py").exists()
+        {
+            return std::process::Command::new("pytest")
+                .arg("--version")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok();
+        }
+        false
     }
 
     /// Whether a shell command is a test, typecheck, or lint invocation.

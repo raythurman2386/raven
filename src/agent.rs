@@ -1828,6 +1828,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn verify_gates_when_package_json_and_node_modules_exist() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("package.json"),
+            "{\"name\":\"x\",\"scripts\":{\"test\":\"vitest\"}}",
+        )
+        .unwrap();
+        std::fs::create_dir(tmp.path().join("node_modules")).unwrap();
+        let edit_round = concat!(
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"write_file\",\"arguments\":\"{\\\"path\\\":\\\"a.ts\\\",\\\"content\\\":\\\"export const x = 1;\\\"}\"}}]}}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+        let text_round = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let (base, _h) = spawn_mock(vec![
+            edit_round, text_round, text_round, text_round, text_round,
+        ])
+        .await;
+        let mut s = settings_for(tmp.path(), &base);
+        s.verify = true;
+        let mut agent = Agent::new(s).unwrap();
+        let (tx, mut rx) = mpsc::channel(256);
+        agent.run("edit a.ts", tx).await.unwrap();
+        let mut events = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            events.push(ev);
+        }
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::VerifyRequired)));
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::Done)));
+    }
+
+    #[tokio::test]
+    async fn verify_skips_when_package_json_but_no_node_modules() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("package.json"),
+            "{\"name\":\"x\",\"scripts\":{\"test\":\"vitest\"}}",
+        )
+        .unwrap();
+        let edit_round = concat!(
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"write_file\",\"arguments\":\"{\\\"path\\\":\\\"a.ts\\\",\\\"content\\\":\\\"export const x = 1;\\\"}\"}}]}}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+        let text_round = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let (base, _h) = spawn_mock(vec![edit_round, text_round]).await;
+        let mut s = settings_for(tmp.path(), &base);
+        s.verify = true;
+        let mut agent = Agent::new(s).unwrap();
+        let (tx, mut rx) = mpsc::channel(256);
+        agent.run("edit a.ts", tx).await.unwrap();
+        let mut events = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            events.push(ev);
+        }
+        assert!(!events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::VerifyRequired)));
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::Done)));
+    }
+
+    #[tokio::test]
     async fn verify_passes_when_run_shell_runs_test_command() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(
