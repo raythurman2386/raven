@@ -752,9 +752,33 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
 
 /// Compute the vertical chunk layout for the TUI. Shared by `draw_ui` and the
 /// mouse handler so hit-testing agrees with what was actually rendered.
+/// Whether the plan panel should be visible. It shows while a plan is pending
+/// approval *and* while the agent is executing a plan, so the live
+/// `[ ]` → `[~]` → `[x]` step updates are visible as the agent works through
+/// the task list.
+fn show_plan(state: &TuiState) -> bool {
+    !state.plan_preview.is_empty() && (state.plan_pending || state.running)
+}
+
+/// Count completed vs total plan steps for the status-strip progress readout.
+/// A step counts as done when `Completed` or `Skipped`.
+fn plan_step_progress(plan: &crate::plan::Plan) -> (usize, usize) {
+    let total = plan.steps.len();
+    let done = plan
+        .steps
+        .iter()
+        .filter(|s| {
+            matches!(
+                s.status,
+                crate::plan::PlanStepStatus::Completed | crate::plan::PlanStepStatus::Skipped
+            )
+        })
+        .count();
+    (done, total)
+}
+
 fn compute_layout(area: Rect, state: &TuiState) -> Vec<Rect> {
-    let show_plan = state.plan_pending && !state.plan_preview.is_empty();
-    let plan_h = if show_plan {
+    let plan_h = if show_plan(state) {
         (state.plan_preview.len().saturating_add(2) as u16).clamp(3, 10)
     } else {
         0
@@ -781,7 +805,7 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState)
     };
     let (state_txt, state_color) = state_label(&state.agent_state, &state.status);
 
-    let show_plan = state.plan_pending && !state.plan_preview.is_empty();
+    let show_plan = show_plan(state);
     let plan_h = if show_plan {
         (state.plan_preview.len().saturating_add(2) as u16).clamp(3, 10)
     } else {
@@ -875,6 +899,16 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState)
             Style::default().fg(Theme::DIM),
         ),
     ];
+    // Plan step progress: "N/M steps" while a plan is active.
+    if let Some(plan) = &state.active_plan {
+        let (done, total) = plan_step_progress(plan);
+        if total > 0 {
+            status_line.push(Span::styled(
+                format!("  {done}/{total} steps"),
+                Style::default().fg(Theme::PLAN),
+            ));
+        }
+    }
     if let Some(tool) = &state.live_tool {
         status_line.push(Span::styled(
             format!(" {} {}", spinner_frame(state.tick), tool),
@@ -1231,7 +1265,8 @@ fn handle_plan_response(
     );
 
     state.plan_pending = false;
-    state.plan_preview.clear();
+    // Keep the plan preview visible during execution so the live step updates
+    // (`[ ]` → `[~]` → `[x]`) are shown as the agent works through the list.
     state.running = true;
     state.push_user(text.to_string());
     state.log_dirty = true;
@@ -1382,7 +1417,6 @@ mod tests {
     use super::*;
     use crate::plan::AgentState;
     use render::prewrap_lines;
-
     #[test]
     fn cycle_mode_clears_stuck_pending_approval_when_leaving_plan() {
         let mut state = TuiState {
@@ -1758,5 +1792,59 @@ mod tests {
             last_click: None,
             copy_status: None,
         }
+    }
+
+    #[test]
+    fn show_plan_visible_while_pending() {
+        let mut state = dummy_state();
+        state.plan_pending = true;
+        state.plan_preview = vec!["1. Do X".into()];
+        assert!(show_plan(&state));
+    }
+
+    #[test]
+    fn show_plan_visible_while_running() {
+        let mut state = dummy_state();
+        state.running = true;
+        state.plan_preview = vec!["1. Do X".into()];
+        assert!(show_plan(&state));
+    }
+
+    #[test]
+    fn show_plan_hidden_when_no_preview() {
+        let mut state = dummy_state();
+        state.running = true;
+        state.plan_preview.clear();
+        assert!(!show_plan(&state));
+    }
+
+    #[test]
+    fn plan_step_progress_counts_completed() {
+        use crate::plan::{Plan, PlanStep, PlanStepStatus};
+        let plan = Plan {
+            title: "t".into(),
+            created_at: "now".into(),
+            steps: vec![
+                PlanStep {
+                    description: "a".into(),
+                    status: PlanStepStatus::Completed,
+                },
+                PlanStep {
+                    description: "b".into(),
+                    status: PlanStepStatus::InProgress,
+                },
+                PlanStep {
+                    description: "c".into(),
+                    status: PlanStepStatus::Pending,
+                },
+                PlanStep {
+                    description: "d".into(),
+                    status: PlanStepStatus::Skipped,
+                },
+            ],
+        };
+        let (done, total) = plan_step_progress(&plan);
+        assert_eq!(done, 2);
+        assert_eq!(total, 4);
     }
 }
