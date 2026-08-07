@@ -47,7 +47,6 @@ impl BlockKind {
             super::LogKind::Assistant => BlockKind::Assistant(AssistantBlock::new(text)),
             super::LogKind::Tool => BlockKind::Tool(ToolBlock::new(text)),
             super::LogKind::System => BlockKind::System(SystemBlock::new(text)),
-            super::LogKind::Error => BlockKind::Error(ErrorBlock::new(text)),
         }
     }
 }
@@ -83,6 +82,10 @@ pub struct UserBlock {
 impl UserBlock {
     pub fn new(text: String) -> Self {
         Self { text }
+    }
+
+    pub fn text(&self) -> &str {
+        &self.text
     }
 }
 
@@ -191,6 +194,10 @@ impl ToolBlock {
             end_tick: None,
         }
     }
+
+    pub fn text(&self) -> &str {
+        &self.text
+    }
 }
 
 impl ChatBlock for ToolBlock {
@@ -232,6 +239,10 @@ impl SystemBlock {
     pub fn new(text: String) -> Self {
         Self { text }
     }
+
+    pub fn text(&self) -> &str {
+        &self.text
+    }
 }
 
 impl ChatBlock for SystemBlock {
@@ -262,6 +273,10 @@ pub struct ErrorBlock {
 impl ErrorBlock {
     pub fn new(text: String) -> Self {
         Self { text }
+    }
+
+    pub fn text(&self) -> &str {
+        &self.text
     }
 }
 

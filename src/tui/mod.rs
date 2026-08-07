@@ -51,7 +51,8 @@ mod render;
 mod selection;
 mod status;
 
-use render::{message_to_log_entry, prewrap_lines, render_assistant_lines, render_log_lines};
+use blocks::{AssistantBlock, BlockKind, ErrorBlock, SystemBlock, ToolBlock, UserBlock};
+use render::{message_to_log_entry, prewrap_lines, render_assistant_lines, render_blocks};
 use selection::{
     apply_selection_highlight, copy_to_clipboard, selection_text, word_bounds, DisplayPos,
     Selection,
@@ -86,7 +87,6 @@ enum LogKind {
     Assistant,
     Tool,
     System,
-    Error,
 }
 
 #[derive(Clone)]
@@ -120,18 +120,12 @@ impl LogEntry {
             text: s.into(),
         }
     }
-    fn error(s: impl Into<String>) -> Self {
-        Self {
-            kind: LogKind::Error,
-            text: s.into(),
-        }
-    }
 }
 
 // ── TUI state ────────────────────────────────────────────────────────────
 
 struct TuiState {
-    log: Vec<LogEntry>,
+    blocks: Vec<BlockKind>,
     log_dirty: bool,
     cached_log_lines: Vec<Line<'static>>,
     last_assistant_lines: usize,
@@ -165,21 +159,24 @@ struct TuiState {
 impl TuiState {
     fn new(settings: &Settings, app_name: &str, compact_at: usize) -> Self {
         Self {
-            log: vec![
-                LogEntry::system(format!(
+            blocks: vec![
+                BlockKind::System(SystemBlock::new(format!(
                     "{app_name} · {} · {}",
                     settings.model, settings.base_url
-                )),
-                LogEntry::system(format!("workspace {}", settings.workspace.display())),
-                LogEntry::system(format!(
+                ))),
+                BlockKind::System(SystemBlock::new(format!(
+                    "workspace {}",
+                    settings.workspace.display()
+                ))),
+                BlockKind::System(SystemBlock::new(format!(
                     "context {} · compact ~{}",
                     fmt_tokens(settings.context_window as u64),
                     fmt_tokens(compact_at as u64),
+                ))),
+                BlockKind::System(SystemBlock::new(String::new())),
+                BlockKind::System(SystemBlock::new(
+                    "enter submit · /help · /model · /new · shift+tab mode · ctrl+c quit · wheel/pgup scroll".to_string(),
                 )),
-                LogEntry::system(String::new()),
-                LogEntry::system(
-                    "enter submit · /help · /model · /new · shift+tab mode · ctrl+c quit · wheel/pgup scroll",
-                ),
             ],
             log_dirty: true,
             cached_log_lines: Vec::new(),
@@ -227,6 +224,36 @@ impl TuiState {
         }
         self.mode
     }
+
+    fn push_user(&mut self, text: impl Into<String>) {
+        self.blocks
+            .push(BlockKind::User(UserBlock::new(text.into())));
+        self.log_dirty = true;
+    }
+
+    fn push_assistant(&mut self, text: impl Into<String>) {
+        self.blocks
+            .push(BlockKind::Assistant(AssistantBlock::new(text.into())));
+        self.log_dirty = true;
+    }
+
+    fn push_tool(&mut self, text: impl Into<String>) {
+        self.blocks
+            .push(BlockKind::Tool(ToolBlock::new(text.into())));
+        self.log_dirty = true;
+    }
+
+    fn push_system(&mut self, text: impl Into<String>) {
+        self.blocks
+            .push(BlockKind::System(SystemBlock::new(text.into())));
+        self.log_dirty = true;
+    }
+
+    fn push_error(&mut self, text: impl Into<String>) {
+        self.blocks
+            .push(BlockKind::Error(ErrorBlock::new(text.into())));
+        self.log_dirty = true;
+    }
 }
 
 // ── Main TUI ─────────────────────────────────────────────────────────────
@@ -257,23 +284,25 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
 
     let store = SessionStore::for_workspace(&settings.workspace)?;
     let mut session = if let Some(s) = resume_session {
-        state.log.push(LogEntry::system(format!(
+        state.push_system(format!(
             "resumed session {} ({} messages)",
             s.summary.id,
             s.messages.len()
-        )));
+        ));
         state.log_dirty = true;
         state.session_messages = s.messages.clone();
         state.messages_dirty = true;
         for msg in &s.messages {
             if let Some(entry) = message_to_log_entry(msg) {
-                state.log.push(entry);
+                state
+                    .blocks
+                    .push(BlockKind::from_kind(entry.kind, entry.text));
             }
         }
-        state.log.push(LogEntry::system(String::new()));
-        state.log.push(LogEntry::system(
+        state.push_system(String::new());
+        state.push_system(
             "resumed · enter submit · /help · /model · /new · shift+tab mode · ctrl+c quit · wheel/pgup scroll",
-        ));
+        );
         state.log_dirty = true;
         s
     } else {
@@ -283,25 +312,27 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
     let (tx, mut rx) = mpsc::channel::<AgentEvent>(128);
 
     loop {
-        if state.log.len() > MAX_LOG_ENTRIES {
-            let drop = state.log.len() - MAX_LOG_ENTRIES;
-            state.log.drain(..drop);
+        if state.blocks.len() > MAX_LOG_ENTRIES {
+            let drop = state.blocks.len() - MAX_LOG_ENTRIES;
+            state.blocks.drain(..drop);
             state.log_dirty = true;
         }
 
         if state.log_dirty {
-            let (rendered, tail) = render_log_lines(&state.log);
+            let (rendered, tail) = render_blocks(&state.blocks);
             state.cached_log_lines = rendered;
             state.last_assistant_lines = tail;
             state.log_dirty = false;
             state.stream_patch = false;
         } else if state.stream_patch {
             let tail_text = state
-                .log
+                .blocks
                 .iter()
                 .rev()
-                .find(|e| matches!(e.kind, LogKind::Assistant))
-                .map(|e| e.text.as_str())
+                .find_map(|b| match b {
+                    BlockKind::Assistant(a) => Some(a.text()),
+                    _ => None,
+                })
                 .unwrap_or("");
             let new_tail = render_assistant_lines(tail_text);
             let new_tail_len = new_tail.len();
@@ -348,9 +379,7 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                         }
                         KeyCode::BackTab => {
                             let m = state.cycle_mode();
-                            state
-                                .log
-                                .push(LogEntry::system(format!("mode: {}", m.label())));
+                            state.push_system(format!("mode: {}", m.label()));
                             state.log_dirty = true;
                         }
                         KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -358,19 +387,17 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                             let _ = store.update_summary(&mut session, None);
                             session = store.create(&settings.model)?;
                             state.session_messages.clear();
-                            state.log.clear();
-                            state.log.push(LogEntry::system(format!(
+                            state.blocks.clear();
+                            state.push_system(format!(
                                 "{app_name} · {} · {}",
                                 settings.model, settings.base_url
-                            )));
-                            state.log.push(LogEntry::system(format!(
-                                "workspace {}",
-                                settings.workspace.display()
-                            )));
-                            state.log.push(LogEntry::system(String::new()));
-                            state.log.push(LogEntry::system(
-                                "new session · enter submit · ctrl+n new · shift+tab mode · ctrl+c quit",
                             ));
+                            state
+                                .push_system(format!("workspace {}", settings.workspace.display()));
+                            state.push_system(String::new());
+                            state.push_system(
+                                "new session · enter submit · ctrl+n new · shift+tab mode · ctrl+c quit",
+                            );
                             state.log_dirty = true;
                             state.plan_preview.clear();
                             state.plan_pending = false;
@@ -445,9 +472,7 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                                 if let Some(handle) = state.task_handle.take() {
                                     handle.abort();
                                 }
-                                state
-                                    .log
-                                    .push(LogEntry::system("⏸ interrupted — redirecting…"));
+                                state.push_system("⏸ interrupted — redirecting…");
                                 state.log_dirty = true;
                                 start_task(
                                     &mut state,
@@ -499,17 +524,11 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
             match ev {
                 AgentEvent::TextDelta(t) => {
                     state.assistant_text.push_str(&t);
-                    if let Some(last) = state.log.last_mut() {
-                        if matches!(last.kind, LogKind::Assistant) {
-                            last.text.push_str(&t);
-                            state.stream_patch = true;
-                        } else {
-                            state.log.push(LogEntry::assistant(t));
-                            state.log_dirty = true;
-                        }
+                    if let Some(BlockKind::Assistant(a)) = state.blocks.last_mut() {
+                        a.push_chunk(&t);
+                        state.stream_patch = true;
                     } else {
-                        state.log.push(LogEntry::assistant(t));
-                        state.log_dirty = true;
+                        state.push_assistant(t);
                     }
                     if state.auto_scroll {
                         state.scroll = 0;
@@ -539,21 +558,19 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                     before_tokens,
                     after_tokens,
                 } => {
-                    state.log.push(LogEntry::system(format!(
+                    state.push_system(format!(
                         "⟳ compacted ~{before_tokens} → ~{after_tokens} tokens"
-                    )));
+                    ));
                     state.log_dirty = true;
                 }
                 AgentEvent::Retry { attempt, delay_ms } => {
-                    state.log.push(LogEntry::system(format!(
-                        "⟳ retry {attempt}/3 in {delay_ms}ms"
-                    )));
+                    state.push_system(format!("⟳ retry {attempt}/3 in {delay_ms}ms"));
                     state.log_dirty = true;
                 }
                 AgentEvent::VerifyRequired => {
-                    state.log.push(LogEntry::system(
+                    state.push_system(
                         "⟳ verify required — re-running to enforce run_tests".to_string(),
-                    ));
+                    );
                     state.log_dirty = true;
                 }
                 AgentEvent::PlanReady => {
@@ -573,10 +590,8 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                             .lines()
                             .map(|s| s.to_string())
                             .collect();
-                        state.log.push(LogEntry::system(String::new()));
-                        state
-                            .log
-                            .push(LogEntry::system("plan ready — auto-executing"));
+                        state.push_system(String::new());
+                        state.push_system("plan ready — auto-executing");
                         state.log_dirty = true;
 
                         state.running = true;
@@ -617,7 +632,7 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                         .collect();
                 }
                 AgentEvent::AskUser { question, reply } => {
-                    state.log.push(LogEntry::system(format!("❓ {question}")));
+                    state.push_system(format!("❓ {question}"));
                     state.log_dirty = true;
                     state.pending_question = Some(reply);
                     state.pending_question_text = Some(question);
@@ -642,10 +657,8 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                             .lines()
                             .map(|s| s.to_string())
                             .collect();
-                        state.log.push(LogEntry::system(String::new()));
-                        state
-                            .log
-                            .push(LogEntry::system("plan ready — approve or revise below"));
+                        state.push_system(String::new());
+                        state.push_system("plan ready — approve or revise below");
                         state.plan_pending = true;
                         state.agent_state = AgentState::AwaitingApproval;
                         state.status = "awaiting plan approval".into();
@@ -657,29 +670,29 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                     state.running = false;
                     state.assistant_text.clear();
                     if state.turn_tool_count > 0 {
-                        state.log.push(LogEntry::tool(format!(
+                        state.push_tool(format!(
                             "⇢ {} tool call{} this turn",
                             state.turn_tool_count,
                             if state.turn_tool_count == 1 { "" } else { "s" }
-                        )));
+                        ));
                     }
                     state.turn_tool_count = 0;
                     state.live_tool = None;
                     state.log_dirty = true;
                 }
                 AgentEvent::Error(e) => {
-                    state.log.push(LogEntry::error(e));
+                    state.push_error(e);
                     state.plan_preview.clear();
                     state.status = "ready".into();
                     state.agent_state = AgentState::Idle;
                     state.running = false;
                     state.assistant_text.clear();
                     if state.turn_tool_count > 0 {
-                        state.log.push(LogEntry::tool(format!(
+                        state.push_tool(format!(
                             "⇢ {} tool call{} this turn",
                             state.turn_tool_count,
                             if state.turn_tool_count == 1 { "" } else { "s" }
-                        )));
+                        ));
                     }
                     state.turn_tool_count = 0;
                     state.live_tool = None;
@@ -1050,7 +1063,7 @@ fn handle_mouse_event(
                     handle.abort();
                     let _ = store.save_all_messages(session, &state.session_messages);
                     let _ = store.update_summary(session, None);
-                    state.log.push(LogEntry::system("⏹ stopped (click)"));
+                    state.push_system("⏹ stopped (click)");
                     state.log_dirty = true;
                 }
                 state.running = false;
@@ -1136,7 +1149,7 @@ fn start_task(
 ) -> Result<()> {
     state.running = true;
     state.status = "running…".into();
-    state.log.push(LogEntry::user(text.to_string()));
+    state.push_user(text.to_string());
     state.log_dirty = true;
 
     let mut prompt = text.to_string();
@@ -1184,7 +1197,7 @@ fn handle_plan_response(
     state.plan_pending = false;
     state.plan_preview.clear();
     state.running = true;
-    state.log.push(LogEntry::user(text.to_string()));
+    state.push_user(text.to_string());
     state.log_dirty = true;
 
     let prompt = if approve {
@@ -1243,7 +1256,7 @@ fn dispatch_slash_command(
                 commands::command_help(&pc.args)
                     .unwrap_or_else(|| format!("Unknown command: /{}", pc.args))
             };
-            state.log.push(LogEntry::system(text));
+            state.push_system(text);
             state.log_dirty = true;
         }
         "new" => {
@@ -1251,19 +1264,14 @@ fn dispatch_slash_command(
             let _ = store.update_summary(session, None);
             *session = store.create(&settings.model)?;
             state.session_messages.clear();
-            state.log.clear();
-            state.log.push(LogEntry::system(format!(
+            state.blocks.clear();
+            state.push_system(format!(
                 "raven · {} · {}",
                 settings.model, settings.base_url
-            )));
-            state.log.push(LogEntry::system(format!(
-                "workspace {}",
-                settings.workspace.display()
-            )));
-            state.log.push(LogEntry::system(String::new()));
-            state.log.push(LogEntry::system(
-                "new session · enter submit · /model · /new · /help · /quit",
             ));
+            state.push_system(format!("workspace {}", settings.workspace.display()));
+            state.push_system(String::new());
+            state.push_system("new session · enter submit · /model · /new · /help · /quit");
             state.log_dirty = true;
             state.plan_preview.clear();
             state.plan_pending = false;
@@ -1273,7 +1281,7 @@ fn dispatch_slash_command(
             state.assistant_text.clear();
         }
         "clear" => {
-            state.log.clear();
+            state.blocks.clear();
             state.log_dirty = true;
         }
         "stop" => {
@@ -1281,12 +1289,10 @@ fn dispatch_slash_command(
                 handle.abort();
                 let _ = store.save_all_messages(session, &state.session_messages);
                 let _ = store.update_summary(session, None);
-                state
-                    .log
-                    .push(LogEntry::system("⏹ stopped (partial turn saved)"));
+                state.push_system("⏹ stopped (partial turn saved)");
                 state.log_dirty = true;
             } else {
-                state.log.push(LogEntry::system("nothing running to stop"));
+                state.push_system("nothing running to stop");
                 state.log_dirty = true;
             }
             state.running = false;
@@ -1298,21 +1304,21 @@ fn dispatch_slash_command(
         "model" => {
             let name = pc.args.trim();
             if name.is_empty() {
-                state.log.push(LogEntry::system(format!(
+                state.push_system(format!(
                     "current model: {}  (try /model <name>)",
                     settings.model
-                )));
+                ));
                 state.log_dirty = true;
             } else {
                 settings.model = name.to_string();
                 settings.context_window = crate::context::infer_context_window(&settings.model);
                 settings.max_tokens = Settings::derived_max_tokens(settings.context_window);
-                state.log.push(LogEntry::system(format!(
+                state.push_system(format!(
                     "model → {} · context {} · max_tokens {}",
                     settings.model,
                     crate::context::infer_context_window(&settings.model),
                     settings.max_tokens
-                )));
+                ));
                 state.log_dirty = true;
             }
         }
@@ -1322,18 +1328,13 @@ fn dispatch_slash_command(
         "undo" => {
             let sandbox = crate::tools::Sandbox::new(settings.workspace.clone());
             match sandbox.git_undo() {
-                Ok(out) => state.log.push(LogEntry::system(out)),
-                Err(e) => state
-                    .log
-                    .push(LogEntry::system(format!("undo failed: {e}"))),
+                Ok(out) => state.push_system(out),
+                Err(e) => state.push_system(format!("undo failed: {e}")),
             }
             state.log_dirty = true;
         }
         _ => {
-            state.log.push(LogEntry::system(format!(
-                "Unknown command: /{}  (try /help)",
-                pc.name
-            )));
+            state.push_system(format!("Unknown command: /{}  (try /help)", pc.name));
             state.log_dirty = true;
         }
     }
@@ -1690,7 +1691,7 @@ mod tests {
 
     fn dummy_state() -> TuiState {
         TuiState {
-            log: Vec::new(),
+            blocks: Vec::new(),
             log_dirty: false,
             cached_log_lines: Vec::new(),
             last_assistant_lines: 0,

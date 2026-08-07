@@ -9,25 +9,25 @@ use ratatui::text::{Line, Span};
 
 use crate::agent::ChatMessage;
 
-use super::{LogEntry, LogKind, Theme};
+use super::blocks::BlockKind;
+use super::{LogEntry, Theme};
 
-/// Render every log entry into display lines, returning the count of trailing
-/// lines owned by the *last* assistant entry (0 if the log ends on any other
-/// kind). That tail count lets the streaming path patch just the active
-/// assistant block instead of re-rendering the whole log per token.
-pub fn render_log_lines(log: &[LogEntry]) -> (Vec<Line<'static>>, usize) {
-    let mut lines = Vec::with_capacity(log.len().saturating_mul(2));
+/// Render every block into display lines, returning the count of trailing
+/// lines owned by the *last* assistant block (0 if the log ends on any other
+/// kind). Mirrors `render_log_lines` but operates on the block model.
+pub fn render_blocks(blocks: &[BlockKind]) -> (Vec<Line<'static>>, usize) {
+    let mut lines = Vec::with_capacity(blocks.len().saturating_mul(2));
     let mut last_assistant_start: Option<usize> = None;
-    for e in log {
-        match e.kind {
-            LogKind::User => {
+    for b in blocks {
+        match b {
+            BlockKind::User(u) => {
                 lines.push(Line::from(Span::styled(
                     "You",
                     Style::default()
                         .fg(Theme::USER)
                         .add_modifier(Modifier::BOLD),
                 )));
-                for part in e.text.lines() {
+                for part in u.text().lines() {
                     lines.push(Line::from(vec![
                         Span::styled("  ", Style::default()),
                         Span::styled(part.to_string(), Style::default().fg(Theme::FG)),
@@ -36,36 +36,36 @@ pub fn render_log_lines(log: &[LogEntry]) -> (Vec<Line<'static>>, usize) {
                 lines.push(Line::from(""));
                 last_assistant_start = None;
             }
-            LogKind::Assistant => {
+            BlockKind::Assistant(a) => {
                 last_assistant_start = Some(lines.len());
-                for part in e.text.lines() {
+                for part in a.text().lines() {
                     lines.push(Line::from(Span::styled(
                         part.to_string(),
                         Style::default().fg(Theme::FG),
                     )));
                 }
             }
-            LogKind::Tool => {
+            BlockKind::Tool(t) => {
                 lines.push(Line::from(Span::styled(
-                    e.text.clone(),
+                    t.text().to_string(),
                     Style::default().fg(Theme::TOOL),
                 )));
                 last_assistant_start = None;
             }
-            LogKind::System => {
-                if e.text.is_empty() {
+            BlockKind::System(s) => {
+                if s.text().is_empty() {
                     lines.push(Line::from(""));
                 } else {
                     lines.push(Line::from(Span::styled(
-                        e.text.clone(),
+                        s.text().to_string(),
                         Style::default().fg(Theme::SYSTEM),
                     )));
                 }
                 last_assistant_start = None;
             }
-            LogKind::Error => {
+            BlockKind::Error(e) => {
                 lines.push(Line::from(Span::styled(
-                    format!("✗ {}", e.text),
+                    format!("✗ {}", e.text()),
                     Style::default()
                         .fg(Theme::ERROR)
                         .add_modifier(Modifier::BOLD),
