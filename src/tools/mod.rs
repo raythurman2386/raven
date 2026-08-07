@@ -1119,4 +1119,78 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn is_verification_command_matches_test_commands() {
+        let tests = [
+            "cargo test",
+            "cargo test --lib",
+            "cargo clippy",
+            "cargo clippy --all-targets -- -D warnings",
+            "cargo fmt --check",
+            "npm test",
+            "npm run test",
+            "npm run typecheck",
+            "npm run lint",
+            "npx jest",
+            "npx vitest",
+            "npx mocha",
+            "npx tsc",
+            "yarn test",
+            "yarn typecheck",
+            "yarn lint",
+            "pnpm test",
+            "pnpm typecheck",
+            "pnpm lint",
+            "pytest",
+            "pytest -v",
+            "python -m pytest",
+            "python3 -m pytest",
+            "tsc",
+            "tsc --noEmit",
+            "eslint .",
+            "prettier --check .",
+            "ruff check",
+            "mypy src/",
+            "flake8 .",
+            "go test",
+            "go test ./...",
+            "make test",
+            "dotnet test",
+            "zig build test",
+            "deno test",
+            "bun test",
+        ];
+        for cmd in tests {
+            assert!(
+                Sandbox::is_verification_command(cmd),
+                "should be a verification command: {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn is_verification_command_rejects_non_test_commands() {
+        let non_tests = [
+            "cargo build",
+            "cargo run",
+            "npm install",
+            "npm start",
+            "ls -la",
+            "echo hello",
+            "git status",
+            "git commit -m 'msg'",
+            "curl http://example.com",
+            "node server.js",
+            "python script.py",
+            "mkdir foo",
+            "rm file.txt",
+        ];
+        for cmd in non_tests {
+            assert!(
+                !Sandbox::is_verification_command(cmd),
+                "should not be a verification command: {cmd}"
+            );
+        }
+    }
 }
