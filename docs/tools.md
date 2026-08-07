@@ -213,6 +213,8 @@ Stages all changes (`git add -A`) and creates a commit with the given message. R
 
 Parses and applies a unified diff patch to workspace files. Returns a summary of files changed.
 
+Before each file is patched, a safety backup is written to `<file>.bak` (e.g. `main.rs.bak`). These backups are ignored by git (`*.bak` in `.gitignore`) so they are never staged by `git_commit`; they exist purely as a manual safety net in the working tree.
+
 ### `run_tests`
 
 No parameters. Auto-detects the project test runner (`cargo test` for Rust, `npm test` for Node, `pytest` for Python) and runs it. Returns the test output.

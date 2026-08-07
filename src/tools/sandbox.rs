@@ -102,7 +102,7 @@ pub(crate) fn normalize_path(p: &Path) -> PathBuf {
 ///
 /// All tool methods resolve paths relative to `workspace` and reject any
 /// target that escapes it. `run_shell` additionally applies a best-effort
-/// denylist ([`dangerous_re`]) and strips secret environment variables.
+/// denylist (`dangerous_re`) and strips secret environment variables.
 ///
 /// The denylist is **not a security boundary** — it can always be bypassed.
 /// The `confirm_shell` setting (off with `--yolo`) provides the real safety
@@ -217,7 +217,7 @@ impl Sandbox {
     /// Lines longer than 2000 chars are truncated.
     ///
     /// Non-text documents (`.docx`, `.pdf`, `.xlsx`, `.odt`, `.epub`, ...) are
-    /// converted to Markdown via [`super::document`] so the model can read them.
+    /// converted to Markdown via `super::document` so the model can read them.
     /// Known binary files (images, audio, video, archives) are rejected.
     pub fn read_file(&self, path: &str, start_line: usize, max_lines: usize) -> Result<String> {
         let p = self.safe_resolve(path)?;
@@ -388,7 +388,7 @@ impl Sandbox {
     ///
     /// `cwd` is forced to the workspace; the environment is cleared and only
     /// explicitly allowed vars (`PATH`, `HOME`, `PWD`, `LANG`) are passed
-    /// through. The best-effort denylist ([`dangerous_re`]) blocks obviously
+    /// through. The best-effort denylist (`dangerous_re`) blocks obviously
     /// destructive patterns. Output is capped at 12 000 chars.
     ///
     /// The denylist is **not a security boundary** — it can always be

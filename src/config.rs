@@ -19,7 +19,7 @@ use std::path::PathBuf;
 
 /// Runtime configuration for an [`crate::agent::Agent`].
 ///
-/// Constructed from CLI flags + environment variables in [`crate::main`].
+/// Constructed from CLI flags + environment variables in `crate::main`.
 /// All fields are public so callers (TUI, headless runner, sub-agents) can
 /// clone and inspect them.
 ///

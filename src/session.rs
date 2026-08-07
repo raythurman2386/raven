@@ -113,7 +113,7 @@ impl SessionStore {
         }
         let summary_str = std::fs::read_to_string(&summary_path)?;
         let summary: SessionSummary = serde_json::from_str(&summary_str)?;
-        let summary = migrate_summary(summary)?;
+        let summary = self.migrate_and_persist(summary)?;
 
         let messages_path = dir.join(MESSAGES_FILE);
         let messages = if messages_path.exists() {
@@ -142,12 +142,16 @@ impl SessionStore {
             }
             if let Ok(summary_str) = std::fs::read_to_string(&summary_path) {
                 if let Ok(summary) = serde_json::from_str::<SessionSummary>(&summary_str) {
-                    metas.push(SessionMeta {
-                        id: summary.id.clone(),
-                        title: summary.title.clone(),
-                        model: summary.model.clone(),
-                        updated_at: summary.updated_at.clone(),
-                    });
+                    // Migrate (and persist) so a future-version session is
+                    // rejected here rather than surfacing only on load.
+                    if let Ok(summary) = self.migrate_and_persist(summary) {
+                        metas.push(SessionMeta {
+                            id: summary.id.clone(),
+                            title: summary.title.clone(),
+                            model: summary.model.clone(),
+                            updated_at: summary.updated_at.clone(),
+                        });
+                    }
                 }
             }
         }
@@ -201,6 +205,16 @@ impl SessionStore {
         let path = self.session_dir(&summary.id).join(SUMMARY_FILE);
         let content = serde_json::to_string_pretty(summary)?;
         write_atomic(&path, content.as_bytes())
+    }
+
+    /// Migrate a summary to the current format version and persist the result
+    /// back to disk so the migration runs only once.
+    fn migrate_and_persist(&self, summary: SessionSummary) -> Result<SessionSummary> {
+        let migrated = migrate_summary(summary.clone())?;
+        if migrated.version != summary.version {
+            self.write_summary(&migrated)?;
+        }
+        Ok(migrated)
     }
 }
 
@@ -569,6 +583,51 @@ mod tests {
 
         let loaded = store.load(&session.summary.id).unwrap();
         assert_eq!(loaded.summary.version, CURRENT_SESSION_FORMAT_VERSION);
+
+        // The migration must be persisted so it runs only once.
+        let on_disk: SessionSummary =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(on_disk.version, CURRENT_SESSION_FORMAT_VERSION);
+    }
+
+    #[test]
+    fn list_migrates_older_format_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = SessionStore::for_workspace(tmp.path()).unwrap();
+        let session = store.create("test-model").unwrap();
+
+        let mut old = session.summary.clone();
+        old.version = 0;
+        let path = store.session_dir(&session.summary.id).join(SUMMARY_FILE);
+        let content = serde_json::to_string_pretty(&old).unwrap();
+        std::fs::write(&path, content).unwrap();
+
+        let metas = store.list().unwrap();
+        assert_eq!(metas.len(), 1);
+        assert_eq!(metas[0].id, session.summary.id);
+
+        // Persisted on disk after listing.
+        let on_disk: SessionSummary =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(on_disk.version, CURRENT_SESSION_FORMAT_VERSION);
+    }
+
+    #[test]
+    fn list_skips_future_format_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = SessionStore::for_workspace(tmp.path()).unwrap();
+        let session = store.create("test-model").unwrap();
+
+        let mut future = session.summary.clone();
+        future.version = CURRENT_SESSION_FORMAT_VERSION + 1;
+        let path = store.session_dir(&session.summary.id).join(SUMMARY_FILE);
+        let content = serde_json::to_string_pretty(&future).unwrap();
+        std::fs::write(&path, content).unwrap();
+
+        // A future-version session is skipped from the listing rather than
+        // surfacing a hard error for the whole list.
+        let metas = store.list().unwrap();
+        assert!(metas.is_empty());
     }
 
     #[test]

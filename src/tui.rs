@@ -5,7 +5,7 @@
 //! │   add auth middleware                                                │
 //! │                                                                      │
 //! │ → read_file(src/main.rs)                                             │
-//! │   [read_file] --- src/main.rs (lines 1-40 of 120) ---                │
+//! │   \[read_file\] --- src/main.rs (lines 1-40 of 120) ---                │
 //! │                                                                      │
 //! │ Here's a plan:                                                       │
 //! │ 1. Add middleware module                                             │
@@ -230,38 +230,51 @@ fn apply_selection_highlight(
             if row < lo.row || row > hi.row {
                 return line;
             }
-            let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-            let base_style = line.spans.first().map(|s| s.style).unwrap_or_default();
-            let chars: Vec<char> = text.chars().collect();
-            let len = chars.len();
-
+            // Character range of the selection on this row.
             let (start, end) = if row == lo.row && row == hi.row {
-                (lo.col.min(len), hi.col.min(len).max(lo.col.min(len)))
+                (lo.col, hi.col)
             } else if row == lo.row {
-                (lo.col.min(len), len)
+                (lo.col, usize::MAX)
             } else if row == hi.row {
-                (0, hi.col.min(len))
+                (0, hi.col)
             } else {
-                (0, len)
+                (0, usize::MAX)
             };
 
-            if start >= end || end == 0 {
-                return line;
-            }
+            // Walk the original spans, splitting each at the selection
+            // boundaries so every span keeps its own style. Only the selected
+            // segment gets the SELECT_BG background.
+            let mut out: Vec<Span<'static>> = Vec::new();
+            let mut offset = 0usize;
+            for span in line.spans {
+                let text = span.content.as_ref();
+                let span_len = text.chars().count();
+                let span_end = offset + span_len;
 
-            let before: String = chars[..start].iter().collect();
-            let mid: String = chars[start..end].iter().collect();
-            let after: String = chars[end..].iter().collect();
-
-            let mut spans: Vec<Span<'static>> = Vec::with_capacity(3);
-            if !before.is_empty() {
-                spans.push(Span::styled(before, base_style));
+                let sel_start = start.max(offset);
+                let sel_end = end.min(span_end);
+                if sel_start < sel_end {
+                    // Split into before / selected / after, each styled.
+                    let before: String = text.chars().take(sel_start - offset).collect();
+                    let mid: String = text
+                        .chars()
+                        .skip(sel_start - offset)
+                        .take(sel_end - sel_start)
+                        .collect();
+                    let after: String = text.chars().skip(sel_end - offset).collect();
+                    if !before.is_empty() {
+                        out.push(Span::styled(before, span.style));
+                    }
+                    out.push(Span::styled(mid, span.style.bg(Theme::SELECT_BG)));
+                    if !after.is_empty() {
+                        out.push(Span::styled(after, span.style));
+                    }
+                } else {
+                    out.push(span);
+                }
+                offset = span_end;
             }
-            spans.push(Span::styled(mid, base_style.bg(Theme::SELECT_BG)));
-            if !after.is_empty() {
-                spans.push(Span::styled(after, base_style));
-            }
-            Line::from(spans)
+            Line::from(out)
         })
         .collect()
 }
@@ -2063,6 +2076,35 @@ mod tests {
         assert_eq!(out[2].spans.len(), 2);
         assert_eq!(out[2].spans[0].content, "gh");
         assert_eq!(out[2].spans[1].content, "i");
+    }
+
+    #[test]
+    fn apply_selection_highlight_preserves_span_styles() {
+        // A line with two differently-styled spans; the selection must keep
+        // each span's own style and only add the SELECT_BG to the selected
+        // segment.
+        let line = Line::from(vec![
+            Span::styled("ab", Style::default().fg(Color::Red)),
+            Span::styled("cd", Style::default().fg(Color::Blue)),
+        ]);
+        let sel = Some(Selection::new(
+            DisplayPos { row: 0, col: 1 },
+            DisplayPos { row: 0, col: 3 },
+        ));
+        let out = apply_selection_highlight(vec![line], sel);
+        assert_eq!(out[0].spans.len(), 4);
+        assert_eq!(out[0].spans[0].content, "a");
+        assert_eq!(out[0].spans[0].style.fg, Some(Color::Red));
+        assert_eq!(out[0].spans[0].style.bg, None);
+        assert_eq!(out[0].spans[1].content, "b");
+        assert_eq!(out[0].spans[1].style.fg, Some(Color::Red));
+        assert_eq!(out[0].spans[1].style.bg, Some(Theme::SELECT_BG));
+        assert_eq!(out[0].spans[2].content, "c");
+        assert_eq!(out[0].spans[2].style.fg, Some(Color::Blue));
+        assert_eq!(out[0].spans[2].style.bg, Some(Theme::SELECT_BG));
+        assert_eq!(out[0].spans[3].content, "d");
+        assert_eq!(out[0].spans[3].style.fg, Some(Color::Blue));
+        assert_eq!(out[0].spans[3].style.bg, None);
     }
 
     #[test]

@@ -255,13 +255,7 @@ fn parse_ddg_fallback(html: &str) -> Vec<String> {
             },
         };
         let encoded = &rest[val_start..val_end];
-        let decoded = match urlencoding_percent_decode(encoded) {
-            Ok(s) => s,
-            Err(_) => {
-                rest = &rest[val_end..];
-                continue;
-            }
-        };
+        let decoded = urlencoding_percent_decode(encoded);
         if !decoded.is_empty()
             && (decoded.starts_with("http://") || decoded.starts_with("https://"))
         {
@@ -275,7 +269,7 @@ fn parse_ddg_fallback(html: &str) -> Vec<String> {
     lines
 }
 
-fn urlencoding_percent_decode(s: &str) -> Result<String, ()> {
+fn urlencoding_percent_decode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let bytes = s.as_bytes();
     let mut i = 0;
@@ -295,7 +289,7 @@ fn urlencoding_percent_decode(s: &str) -> Result<String, ()> {
         }
         i += 1;
     }
-    Ok(out)
+    out
 }
 
 /// Decode a DuckDuckGo redirect URL (`//duckduckgo.com/l/?uddg=<urlencoded>`)
@@ -465,14 +459,11 @@ mod tests {
 
     #[test]
     fn urlencoding_percent_decode_handles_plus() {
-        assert_eq!(
-            urlencoding_percent_decode("hello+world").unwrap(),
-            "hello world"
-        );
+        assert_eq!(urlencoding_percent_decode("hello+world"), "hello world");
     }
 
     #[test]
     fn urlencoding_percent_decode_handles_percent() {
-        assert_eq!(urlencoding_percent_decode("a%20b%2Fc").unwrap(), "a b/c");
+        assert_eq!(urlencoding_percent_decode("a%20b%2Fc"), "a b/c");
     }
 }

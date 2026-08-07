@@ -22,3 +22,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# apply_patch safety backups
+*.bak

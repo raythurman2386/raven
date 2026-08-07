@@ -1,7 +1,8 @@
-//! Shared agent-event consumer used by both the headless runner and the TUI.
+//! Shared agent-event consumer and plan-approval flow for the headless runner.
 //!
-//! Extracts the plan-approval flow and event-draining loop that were duplicated
-//! between [`headless_run`](crate::headless_run) and the TUI event loop.
+//! Extracts the event-draining loop and plan-approve-revise-execute flow that
+//! were previously inlined in `headless_run`, so the headless path stays
+//! readable and the logic is unit-testable offline.
 
 use anyhow::Result;
 use tokio::sync::mpsc;
