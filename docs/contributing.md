@@ -21,7 +21,7 @@ cargo doc --no-deps
 ## Style
 
 - Rust 2021 edition. Target MSRV: 1.85+ (pinned in `rust-toolchain.toml`).
-- Keep the binary small and dependency-light. No MCP, no skills, no kernel sandbox.
+- Keep the binary small and dependency-light. No MCP, no kernel sandbox.
 - Every public struct, enum, and fn should have a doc comment.
 - `cargo doc --no-deps` must build with no warnings.
 - `cargo build` must build with no warnings.
@@ -31,18 +31,36 @@ cargo doc --no-deps
 
 ```
 src/
-├── main.rs     # CLI entry, headless runner
-├── config.rs   # Settings, defaults, context-window inference, AGENTS.md loader
-├── agent.rs    # Streaming loop, AgentEvent, parallel sub-agents
-├── context.rs  # Token estimation, compaction
-├── tools.rs    # Sandbox, tool implementations, dispatch, tool_definitions
-└── tui.rs      # ratatui interactive UI
+├── main.rs       # CLI entry, headless runner
+├── lib.rs        # Library crate re-exports
+├── config.rs     # Settings, defaults, context-window inference, AGENTS.md loader
+├── agent.rs      # Streaming loop, AgentEvent, parallel sub-agents
+├── context.rs    # Token estimation, compaction
+├── tools/
+│   ├── mod.rs        # Tool module root, glob matcher, todo state
+│   ├── definitions.rs # OpenAI function-calling tool schemas
+│   ├── dispatch.rs    # Tool dispatch by name
+│   ├── sandbox.rs     # Sandbox (path confinement, shell filtering, file ops)
+│   ├── document.rs    # Document extraction (.docx, .pdf, .xlsx, .odt, .epub)
+│   ├── git.rs         # Git operations (status, diff, log, commit, undo)
+│   └── patch.rs       # Unified diff parsing and application
+├── tui.rs        # ratatui interactive UI
+├── commands.rs   # Slash-command registry and parsing
+├── plan.rs       # Structured plan data model, parsing, step advancement
+├── skills.rs     # SKILL.md discovery + skill_search/skill_load
+├── session.rs    # JSONL session persistence, resume, list
+├── memory.rs     # Project memory (MEMORY.md) loading, update, search
+├── repomap.rs    # Lightweight repo symbol map
+├── web.rs        # Keyless web tools (web_fetch, web_search)
+├── error.rs      # Typed error enums (AgentError, ToolError)
+└── runner.rs     # Shared event-draining and plan-approval flow
 docs/
 ├── README.md           # index
 ├── usage.md            # user workflows
 ├── configuration.md    # env, flags, context, keys
 ├── architecture.md     # design, agent loop, compaction, sandbox
 ├── tools.md            # tool contracts and sandbox rules
+├── testing.md          # test structure, coverage, mutation testing
 └── contributing.md     # this file
 ```
 
@@ -50,7 +68,7 @@ docs/
 
 ## Adding a tool
 
-Tools live in [`src/tools.rs`](../src/tools.rs). To add a new tool:
+Tools live in [`src/tools/`](../src/tools/). To add a new tool:
 
 ### 1. Implement the method on `Sandbox`
 
@@ -65,6 +83,8 @@ impl Sandbox {
 ```
 
 ### 2. Add the OpenAI function schema to `tool_definitions`
+
+In [`src/tools/definitions.rs`](../src/tools/definitions.rs), add a new entry to the `tool_definitions()` function:
 
 ```rust
 pub fn tool_definitions() -> serde_json::Value {
@@ -90,6 +110,8 @@ pub fn tool_definitions() -> serde_json::Value {
 
 ### 3. Add a dispatch arm
 
+In [`src/tools/dispatch.rs`](../src/tools/dispatch.rs), add a match arm to the `dispatch()` function:
+
 ```rust
 pub fn dispatch(sandbox: &Sandbox, name: &str, args: &serde_json::Value) -> String {
     let res = match name {
@@ -109,7 +131,7 @@ pub fn dispatch(sandbox: &Sandbox, name: &str, args: &serde_json::Value) -> Stri
 
 ### 4. Document it
 
-- Add a row to the tools table in [README.md](../README.md#tools) and [docs/tools.md](tools.md).
+- Add a row to the tools table in [docs/tools.md](tools.md).
 - Add a doc comment to the `Sandbox` method.
 
 ### 5. Build and verify
@@ -202,7 +224,7 @@ Compaction lives in [`src/context.rs`](../src/context.rs).
 ## Running tests
 
 ```bash
-cargo test                    # 121 tests (117 unit + 4 CLI smoke), all offline
+cargo test                    # 304 tests, all offline
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```

@@ -15,7 +15,7 @@ cargo test
   - `src/agent.rs` — ephemeral reminder computation (loop-breaker, iteration nudge); **mock-server integration tests** for the full `Agent::run` loop (streaming text, tool-call dispatch, 5xx retry, non-streaming JSON, model-not-found fails-fast) against a fake `/chat/completions` endpoint
   - `src/commands.rs` — slash-command parsing, alias resolution, registry uniqueness, help rendering
   - `src/context.rs` — token estimation, compaction (preserves system message, reduces tokens, keeps tool-call/result pairs), tool-result pruning
-  - `src/tools.rs` — sandbox path confinement (including symlink-escape rejection), list_dir, read_file, write_file, search_replace, grep, run_shell (dangerous command blocking, API key stripping), dispatch routing, glob matching, unified diff parsing, apply_patch
+  - `src/tools/` — sandbox path confinement (including symlink-escape rejection), list_dir, read_file, write_file, search_replace, grep, run_shell (dangerous command blocking, API key stripping), dispatch routing, glob matching, unified diff parsing, apply_patch, document extraction
   - `src/plan.rs` — plan parsing (JSON, numbered list, bullet list, code block), plan formatting
   - `src/tokenizer.rs` — BPE token counting behavior
 - **Integration tests** (`tests/`):

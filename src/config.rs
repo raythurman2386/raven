@@ -68,7 +68,7 @@ impl Settings {
     }
 
     /// Output token budget derived from the context window: `window / 8`,
-    /// clamped to `[1024, 8192]`.
+    /// clamped to `[1024, 32768]`.
     ///
     /// This is the *initial* `max_tokens`; the agent loop further clamps it
     /// per iteration so `prompt_tokens + max_tokens + 64 <= context_window`.
@@ -79,10 +79,12 @@ impl Settings {
     /// // derived_max_tokens is an associated fn on Settings:
     /// // 8192  / 8 = 1024 (clamped up to 1024)
     /// // 32768 / 8 = 4096
-    /// // 128_000 / 8 = 16000 (clamped down to 8192)
+    /// // 128_000 / 8 = 16000 (within range, no clamping)
+    /// // 1_000_000 / 8 = 125000 (clamped down to 32768)
     /// assert_eq!(Settings::derived_max_tokens(8192), 1024);
     /// assert_eq!(Settings::derived_max_tokens(32768), 4096);
-    /// assert_eq!(Settings::derived_max_tokens(128_000), 8192);
+    /// assert_eq!(Settings::derived_max_tokens(128_000), 16000);
+    /// assert_eq!(Settings::derived_max_tokens(1_000_000), 32768);
     /// ```
     pub fn derived_max_tokens(context_window: usize) -> u32 {
         // Output budget: window / 8, clamped to a generous ceiling so long,
