@@ -417,6 +417,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn run_shell_uses_clean_environment() {
         let tmp = tempfile::tempdir().unwrap();
         let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
@@ -440,6 +441,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn run_shell_passes_allowed_env_vars() {
         let tmp = tempfile::tempdir().unwrap();
         let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
@@ -661,6 +663,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn wait_for_child_times_out() {
         let mut child = Command::new("sh")
             .arg("-c")
@@ -683,6 +686,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn wait_for_child_completes() {
         let mut child = Command::new("sh")
             .arg("-c")

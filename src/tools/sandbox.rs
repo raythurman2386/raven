@@ -52,7 +52,7 @@ pub(crate) fn dangerous_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r"(?i)(rm\s+(-[a-z]*f[a-z]*\s+)?/|mkfs|: \(\)\s*\{\s*:\|:&\s*\};:|dd\s+if=/dev/(zero|random|urandom)|chmod\s+(-R\s+)?777\s+/|curl\s+.*\|\s*(ba)?sh|wget\s+.*\|\s*(ba)?sh)",
+            r"(?i)(rm\s+(-[a-z]*f[a-z]*\s+)?/|mkfs|: \(\)\s*\{\s*:\|:&\s*\};:|dd\s+if=/dev/(zero|random|urandom)|chmod\s+(-R\s+)?777\s+/|curl\s+.*\|\s*(ba)?sh|wget\s+.*\|\s*(ba)?sh|format\s+[A-Za-z]:|del\s+/[sfq]\s+[A-Za-z]:\\|rd\s+/[sq]\s+[A-Za-z]:\\|rmdir\s+/[sq]\s+[A-Za-z]:\\|powershell\s+-[Cc]ommand\s+.*Remove-Item.*-Recurse.*-Force|Remove-Item\s+-Recurse\s+-Force\s+[A-Za-z]:\\|diskpart)",
         )
         .expect("valid regex")
     })
@@ -69,7 +69,7 @@ pub fn safe_command_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r"(?i)^\s*(cargo|rustc|rustup|go|node|npm|npx|yarn|pnpm|python|python3|pip|pip3|poetry|pytest|ruff|mypy|black|isort|flake8|eslint|prettier|tsc|jest|vitest|mocha|make|cmake|ninja|meson|gcc|g\+\+|clang|clang\+\+|ld|lld|ar|strip|objcopy|objdump|nm|readelf|size|strings|file|which|type|command|hash|env|printenv|pwd|ls|cat|head|tail|wc|sort|uniq|cut|tr|sed|awk|grep|rg|find|xargs|tee|diff|cmp|comm|patch|tar|gzip|gunzip|bzip2|bunzip2|xz|unxz|zip|unzip|git|hg|svn|fossil|pijul|jj|echo|printf|true|false|test|\[|expr|sleep|date|stat|du|df|basename|dirname|realpath|readlink|mkdir|touch|cp|mv|chmod|chown|id|whoami|uname|hostname|uptime|ps|time|timeout|nice|renice|nohup|exec|source|\.)(\s|$)",
+            r"(?i)^\s*(cargo|rustc|rustup|go|node|npm|npx|yarn|pnpm|python|python3|pip|pip3|poetry|pytest|ruff|mypy|black|isort|flake8|eslint|prettier|tsc|jest|vitest|mocha|make|cmake|ninja|meson|gcc|g\+\+|clang|clang\+\+|ld|lld|ar|strip|objcopy|objdump|nm|readelf|size|strings|file|where|which|type|command|hash|set|env|printenv|pwd|cd|ls|dir|cat|head|tail|wc|sort|uniq|cut|tr|sed|awk|grep|rg|find|findstr|xargs|tee|diff|cmp|comp|fc|comm|patch|tar|gzip|gunzip|bzip2|bunzip2|xz|unxz|zip|unzip|git|hg|svn|fossil|pijul|jj|echo|printf|true|false|test|\[|expr|sleep|date|stat|du|df|basename|dirname|realpath|readlink|mkdir|touch|copy|cp|move|mv|ren|rename|chmod|chown|icacls|attrib|id|whoami|uname|hostname|uptime|ps|tasklist|time|timeout|nice|renice|nohup|exec|source|\.|call|cmd)(\s|$)",
         )
         .expect("valid regex")
     })
@@ -399,17 +399,9 @@ impl Sandbox {
         if dangerous_re().is_match(command) {
             return Ok("Error: command blocked by sandbox filter".into());
         }
-        let mut cmd = Command::new("sh");
-        cmd.arg("-c")
-            .arg(command)
-            .current_dir(&self.workspace)
-            .env_clear()
-            .env("PWD", &self.workspace);
-        for key in &["PATH", "HOME", "LANG"] {
-            if let Ok(val) = std::env::var(key) {
-                cmd.env(key, val);
-            }
-        }
+        let mut cmd = shell_command(command);
+        cmd.current_dir(&self.workspace);
+        setup_shell_env(&mut cmd, &self.workspace);
         cmd.stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
@@ -564,7 +556,7 @@ impl Sandbox {
             TestRunner::Pytest => ("pytest", vec![]),
         };
 
-        let mut child = Command::new(cmd)
+        let mut child = Command::new(resolve_command(cmd))
             .args(&args)
             .current_dir(&self.workspace)
             .env("CI", "true")
@@ -607,7 +599,7 @@ impl Sandbox {
             || self.workspace.join("pyproject.toml").exists()
             || self.workspace.join("setup.py").exists()
         {
-            return std::process::Command::new("pytest")
+            return std::process::Command::new(resolve_command("pytest"))
                 .arg("--version")
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
@@ -656,7 +648,7 @@ impl Sandbox {
             return Ok("No linter detected (no Cargo.toml, tsconfig.json, package.json, or Python config found)".into());
         };
 
-        let mut child = Command::new(cmd)
+        let mut child = Command::new(resolve_command(cmd))
             .args(&args)
             .current_dir(&self.workspace)
             .stdout(std::process::Stdio::piped())
@@ -679,6 +671,84 @@ impl Sandbox {
             None => Ok("Error: linter timed out".into()),
         }
     }
+}
+
+/// Build a platform-aware shell command.
+///
+/// On Unix: `sh -c <command>`. On Windows: `cmd /C <command>`, falling back
+/// to the `COMSPEC` environment variable if set.
+fn shell_command(command: &str) -> Command {
+    #[cfg(windows)]
+    {
+        let shell = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd".into());
+        let mut cmd = Command::new(&shell);
+        cmd.arg("/C").arg(command);
+        cmd
+    }
+    #[cfg(not(windows))]
+    {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(command);
+        cmd
+    }
+}
+
+/// Set up a clean-but-usable environment for a shell subprocess.
+///
+/// On Unix: clears the environment and passes through `PATH`, `HOME`, `PWD`,
+/// and `LANG`. On Windows: clears the environment and passes through
+/// `SystemRoot`, `PATH`, `USERPROFILE`, `HOMEDRIVE`, `HOMEPATH`, `TEMP`,
+/// `TMP`, `COMSPEC`, and `PATHEXT` so that `cmd.exe` and common tools can
+/// start.
+fn setup_shell_env(cmd: &mut Command, workspace: &std::path::Path) {
+    cmd.env_clear();
+    #[cfg(windows)]
+    {
+        for key in &[
+            "SystemRoot",
+            "PATH",
+            "USERPROFILE",
+            "HOMEDRIVE",
+            "HOMEPATH",
+            "TEMP",
+            "TMP",
+            "COMSPEC",
+            "PATHEXT",
+        ] {
+            if let Ok(val) = std::env::var(key) {
+                cmd.env(key, val);
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        cmd.env("PWD", workspace);
+        for key in &["PATH", "HOME", "LANG"] {
+            if let Ok(val) = std::env::var(key) {
+                cmd.env(key, val);
+            }
+        }
+    }
+}
+
+/// Resolve a command name to its platform-appropriate executable.
+///
+/// On Windows, `npm`, `cargo`, `npx`, `python`, and `pytest` are often
+/// `.cmd` or `.exe` shims. This function appends `.cmd` when the bare name
+/// is not found but `<name>.cmd` exists on `PATH`. On Unix the name is
+/// returned unchanged.
+fn resolve_command(name: &str) -> String {
+    #[cfg(windows)]
+    {
+        let cmd_name = format!("{}.cmd", name);
+        if std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+            .any(|p| p.join(&cmd_name).exists())
+        {
+            return cmd_name;
+        }
+    }
+    let _ = name;
+    name.to_string()
 }
 
 /// Truncate output to max chars with a clear marker.
