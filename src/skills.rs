@@ -50,8 +50,8 @@ fn parse_skill_file(content: &str) -> (String, String, String) {
         if let Some((key, value)) = line.split_once(':') {
             let v = unquote(value.trim());
             match key.trim() {
-                "name" if name.is_empty() => name = v.to_string(),
-                "description" if description.is_empty() => description = v.to_string(),
+                "name" if name.is_empty() => name = v,
+                "description" if description.is_empty() => description = v,
                 _ => {}
             }
         }
@@ -60,12 +60,35 @@ fn parse_skill_file(content: &str) -> (String, String, String) {
     (name, description, body)
 }
 
-/// Strip one pair of surrounding quotes and trim.
-fn unquote(v: &str) -> &str {
-    v.strip_prefix('"')
+/// Strip one pair of surrounding quotes, then unescape `\"` → `"` and `\\` → `\`.
+fn unquote(v: &str) -> String {
+    let inner = v
+        .strip_prefix('"')
         .and_then(|s| s.strip_suffix('"'))
         .or_else(|| v.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
-        .unwrap_or(v)
+        .unwrap_or(v);
+    unescape(inner)
+}
+
+fn unescape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('"') => out.push('"'),
+                Some('\\') => out.push('\\'),
+                Some(other) => {
+                    out.push('\\');
+                    out.push(other);
+                }
+                None => out.push('\\'),
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Discover all SKILL.md files under `.raven/skills/` in `dir`, recursively.
@@ -373,5 +396,34 @@ mod tests {
         write_skill(tmp.path(), "b", "second-skill", "Second", "body");
         let second = discover(tmp.path());
         assert_eq!(second.len(), 2);
+    }
+
+    #[test]
+    fn unquote_handles_escaped_quotes() {
+        assert_eq!(unquote(r#""a \"quoted\" name""#), "a \"quoted\" name");
+    }
+
+    #[test]
+    fn unquote_handles_escaped_backslash() {
+        assert_eq!(unquote(r#""path\\to\\file""#), "path\\to\\file");
+    }
+
+    #[test]
+    fn unquote_handles_plain_string() {
+        assert_eq!(unquote("hello"), "hello");
+    }
+
+    #[test]
+    fn unquote_handles_single_quotes() {
+        assert_eq!(unquote("'hello'"), "hello");
+    }
+
+    #[test]
+    fn parse_skill_file_handles_escaped_quotes_in_frontmatter() {
+        let content = "---\nname: \"a \\\"quoted\\\" name\"\ndescription: \"has \\\"escaped\\\" quotes\"\n---\n\nbody\n";
+        let (name, desc, body) = parse_skill_file(content);
+        assert_eq!(name, "a \"quoted\" name");
+        assert_eq!(desc, "has \"escaped\" quotes");
+        assert_eq!(body.trim(), "body");
     }
 }
