@@ -81,18 +81,22 @@ impl SessionStore {
     }
 
     /// Append a single message to a session's JSONL file.
+    ///
+    /// Reads the existing file, appends the new line, and writes atomically
+    /// (temp file + rename) so a crash mid-write never leaves a partial line.
     pub fn append_message(&self, session: &Session, msg: &ChatMessage) -> Result<()> {
         let path = self.session_dir(&session.summary.id).join(MESSAGES_FILE);
         let line = serde_json::to_string(msg)?;
-        // Append (not atomic — JSONL is append-only by nature)
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .context("open messages.jsonl for append")?;
-        file.write_all(line.as_bytes())?;
-        file.write_all(b"\n")?;
-        Ok(())
+
+        let mut content = if path.exists() {
+            std::fs::read(&path).context("read messages.jsonl")?
+        } else {
+            Vec::new()
+        };
+        content.extend_from_slice(line.as_bytes());
+        content.push(b'\n');
+
+        write_atomic(&path, &content)
     }
 
     /// Load a session by ID (reads summary + all messages).
@@ -299,6 +303,51 @@ mod tests {
         assert_eq!(std::fs::read(&target).unwrap(), b"v2");
         // No temp files left behind.
         let leftovers: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "no temp files should remain: {leftovers:?}"
+        );
+    }
+
+    #[test]
+    fn append_message_is_atomic_and_preserves_existing_lines() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = SessionStore::for_workspace(tmp.path()).unwrap();
+        let session = store.create("test-model").unwrap();
+
+        let msg1 = ChatMessage {
+            role: "user".into(),
+            content: Some("hello".into()),
+            tool_calls: None,
+            tool_call_id: None,
+        };
+        let msg2 = ChatMessage {
+            role: "assistant".into(),
+            content: Some("hi".into()),
+            tool_calls: None,
+            tool_call_id: None,
+        };
+
+        store.append_message(&session, &msg1).unwrap();
+        store.append_message(&session, &msg2).unwrap();
+
+        let loaded = store.load(&session.summary.id).unwrap();
+        assert_eq!(loaded.messages.len(), 2);
+        assert_eq!(loaded.messages[0].role, "user");
+        assert_eq!(loaded.messages[0].content.as_deref(), Some("hello"));
+        assert_eq!(loaded.messages[1].role, "assistant");
+        assert_eq!(loaded.messages[1].content.as_deref(), Some("hi"));
+
+        let path = store.session_dir(&session.summary.id).join(MESSAGES_FILE);
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = raw.lines().collect();
+        assert_eq!(lines.len(), 2);
+
+        let leftovers: Vec<_> = std::fs::read_dir(store.session_dir(&session.summary.id))
             .unwrap()
             .flatten()
             .filter(|e| e.file_name().to_string_lossy().contains(".tmp"))
