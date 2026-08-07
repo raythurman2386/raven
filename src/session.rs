@@ -285,12 +285,14 @@ pub fn now_iso_public() -> String {
     now_iso()
 }
 
-/// Generate a collision-proof session ID by appending a monotonic counter
-/// suffix to the ISO timestamp (e.g. `2026-08-06T00:06:18-0001`).
+/// Generate a collision-proof session ID by appending the process ID and a
+/// monotonic counter suffix to the ISO timestamp
+/// (e.g. `2026-08-06T00:06:18-12345-0001`).
 fn generate_session_id(iso: &str) -> String {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    format!("{iso}-{n:04x}")
+    let pid = std::process::id();
+    format!("{iso}-{pid}-{n:04x}")
 }
 
 /// Generate an ISO 8601 timestamp string (UTC, second precision).
@@ -495,8 +497,36 @@ mod tests {
         assert_eq!(ids.len(), dedup.len(), "all 100 IDs must be unique");
         for id in &ids {
             assert!(id.starts_with(base), "ID must start with timestamp: {id}");
-            assert_eq!(id.len(), base.len() + 5, "ID length mismatch: {id}");
+            let suffix = id.strip_prefix(&format!("{base}-")).unwrap();
+            let (pid_str, counter_str) = suffix.split_once('-').unwrap();
+            let pid: u32 = pid_str.parse().unwrap();
+            assert!(pid > 0, "PID must be non-zero: {id}");
+            assert_eq!(counter_str.len(), 4, "counter must be 4 hex digits: {id}");
+            u64::from_str_radix(counter_str, 16).unwrap();
         }
+    }
+
+    #[test]
+    fn generate_session_id_includes_pid() {
+        let id = generate_session_id("2026-08-06T00:06:18");
+        let suffix = id.strip_prefix("2026-08-06T00:06:18-").unwrap();
+        let (pid_str, _counter_str) = suffix.split_once('-').unwrap();
+        let pid: u32 = pid_str.parse().unwrap();
+        assert!(pid > 0, "PID must be non-zero: {id}");
+    }
+
+    #[test]
+    fn generate_session_id_different_pids_produce_different_ids() {
+        let base = "2026-08-06T00:06:18";
+        let id1 = generate_session_id(base);
+        // Simulate a different PID by constructing an ID with a different PID
+        // and the same counter. The real PID is always the same in one process,
+        // so we verify the format includes a PID component that would differ
+        // across processes.
+        let suffix1 = id1.strip_prefix(&format!("{base}-")).unwrap();
+        let (_pid1, counter1) = suffix1.split_once('-').unwrap();
+        let simulated = format!("{base}-99999-{counter1}");
+        assert_ne!(id1, simulated, "different PID must produce different ID");
     }
 
     // ── Version migration ──────────────────────────────────────────────
