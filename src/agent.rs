@@ -23,6 +23,7 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+use tempfile;
 use tokio::sync::mpsc;
 
 use crate::config::{load_agents_md, Settings};
@@ -1151,16 +1152,57 @@ async fn summarize_request(
 
 /// Run several focused sub-agents in parallel and return their final text.
 ///
-/// Each task gets a fresh [`Agent`] with a clean conversation. Results are
-/// returned in the same order as the input tasks. Tool events are consumed
-/// silently; only the accumulated text deltas are returned.
+/// Each sub-agent gets its own isolated git worktree on a unique branch so
+/// that `git add -A` and `git commit` only stage and commit that sub-agent's
+/// own work. After all sub-agents finish, each branch is merged back into the
+/// original branch and the worktrees are cleaned up.
+///
+/// If the workspace is not a git repository, sub-agents share the workspace
+/// directly (no isolation).
 pub async fn run_parallel(settings: &Settings, tasks: Vec<String>) -> Result<Vec<String>> {
+    let sandbox = Sandbox::new(settings.workspace.clone());
+    let is_git = sandbox.is_git_repo().unwrap_or(false);
+
+    let worktree_dir = if is_git {
+        let dir = tempfile::tempdir().context("create worktree temp dir")?;
+        Some(dir)
+    } else {
+        None
+    };
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
     let mut handles = Vec::new();
     for (i, task) in tasks.into_iter().enumerate() {
         let s = settings.clone();
-        // Each sub-agent gets a clean conversation
+        let branch_name = format!("raven-sub-{}-{}", i, timestamp);
+        let wt_dir = worktree_dir.as_ref().map(|d| d.path().to_path_buf());
         let handle = tokio::spawn(async move {
-            let mut agent = Agent::new(s)?;
+            let (agent_settings, cleanup) = if let Some(ref wt_base) = wt_dir {
+                let wt_path = wt_base.join(format!("sub-{}", i));
+                let sandbox = Sandbox::new(s.workspace.clone());
+                match sandbox.create_worktree(&branch_name, &wt_path) {
+                    Ok(()) => {
+                        let mut sub_settings = s.clone();
+                        sub_settings.workspace = wt_path;
+                        (sub_settings, Some((branch_name, sandbox)))
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "sub-agent {}: failed to create worktree ({}), falling back to shared workspace",
+                            i, e
+                        );
+                        (s.clone(), None)
+                    }
+                }
+            } else {
+                (s.clone(), None)
+            };
+
+            let mut agent = Agent::new(agent_settings)?;
             let (tx, mut rx) = mpsc::channel::<AgentEvent>(64);
             let runner = tokio::spawn(async move {
                 if let Err(e) = agent.run(&task, tx).await {
@@ -1176,15 +1218,37 @@ pub async fn run_parallel(settings: &Settings, tasks: Vec<String>) -> Result<Vec
                 }
             }
             let _ = runner.await;
-            Ok::<_, anyhow::Error>(out)
+            Ok::<_, anyhow::Error>((out, cleanup))
         });
         handles.push((i, handle));
     }
 
     let mut results = vec![String::new(); handles.len()];
+    let mut branches_to_merge: Vec<(usize, String, Sandbox)> = Vec::new();
     for (i, h) in handles {
-        results[i] = h.await??;
+        let (out, cleanup) = h.await??;
+        results[i] = out;
+        if let Some((branch_name, sandbox)) = cleanup {
+            branches_to_merge.push((i, branch_name, sandbox));
+        }
     }
+
+    if is_git {
+        for (_i, branch_name, sandbox) in &branches_to_merge {
+            match sandbox.merge_branch(branch_name) {
+                Ok(_) => tracing::info!("merged branch {} into main", branch_name),
+                Err(e) => tracing::warn!("failed to merge branch {}: {}", branch_name, e),
+            }
+        }
+        for (_i, branch_name, sandbox) in &branches_to_merge {
+            let _ = sandbox.delete_branch(branch_name);
+        }
+    }
+
+    if let Some(dir) = worktree_dir {
+        let _ = dir.close();
+    }
+
     Ok(results)
 }
 
