@@ -50,7 +50,12 @@ use raven::session::{Session, SessionStore};
     about = "Privacy-first local coding-agent harness for Ollama / OpenAI-compatible endpoints"
 )]
 struct Cli {
-    /// Task description
+    /// Task description (positional args, joined with spaces).
+    ///
+    /// Only the first word is captured when unquoted — `raven add a test`
+    /// captures just `add` (the rest are parsed as flags/unknown args).
+    /// Use quotes (`raven "add a test"`) or `-p` (`raven -p "add a test"`)
+    /// for multi-word tasks.
     task: Vec<String>,
 
     /// Task prompt (alternative to positional)
