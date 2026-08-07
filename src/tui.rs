@@ -1331,6 +1331,9 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState)
             .title(Span::styled(title, Style::default().fg(Theme::DIM))),
     );
     f.render_widget(input_w, chunks[4]);
+
+    let (cx, cy) = input_cursor_position(&state.input, prompt, chunks[4]);
+    f.set_cursor(cx, cy);
 }
 
 /// Number of wrapped lines a string occupies at the given width (char count).
@@ -1352,6 +1355,35 @@ fn wrapped_line_count(s: &str, width: usize) -> usize {
         }
     }
     lines
+}
+
+/// Compute the terminal (x, y) where the cursor should sit after the input
+/// text, accounting for the prompt prefix, wrapping width, and the input box's
+/// top-left position.
+fn input_cursor_position(
+    input: &str,
+    prompt: &str,
+    input_rect: ratatui::layout::Rect,
+) -> (u16, u16) {
+    let content_width = input_rect.width.saturating_sub(2).max(1) as usize;
+    let combined = format!("{prompt}{input}");
+    let mut col = 0usize;
+    let mut row = 0usize;
+    for c in combined.chars() {
+        if c == '\n' {
+            row += 1;
+            col = 0;
+            continue;
+        }
+        if col >= content_width {
+            row += 1;
+            col = 0;
+        }
+        col += 1;
+    }
+    let x = input_rect.x + 1 + col as u16;
+    let y = input_rect.y + 1 + row as u16;
+    (x, y)
 }
 
 /// Height of the input box (in rows, including borders) for a given input and
@@ -1869,6 +1901,29 @@ mod tests {
         assert_eq!(out.len(), 2, "newline should split into 2 rows");
         assert_eq!(out[0].to_string(), "line1");
         assert_eq!(out[1].to_string(), "line2");
+    }
+
+    #[test]
+    fn input_cursor_position_at_end_of_input() {
+        let rect = ratatui::layout::Rect::new(0, 20, 80, 3);
+        let (x, y) = input_cursor_position("hello", "❯ ", rect);
+        assert_eq!(x, 8, "cursor x should be after prompt + input");
+        assert_eq!(y, 21, "cursor y should be one row below input box top");
+    }
+
+    #[test]
+    fn input_cursor_position_wraps_long_input() {
+        let rect = ratatui::layout::Rect::new(0, 20, 10, 5);
+        let (_x, y) = input_cursor_position("abcdefghijkl", "❯ ", rect);
+        assert!(y > 21, "cursor should wrap to next row for long input");
+    }
+
+    #[test]
+    fn input_cursor_position_empty_input() {
+        let rect = ratatui::layout::Rect::new(0, 20, 80, 3);
+        let (x, y) = input_cursor_position("", "❯ ", rect);
+        assert_eq!(x, 3, "cursor x should be after prompt only");
+        assert_eq!(y, 21);
     }
 
     #[test]
