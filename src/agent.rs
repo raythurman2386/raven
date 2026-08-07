@@ -212,6 +212,13 @@ pub struct Agent {
     /// Set to true when a file-editing tool (write_file/search_replace/apply_patch)
     /// runs, signalling that the repo map in the system message may be stale.
     repo_map_stale: bool,
+    /// Tracks consecutive identical failing tool calls to detect degenerate
+    /// loops where the model retries the same failing call without adapting.
+    consecutive_failure_key: Option<(String, String)>,
+    consecutive_failure_count: usize,
+    /// Holds a repeated-failure reminder to surface on the *next* request when
+    /// the model has made 3+ identical failing tool calls in a row.
+    pending_repeated_failure: Option<String>,
     /// Optional plan being executed; step statuses are updated as the agent
     /// progresses through tool calls.
     plan: Option<Plan>,
@@ -239,6 +246,9 @@ impl Agent {
             verified: false,
             verify_attempts: 0,
             repo_map_stale: false,
+            consecutive_failure_key: None,
+            consecutive_failure_count: 0,
+            pending_repeated_failure: None,
             plan: None,
             current_step: 0,
             client: reqwest::Client::builder()
@@ -351,6 +361,9 @@ impl Agent {
             }
             if let Some(v) = self.pending_verify.take() {
                 reminders.push(v);
+            }
+            if let Some(f) = self.pending_repeated_failure.take() {
+                reminders.push(f);
             }
 
             // Compaction: if estimated history tokens exceed the soft limit,
@@ -781,13 +794,50 @@ impl Agent {
                     )
                 });
                 let result = match dispatch_result {
-                    Ok(s) => s,
+                    Ok(s) => {
+                        if s.starts_with("Error:") || s.starts_with("Tool error:") {
+                            let failure_key = (name.clone(), cache_key.clone());
+                            if self.consecutive_failure_key.as_ref() == Some(&failure_key) {
+                                self.consecutive_failure_count += 1;
+                            } else {
+                                self.consecutive_failure_key = Some(failure_key);
+                                self.consecutive_failure_count = 1;
+                            }
+                            if self.consecutive_failure_count >= 3 {
+                                self.pending_repeated_failure = Some(
+                                    "Your last tool call failed with the same error 3+ times in a row. \
+                                     Do NOT retry the same call. Try a different approach — read the \
+                                     file first, use a different tool, or explain the problem to the user."
+                                        .into(),
+                                );
+                            }
+                        } else {
+                            self.consecutive_failure_key = None;
+                            self.consecutive_failure_count = 0;
+                        }
+                        s
+                    }
                     Err(e) => {
                         let msg = format!("Tool error: {e}");
                         if e.is_transient() {
                             tracing::warn!("Transient tool error (retryable): {e}");
                         } else {
                             tracing::error!("Tool error: {e}");
+                        }
+                        let failure_key = (name.clone(), cache_key.clone());
+                        if self.consecutive_failure_key.as_ref() == Some(&failure_key) {
+                            self.consecutive_failure_count += 1;
+                        } else {
+                            self.consecutive_failure_key = Some(failure_key);
+                            self.consecutive_failure_count = 1;
+                        }
+                        if self.consecutive_failure_count >= 3 {
+                            self.pending_repeated_failure = Some(
+                                "Your last tool call failed with the same error 3+ times in a row. \
+                                 Do NOT retry the same call. Try a different approach — read the \
+                                 file first, use a different tool, or explain the problem to the user."
+                                    .into(),
+                            );
                         }
                         msg
                     }
@@ -1631,6 +1681,44 @@ mod tests {
         assert!(!compute_reminders(&msgs, 6)
             .iter()
             .any(|t| t.contains("Reflect")));
+    }
+
+    #[tokio::test]
+    async fn repeated_identical_failing_tool_detected() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("src")).unwrap();
+        std::fs::write(tmp.path().join("src/server.ts"), "existing content\n").unwrap();
+        let fail_round = concat!(
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"search_replace\",\"arguments\":\"{\\\"path\\\":\\\"src/server.ts\\\",\\\"old_string\\\":\\\"\\\",\\\"new_string\\\":\\\"new content\\\"}\"}}]}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let text_round = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let (base, _h) = spawn_mock(vec![
+            fail_round, fail_round, fail_round, fail_round, text_round,
+        ])
+        .await;
+        let mut s = settings_for(tmp.path(), &base);
+        s.max_iterations = 5;
+        let mut agent = Agent::new(s).unwrap();
+        let (tx, mut rx) = mpsc::channel(256);
+        agent.run("add route", tx).await.unwrap();
+        let mut events = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            events.push(ev);
+        }
+        assert!(
+            agent.consecutive_failure_count >= 3,
+            "should track 3+ consecutive identical failures, got {}",
+            agent.consecutive_failure_count
+        );
+        assert!(
+            agent.consecutive_failure_key.is_some(),
+            "should have a failure key set"
+        );
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::Done)));
     }
 
     #[test]
