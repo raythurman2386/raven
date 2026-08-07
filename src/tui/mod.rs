@@ -294,6 +294,11 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
             state.log_dirty = true;
         }
 
+        // Capture whether the log/stream changed this tick *before* the flags
+        // are cleared below, so we can force an immediate draw (rather than
+        // waiting for the DRAW_INTERVAL throttle).
+        let dirty = state.log_dirty || state.stream_patch || state.messages_dirty;
+
         if state.log_dirty {
             let (rendered, tail) = render_blocks(&state.blocks, state.tick);
             state.cached_log_lines = rendered;
@@ -328,11 +333,7 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
             state.messages_dirty = false;
         }
 
-        let force_draw = state.log_dirty
-            || state.messages_dirty
-            || state.stream_patch
-            || !state.running
-            || state.live_tool.is_some();
+        let force_draw = dirty || !state.running || state.live_tool.is_some();
         if force_draw || last_draw.elapsed() >= DRAW_INTERVAL {
             if state.running || state.live_tool.is_some() {
                 state.tick = state.tick.wrapping_add(1);
@@ -617,6 +618,10 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                         .lines()
                         .map(|s| s.to_string())
                         .collect();
+                    // Keep `active_plan` in sync so the status-strip "N/M steps"
+                    // readout reflects live `[x]`/`[~]` progress, not the plan
+                    // as it was at approval time.
+                    state.active_plan = Some(plan);
                 }
                 AgentEvent::AskUser { question, reply } => {
                     state.push_system(format!("❓ {question}"));

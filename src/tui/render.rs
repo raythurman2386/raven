@@ -186,18 +186,34 @@ pub fn prewrap_lines(lines: &[Line<'static>], width: usize) -> Vec<Line<'static>
 }
 
 /// Number of wrapped rows a single logical line occupies at `width` columns.
-/// Matches `prewrap_lines` semantics (char-count based, `\n` forces a break).
+/// Mirrors `prewrap_lines` exactly (same char-count + `\n` break semantics,
+/// including the empty/trailing-newline case where `prewrap_lines` emits 0
+/// rows). Must stay in lockstep with `prewrap_lines` or scroll math drifts.
 fn wrapped_row_count(text: &str, width: usize) -> usize {
     let w = width.max(1);
-    if text.is_empty() {
-        return 1;
-    }
+    let mut chars = text.chars().peekable();
     let mut rows = 0usize;
-    for seg in text.split('\n') {
-        if seg.is_empty() {
-            rows += 1;
-        } else {
-            rows += seg.chars().count().div_ceil(w);
+    loop {
+        let mut seg = String::new();
+        let mut took = 0usize;
+        while let Some(&c) = chars.peek() {
+            if c == '\n' {
+                chars.next();
+                break;
+            }
+            if took == w {
+                break;
+            }
+            seg.push(c);
+            chars.next();
+            took += 1;
+        }
+        if seg.is_empty() && chars.peek().is_none() {
+            break;
+        }
+        rows += 1;
+        if chars.peek().is_none() {
+            break;
         }
     }
     rows
@@ -360,6 +376,33 @@ mod tests {
         let (visible, offset) = prewrap_visible(&[], 10, 0, 5);
         assert!(visible.is_empty());
         assert_eq!(offset, 0);
+    }
+
+    #[test]
+    fn wrapped_row_count_matches_prewrap_lines() {
+        // `wrapped_row_count` must stay in lockstep with `prewrap_lines` or
+        // scroll math drifts. Check the tricky cases: empty, trailing newline,
+        // multi-line, and exact-width wraps.
+        for (text, width) in [
+            ("", 10),
+            ("\n", 10),
+            ("abc", 10),
+            ("abc\n", 10),
+            ("abc\ndef", 10),
+            ("abcdefghij", 5),
+            ("abcdefghijklmnop", 5),
+            ("a\nb\nc", 3),
+        ] {
+            let line = Line::from(Span::styled(text.to_string(), Style::default()));
+            let wrapped = prewrap_lines(std::slice::from_ref(&line), width);
+            let count = wrapped_row_count(text, width);
+            assert_eq!(
+                count,
+                wrapped.len(),
+                "wrapped_row_count({text:?}, {width}) = {count}, but prewrap_lines emits {} rows",
+                wrapped.len()
+            );
+        }
     }
 
     #[test]
