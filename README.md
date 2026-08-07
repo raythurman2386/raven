@@ -11,16 +11,16 @@ A **privacy-first** local coding-agent harness written in Rust for [Ollama](http
 | In scope | Intentionally out of scope |
 |---|---|
 | Streaming agent loop (OpenAI-compatible `/v1/chat/completions`) | MCP server marketplace |
-| 22 tools: `list_dir`, `read_file`, `search_replace`, `write_file`, `grep`, `run_shell`, `search_code`, `todo_write`, `memory_update`, `memory_search`, `git_status`, `git_diff`, `git_log`, `git_commit`, `apply_patch`, `run_tests`, `run_lint`, `ask_user`, `web_search`, `web_fetch`, `skill_search`, `skill_load` | MCP server marketplace |
-| Document extraction: `read_file` converts `.docx`, `.pdf`, `.xlsx`, `.odt`, `.epub`, `.pptx`, `.csv`, `.rtf`, `.ods`, `.odp`, `.doc`, `.xls`, `.ppt` and more to Markdown (via the `anydoc` engine) | MCP server marketplace |
+| 22 tools: `list_dir`, `read_file`, `search_replace`, `write_file`, `grep`, `run_shell`, `search_code`, `todo_write`, `memory_update`, `memory_search`, `git_status`, `git_diff`, `git_log`, `git_commit`, `apply_patch`, `run_tests`, `run_lint`, `ask_user`, `web_search`, `web_fetch`, `skill_search`, `skill_load` | Remote config sync |
+| Document extraction: `read_file` converts `.docx`, `.pdf`, `.xlsx`, `.odt`, `.epub`, `.pptx`, `.csv`, `.rtf`, `.ods`, `.odp`, `.doc`, `.xls`, `.ppt` and more to Markdown (via the `anydoc` engine) | Multi-model routing |
 | Workspace sandbox (path confinement + dangerous-command filter) | OS-level kernel sandbox (Landlock/seccomp) |
 | Structured plan mode (parse → approve → revise → execute) | Worktree isolation |
 | Skills (`SKILL.md` discovery + `skill_search`/`skill_load`) | Rhai workflow engine |
 | Repo symbol map (`<repo_map>` injected for large workspaces) | GUI / web frontend |
 | Parallel tool execution within a single model turn | Telemetry / usage tracking |
-| Pure-Rust BPE tokenizer for accurate token/context counting | Multi-model routing |
-| Context-window inference + automatic compaction (tool-result pruning) | Remote config sync |
-| JSONL session persistence (`--resume`, `--list-sessions`) | Telemetry / usage tracking |
+| Pure-Rust BPE tokenizer for accurate token/context counting |  |
+| Context-window inference + automatic compaction (tool-result pruning) |  |
+| JSONL session persistence (`--resume`, `--list-sessions`) |  |
 | Cross-session project memory (`.raven/MEMORY.md`) | |
 | Config file (`~/.raven/config.toml` + workspace config) | |
 | Typed errors with retry + exponential backoff | |
