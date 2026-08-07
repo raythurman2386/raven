@@ -889,6 +889,135 @@ mod tests {
     }
 
     #[test]
+    fn worktree_isolates_commits_between_branches() {
+        let (_tmp, sb) = git_sandbox();
+        sb.write_file("shared.txt", "base").unwrap();
+        sb.git_commit("initial").unwrap();
+
+        let wt_dir = tempfile::tempdir().unwrap();
+        let wt_path_a = wt_dir.path().join("sub-a");
+        let wt_path_b = wt_dir.path().join("sub-b");
+
+        sb.create_worktree("raven-sub-a", &wt_path_a).unwrap();
+        sb.create_worktree("raven-sub-b", &wt_path_b).unwrap();
+
+        let sb_a = Sandbox::new(wt_path_a);
+        let sb_b = Sandbox::new(wt_path_b);
+
+        sb_a.write_file("a.txt", "work from sub-a").unwrap();
+        sb_a.git_commit("sub-a: add a.txt").unwrap();
+
+        sb_b.write_file("b.txt", "work from sub-b").unwrap();
+        sb_b.git_commit("sub-b: add b.txt").unwrap();
+
+        let log_a = sb_a.git_log(5).unwrap();
+        let log_b = sb_b.git_log(5).unwrap();
+        assert!(log_a.contains("sub-a: add a.txt"), "log_a: {log_a}");
+        assert!(
+            !log_a.contains("sub-b: add b.txt"),
+            "log_a should not have sub-b commit: {log_a}"
+        );
+        assert!(log_b.contains("sub-b: add b.txt"), "log_b: {log_b}");
+        assert!(
+            !log_b.contains("sub-a: add a.txt"),
+            "log_b should not have sub-a commit: {log_b}"
+        );
+
+        sb.merge_branch("raven-sub-a").unwrap();
+        sb.merge_branch("raven-sub-b").unwrap();
+
+        let main_log = sb.git_log(5).unwrap();
+        assert!(
+            main_log.contains("sub-a: add a.txt"),
+            "main log: {main_log}"
+        );
+        assert!(
+            main_log.contains("sub-b: add b.txt"),
+            "main log: {main_log}"
+        );
+        assert!(sb
+            .read_file("a.txt", 1, 10)
+            .unwrap()
+            .contains("work from sub-a"));
+        assert!(sb
+            .read_file("b.txt", 1, 10)
+            .unwrap()
+            .contains("work from sub-b"));
+
+        sb.delete_branch("raven-sub-a").unwrap();
+        sb.delete_branch("raven-sub-b").unwrap();
+    }
+
+    #[test]
+    fn worktree_concurrent_edits_to_same_file_are_isolated() {
+        let (_tmp, sb) = git_sandbox();
+        let content: String = (1..=20).map(|i| format!("line{}\n", i)).collect();
+        sb.write_file("shared.txt", &content).unwrap();
+        sb.git_commit("initial").unwrap();
+
+        let wt_dir = tempfile::tempdir().unwrap();
+        let wt_path_a = wt_dir.path().join("sub-a");
+        let wt_path_b = wt_dir.path().join("sub-b");
+
+        sb.create_worktree("raven-sub-a", &wt_path_a).unwrap();
+        sb.create_worktree("raven-sub-b", &wt_path_b).unwrap();
+
+        let sb_a = Sandbox::new(wt_path_a);
+        let sb_b = Sandbox::new(wt_path_b);
+
+        sb_a.search_replace("shared.txt", "line2\n", "line2-modified-by-a\n", false)
+            .unwrap();
+        sb_a.git_commit("sub-a: modify shared.txt").unwrap();
+
+        sb_b.search_replace("shared.txt", "line18\n", "line18-modified-by-b\n", false)
+            .unwrap();
+        sb_b.git_commit("sub-b: modify shared.txt").unwrap();
+
+        let log_a = sb_a.git_log(5).unwrap();
+        let log_b = sb_b.git_log(5).unwrap();
+        assert!(log_a.contains("sub-a: modify shared.txt"));
+        assert!(!log_a.contains("sub-b: modify shared.txt"));
+        assert!(log_b.contains("sub-b: modify shared.txt"));
+        assert!(!log_b.contains("sub-a: modify shared.txt"));
+
+        sb.merge_branch("raven-sub-a").unwrap();
+        sb.merge_branch("raven-sub-b").unwrap();
+
+        let main_log = sb.git_log(5).unwrap();
+        assert!(
+            main_log.contains("sub-a: modify shared.txt"),
+            "main log: {main_log}"
+        );
+        assert!(
+            main_log.contains("sub-b: modify shared.txt"),
+            "main log: {main_log}"
+        );
+
+        let content = sb.read_file("shared.txt", 1, 30).unwrap();
+        assert!(content.contains("line2-modified-by-a"));
+        assert!(content.contains("line18-modified-by-b"));
+
+        sb.delete_branch("raven-sub-a").unwrap();
+        sb.delete_branch("raven-sub-b").unwrap();
+    }
+
+    #[test]
+    fn worktree_cleanup_removes_worktrees() {
+        let (_tmp, sb) = git_sandbox();
+        sb.write_file("f.txt", "v1").unwrap();
+        sb.git_commit("initial").unwrap();
+
+        let wt_dir = tempfile::tempdir().unwrap();
+        let wt_path = wt_dir.path().join("sub-x");
+
+        sb.create_worktree("raven-sub-x", &wt_path).unwrap();
+        assert!(wt_path.exists());
+
+        sb.remove_worktree(&wt_path).unwrap();
+        assert!(!wt_path.exists());
+    }
+
+    #[test]
     fn run_lint_no_project_returns_message() {
         let tmp = tempfile::tempdir().unwrap();
         let sb = Sandbox::new(tmp.path().canonicalize().unwrap());

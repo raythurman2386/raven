@@ -76,6 +76,41 @@ impl Sandbox {
         ))
     }
 
+    /// Create a git worktree at `worktree_path` on a new branch `branch_name`
+    /// based on the current HEAD. The worktree shares the same git repository
+    /// but has its own working tree, so `git add -A` and `git commit` only
+    /// stage and commit changes made in that worktree.
+    pub fn create_worktree(
+        &self,
+        branch_name: &str,
+        worktree_path: &std::path::Path,
+    ) -> Result<()> {
+        let path_str = worktree_path.to_string_lossy();
+        let out = self.run_git(&["worktree", "add", "-b", branch_name, &path_str, "HEAD"])?;
+        if out.contains("fatal") || out.contains("error") {
+            anyhow::bail!("failed to create worktree: {}", out);
+        }
+        Ok(())
+    }
+
+    /// Merge a branch into the current branch with `--no-edit`.
+    pub fn merge_branch(&self, branch_name: &str) -> Result<String> {
+        self.run_git(&["merge", branch_name, "--no-edit"])
+    }
+
+    /// Remove a git worktree, even if it has uncommitted changes.
+    pub fn remove_worktree(&self, worktree_path: &std::path::Path) -> Result<()> {
+        let path_str = worktree_path.to_string_lossy();
+        let _ = self.run_git(&["worktree", "remove", &path_str, "--force"])?;
+        Ok(())
+    }
+
+    /// Delete a branch (forcefully, even if not merged).
+    pub fn delete_branch(&self, branch_name: &str) -> Result<()> {
+        let _ = self.run_git(&["branch", "-D", branch_name])?;
+        Ok(())
+    }
+
     pub(crate) fn is_git_repo(&self) -> Result<bool> {
         let mut child = Command::new("git")
             .args(["rev-parse", "--is-inside-work-tree"])
