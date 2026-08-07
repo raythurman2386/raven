@@ -23,20 +23,21 @@ use anyhow::Result;
 use crossterm::{
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
-        MouseButton, MouseEventKind,
+        MouseButton, MouseEvent, MouseEventKind,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Padding, Paragraph, Wrap},
     Frame, Terminal,
 };
 use std::io::stdout;
+use std::process::Command;
 use tokio::sync::mpsc;
 
 use crate::agent::{Agent, AgentEvent, ChatMessage};
@@ -63,6 +64,7 @@ impl Theme {
     const PLAN: Color = Color::Rgb(0xF4, 0x72, 0xB6); // purple
     const BORDER: Color = Color::Rgb(0x4A, 0x5A, 0x4D); // bg4
     const STATUS_BG: Color = Color::Rgb(0x1F, 0x24, 0x1F); // bg1
+    const SELECT_BG: Color = Color::Rgb(0x3A, 0x4F, 0x3D); // bg visual selection
 }
 
 // ── Log model ────────────────────────────────────────────────────────────
@@ -115,6 +117,226 @@ impl LogEntry {
     }
 }
 
+// ── Mouse selection (copy-on-highlight) ───────────────────────────────────
+
+/// A row/column anchor in the *display-line* coordinate space (i.e. indices
+/// into the `prewrap_lines` output, not the raw log entries).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DisplayPos {
+    row: usize,
+    col: usize,
+}
+
+/// An active or completed mouse-drag selection over the scrollback. Both
+/// endpoints are display-line coordinates; `start` is the anchor where the
+/// press began and `end` is the current/dragged position. Order is normalised
+/// when extracting text so the user can drag upwards.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Selection {
+    start: DisplayPos,
+    end: DisplayPos,
+}
+
+impl Selection {
+    fn new(start: DisplayPos, end: DisplayPos) -> Self {
+        Self { start, end }
+    }
+
+    /// Update the moving endpoint on drag.
+    fn extend(&mut self, end: DisplayPos) {
+        self.end = end;
+    }
+
+    /// Order the two endpoints so `lo` ≤ `hi` (row-major).
+    fn ordered(&self) -> (DisplayPos, DisplayPos) {
+        let (lo, hi) = if self.start.row < self.end.row
+            || (self.start.row == self.end.row && self.start.col <= self.end.col)
+        {
+            (self.start, self.end)
+        } else {
+            (self.end, self.start)
+        };
+        (lo, hi)
+    }
+}
+
+/// Reconstruct the selected text from the pre-wrapped display lines.
+///
+/// `lines` is the output of `prewrap_lines` — one `Line` per visible row. The
+/// selection is clamped to the available rows/columns. Multi-row selections
+/// join rows with `\n`. This is a pure function so it can be unit-tested
+/// without a terminal or clipboard.
+fn selection_text(lines: &[Line<'static>], sel: Selection) -> String {
+    if lines.is_empty() {
+        return String::new();
+    }
+    let (lo, hi) = sel.ordered();
+    if lo.row >= lines.len() {
+        return String::new();
+    }
+    let last_row = lines.len().saturating_sub(1);
+    let hi_row = hi.row.min(last_row);
+
+    let mut out = String::new();
+    for (r, row_line) in lines.iter().enumerate().take(hi_row + 1).skip(lo.row) {
+        let row_text: String = row_line.spans.iter().map(|s| s.content.as_ref()).collect();
+        let chars: Vec<char> = row_text.chars().collect();
+        let row_len = chars.len();
+        if r == lo.row && r == hi_row {
+            // single row slice
+            let start = lo.col.min(row_len);
+            let end = hi.col.min(row_len).max(start);
+            for &c in &chars[start..end] {
+                out.push(c);
+            }
+        } else if r == lo.row {
+            let start = lo.col.min(row_len);
+            for &c in &chars[start..] {
+                out.push(c);
+            }
+        } else if r == hi_row {
+            let end = hi.col.min(row_len);
+            for &c in &chars[..end] {
+                out.push(c);
+            }
+            break;
+        } else {
+            out.push_str(&row_text);
+        }
+        if r < hi_row {
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// Apply a `SELECT_BG` highlight to the lines within the selection range.
+///
+/// Each display line is split into up to three spans: before the selection,
+/// the selected segment (with `SELECT_BG`), and after. Lines outside the
+/// selection are untouched. This is a pure transform on display lines.
+fn apply_selection_highlight(
+    lines: Vec<Line<'static>>,
+    sel: Option<Selection>,
+) -> Vec<Line<'static>> {
+    let Some(sel) = sel else {
+        return lines;
+    };
+    let (lo, hi) = sel.ordered();
+    lines
+        .into_iter()
+        .enumerate()
+        .map(|(row, line)| {
+            if row < lo.row || row > hi.row {
+                return line;
+            }
+            let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            let base_style = line.spans.first().map(|s| s.style).unwrap_or_default();
+            let chars: Vec<char> = text.chars().collect();
+            let len = chars.len();
+
+            let (start, end) = if row == lo.row && row == hi.row {
+                (lo.col.min(len), hi.col.min(len).max(lo.col.min(len)))
+            } else if row == lo.row {
+                (lo.col.min(len), len)
+            } else if row == hi.row {
+                (0, hi.col.min(len))
+            } else {
+                (0, len)
+            };
+
+            if start >= end || end == 0 {
+                return line;
+            }
+
+            let before: String = chars[..start].iter().collect();
+            let mid: String = chars[start..end].iter().collect();
+            let after: String = chars[end..].iter().collect();
+
+            let mut spans: Vec<Span<'static>> = Vec::with_capacity(3);
+            if !before.is_empty() {
+                spans.push(Span::styled(before, base_style));
+            }
+            spans.push(Span::styled(mid, base_style.bg(Theme::SELECT_BG)));
+            if !after.is_empty() {
+                spans.push(Span::styled(after, base_style));
+            }
+            Line::from(spans)
+        })
+        .collect()
+}
+
+/// Select the word under a display-line position. A "word" is a maximal run of
+/// non-whitespace characters. Returns `None` if the position is outside the
+/// lines or on whitespace.
+fn word_bounds(lines: &[Line<'static>], pos: DisplayPos) -> Option<Selection> {
+    let row_text: String = lines
+        .get(pos.row)?
+        .spans
+        .iter()
+        .map(|s| s.content.as_ref())
+        .collect();
+    let chars: Vec<char> = row_text.chars().collect();
+    let col = pos.col.min(chars.len().saturating_sub(1));
+    let is_ws = |c: char| c.is_whitespace();
+    if chars.is_empty() || is_ws(chars[col]) {
+        return None;
+    }
+    let mut start = col;
+    while start > 0 && !is_ws(chars[start - 1]) {
+        start -= 1;
+    }
+    let mut end = col + 1;
+    while end < chars.len() && !is_ws(chars[end]) {
+        end += 1;
+    }
+    Some(Selection::new(
+        DisplayPos {
+            row: pos.row,
+            col: start,
+        },
+        DisplayPos {
+            row: pos.row,
+            col: end,
+        },
+    ))
+}
+
+/// Best-effort clipboard write shelling out to the platform clipboard tool.
+/// Returns the number of characters copied on success, or `None` if no tool
+/// was available/failed. Dependency-free: `pbcopy` (macOS), `wl-copy`
+/// (Wayland), `xclip`/`xsel` (X11).
+fn copy_to_clipboard(text: &str) -> Option<usize> {
+    if text.is_empty() {
+        return Some(0);
+    }
+    let n = text.chars().count();
+    let candidates: &[(&str, &[&str])] = if cfg!(target_os = "macos") {
+        &[("pbcopy", &[])]
+    } else {
+        &[
+            ("wl-copy", &[]),
+            ("xclip", &["-selection", "clipboard"]),
+            ("xsel", &["--clipboard", "--input"]),
+        ]
+    };
+    for (bin, args) in candidates {
+        let mut cmd = Command::new(bin);
+        cmd.args(*args);
+        cmd.stdin(std::process::Stdio::piped());
+        if let Ok(mut child) = cmd.spawn() {
+            if let Some(stdin) = child.stdin.as_mut() {
+                use std::io::Write;
+                let _ = stdin.write_all(text.as_bytes());
+            }
+            if child.wait().map(|s| s.success()).unwrap_or(false) {
+                return Some(n);
+            }
+        }
+    }
+    None
+}
+
 // ── TUI state ────────────────────────────────────────────────────────────
 
 struct TuiState {
@@ -144,6 +366,9 @@ struct TuiState {
     pending_question_text: Option<String>,
     session_messages: Vec<ChatMessage>,
     task_handle: Option<tokio::task::JoinHandle<anyhow::Result<Vec<ChatMessage>>>>,
+    selection: Option<Selection>,
+    last_click: Option<(u64, DisplayPos)>,
+    copy_status: Option<(u64, String)>,
 }
 
 impl TuiState {
@@ -190,6 +415,9 @@ impl TuiState {
             pending_question_text: None,
             session_messages: Vec::new(),
             task_handle: None,
+            selection: None,
+            last_click: None,
+            copy_status: None,
         }
     }
 
@@ -669,40 +897,12 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                         _ => {}
                     }
                 }
-                Event::Mouse(m) => match m.kind {
-                    MouseEventKind::ScrollUp => {
-                        state.scroll = state.scroll.saturating_add(3);
-                        state.auto_scroll = false;
-                    }
-                    MouseEventKind::ScrollDown => {
-                        state.scroll = state.scroll.saturating_sub(3);
-                        if state.scroll == 0 {
-                            state.auto_scroll = true;
-                        }
-                    }
-                    MouseEventKind::Down(MouseButton::Left) if state.running => {
-                        let size = terminal.size().unwrap_or_default();
-                        let input_h = input_box_height(&state.input, size.width);
-                        let status_y = size.height.saturating_sub(input_h).saturating_sub(1);
-                        if m.row == status_y
-                            && m.column >= size.width.saturating_sub(STOP_BTN.len() as u16)
-                        {
-                            if let Some(handle) = state.task_handle.take() {
-                                handle.abort();
-                                let _ = store.save_all_messages(&session, &state.session_messages);
-                                let _ = store.update_summary(&mut session, None);
-                                state.log.push(LogEntry::system("⏹ stopped (click)"));
-                                state.log_dirty = true;
-                            }
-                            state.running = false;
-                            state.agent_state = AgentState::Idle;
-                            state.status = "ready".into();
-                            state.assistant_text.clear();
-                            state.live_tool = None;
-                        }
-                    }
-                    _ => {}
-                },
+                Event::Mouse(m) => {
+                    let size = terminal.size().unwrap_or_default();
+                    let chunks = compute_layout(size, &state);
+                    let log_rect = chunks[1];
+                    handle_mouse_event(&m, &mut state, size, log_rect, &store, &mut session);
+                }
                 _ => {}
             }
         }
@@ -918,6 +1118,29 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
 
 // ── Drawing ──────────────────────────────────────────────────────────────
 
+/// Compute the vertical chunk layout for the TUI. Shared by `draw_ui` and the
+/// mouse handler so hit-testing agrees with what was actually rendered.
+fn compute_layout(area: Rect, state: &TuiState) -> Vec<Rect> {
+    let show_plan = state.plan_pending && !state.plan_preview.is_empty();
+    let plan_h = if show_plan {
+        (state.plan_preview.len().saturating_add(2) as u16).clamp(3, 10)
+    } else {
+        0
+    };
+    let input_h = input_box_height(&state.input, area.width);
+    Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(5),
+            Constraint::Length(plan_h),
+            Constraint::Length(1),
+            Constraint::Length(input_h),
+        ])
+        .split(area)
+        .to_vec()
+}
+
 fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState) {
     let pct = if settings.context_window > 0 {
         (state.cached_est_tokens as f64 / settings.context_window as f64) * 100.0
@@ -933,18 +1156,7 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState)
         0
     };
 
-    let input_h = input_box_height(&state.input, f.size().width);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1), // top chrome
-            Constraint::Min(5),    // log
-            Constraint::Length(plan_h),
-            Constraint::Length(1), // status
-            Constraint::Length(input_h),
-        ])
-        .split(f.size());
+    let chunks = compute_layout(f.size(), state);
 
     // Top bar — product · model · context
     let top = Line::from(vec![
@@ -994,6 +1206,9 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState)
     let max_scroll = display_lines.len().saturating_sub(log_h);
     let scroll_eff = (state.scroll as usize).min(max_scroll);
     let offset = max_scroll.saturating_sub(scroll_eff) as u16;
+
+    // Apply selection highlight to the visible display lines.
+    let display_lines = apply_selection_highlight(display_lines, state.selection);
 
     let log_block = Block::default()
         .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
@@ -1048,6 +1263,14 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState)
             format!(" {}", waiting_diamond(state.tick)),
             Style::default().fg(Theme::PLAN),
         ));
+    }
+    if let Some((start_tick, msg)) = &state.copy_status {
+        if state.tick.wrapping_sub(*start_tick) < 50 {
+            status_line.push(Span::styled(
+                format!("  {msg}"),
+                Style::default().fg(Theme::ACCENT),
+            ));
+        }
     }
 
     if state.running {
@@ -1153,6 +1376,145 @@ fn stop_span() -> Span<'static> {
             .fg(Theme::ERROR)
             .add_modifier(Modifier::BOLD),
     )
+}
+
+// ── Mouse selection handling (copy-on-highlight) ──────────────────────────
+
+/// Map a terminal mouse position to a display-line coordinate inside the log
+/// region. Returns `None` if the click is outside `log_rect`. The column is
+/// adjusted for the log block's left border + horizontal padding (2 cols).
+fn mouse_to_display_pos(m: &MouseEvent, log_rect: Rect) -> Option<DisplayPos> {
+    if m.row < log_rect.top() || m.row >= log_rect.bottom() {
+        return None;
+    }
+    if m.column < log_rect.left() || m.column >= log_rect.right() {
+        return None;
+    }
+    // The log block has Borders::LEFT | Borders::RIGHT + Padding::horizontal(1),
+    // so 2 columns are consumed on each side by border+padding. We only need
+    // the left offset to map to the content column.
+    let left = log_rect.left() + 2;
+    let col = m.column.saturating_sub(left) as usize;
+    let row = m.row.saturating_sub(log_rect.top()) as usize;
+    Some(DisplayPos { row, col })
+}
+
+/// Compute the display lines + scroll offset currently rendered, matching the
+/// draw path so hit-testing agrees.
+fn current_display(state: &TuiState, log_rect: Rect) -> (Vec<Line<'static>>, u16) {
+    let content_width = (log_rect.width.saturating_sub(4)) as usize;
+    let display_lines = prewrap_lines(&state.cached_log_lines, content_width.max(1));
+    let log_h = log_rect.height.saturating_sub(2) as usize;
+    let max_scroll = display_lines.len().saturating_sub(log_h);
+    let scroll_eff = (state.scroll as usize).min(max_scroll);
+    let offset = max_scroll.saturating_sub(scroll_eff) as u16;
+    (display_lines, offset)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_mouse_event(
+    m: &MouseEvent,
+    state: &mut TuiState,
+    size: Rect,
+    log_rect: Rect,
+    store: &SessionStore,
+    session: &mut Session,
+) {
+    match m.kind {
+        MouseEventKind::ScrollUp => {
+            state.scroll = state.scroll.saturating_add(3);
+            state.auto_scroll = false;
+        }
+        MouseEventKind::ScrollDown => {
+            state.scroll = state.scroll.saturating_sub(3);
+            if state.scroll == 0 {
+                state.auto_scroll = true;
+            }
+        }
+        MouseEventKind::Down(MouseButton::Left) => {
+            // Check the [stop] button first (right edge of status strip).
+            let input_h = input_box_height(&state.input, size.width);
+            let status_y = size.height.saturating_sub(input_h).saturating_sub(1);
+            if state.running
+                && m.row == status_y
+                && m.column >= size.width.saturating_sub(STOP_BTN.len() as u16)
+            {
+                if let Some(handle) = state.task_handle.take() {
+                    handle.abort();
+                    let _ = store.save_all_messages(session, &state.session_messages);
+                    let _ = store.update_summary(session, None);
+                    state.log.push(LogEntry::system("⏹ stopped (click)"));
+                    state.log_dirty = true;
+                }
+                state.running = false;
+                state.agent_state = AgentState::Idle;
+                state.status = "ready".into();
+                state.assistant_text.clear();
+                state.live_tool = None;
+                return;
+            }
+
+            // Otherwise begin a log selection.
+            let (display, offset) = current_display(state, log_rect);
+            if let Some(pos) = mouse_to_display_pos(m, log_rect) {
+                let display_pos = DisplayPos {
+                    row: pos.row + offset as usize,
+                    col: pos.col,
+                };
+                // Double-click → word select.
+                if let Some((last_tick, last_pos)) = state.last_click {
+                    if state.tick.wrapping_sub(last_tick) < 30
+                        && last_pos.row == display_pos.row
+                        && (last_pos.col as isize - display_pos.col as isize).abs() <= 2
+                    {
+                        if let Some(ws) = word_bounds(&display, display_pos) {
+                            state.selection = Some(ws);
+                            state.copy_status = None;
+                        }
+                    } else {
+                        state.selection = Some(Selection::new(display_pos, display_pos));
+                        state.copy_status = None;
+                    }
+                } else {
+                    state.selection = Some(Selection::new(display_pos, display_pos));
+                    state.copy_status = None;
+                }
+                state.last_click = Some((state.tick, display_pos));
+            }
+        }
+        MouseEventKind::Drag(MouseButton::Left) => {
+            let (display, offset) = current_display(state, log_rect);
+            if let Some(pos) = mouse_to_display_pos(m, log_rect) {
+                let display_pos = DisplayPos {
+                    row: pos.row + offset as usize,
+                    col: pos.col,
+                };
+                if let Some(sel) = state.selection.as_mut() {
+                    sel.extend(display_pos);
+                    state.copy_status = None;
+                }
+                let _ = display;
+            }
+        }
+        MouseEventKind::Up(MouseButton::Left) => {
+            if let Some(sel) = state.selection {
+                let (display, _offset) = current_display(state, log_rect);
+                let text = selection_text(&display, sel);
+                if !text.is_empty() {
+                    let n = text.chars().count();
+                    let copied = copy_to_clipboard(&text);
+                    let msg = match copied {
+                        Some(_) => format!("copied {n} chars"),
+                        None => format!("selected {n} chars (no clipboard tool)"),
+                    };
+                    state.copy_status = Some((state.tick, msg));
+                } else {
+                    state.selection = None;
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 // ── Task / plan helpers (keeps the event loop readable) ──────────────────
@@ -1517,6 +1879,163 @@ mod tests {
         assert_eq!(out[0].to_string(), "hi");
     }
 
+    fn mk_lines(texts: &[&str]) -> Vec<Line<'static>> {
+        texts
+            .iter()
+            .map(|t| Line::from(Span::raw((*t).to_string())))
+            .collect()
+    }
+
+    #[test]
+    fn selection_text_single_row_slice() {
+        let lines = mk_lines(&["hello world"]);
+        let sel = Selection::new(DisplayPos { row: 0, col: 0 }, DisplayPos { row: 0, col: 5 });
+        assert_eq!(selection_text(&lines, sel), "hello");
+    }
+
+    #[test]
+    fn selection_text_single_row_middle() {
+        let lines = mk_lines(&["hello world"]);
+        let sel = Selection::new(
+            DisplayPos { row: 0, col: 6 },
+            DisplayPos { row: 0, col: 11 },
+        );
+        assert_eq!(selection_text(&lines, sel), "world");
+    }
+
+    #[test]
+    fn selection_text_multi_row() {
+        let lines = mk_lines(&["line one", "line two", "line three"]);
+        let sel = Selection::new(DisplayPos { row: 0, col: 5 }, DisplayPos { row: 2, col: 5 });
+        assert_eq!(selection_text(&lines, sel), "one\nline two\nline ");
+    }
+
+    #[test]
+    fn selection_text_drag_upwards_normalises() {
+        let lines = mk_lines(&["abc", "def"]);
+        let sel = Selection::new(DisplayPos { row: 1, col: 2 }, DisplayPos { row: 0, col: 1 });
+        assert_eq!(selection_text(&lines, sel), "bc\nde");
+    }
+
+    #[test]
+    fn selection_text_clamps_past_end() {
+        let lines = mk_lines(&["hi"]);
+        let sel = Selection::new(
+            DisplayPos { row: 0, col: 0 },
+            DisplayPos { row: 0, col: 100 },
+        );
+        assert_eq!(selection_text(&lines, sel), "hi");
+    }
+
+    #[test]
+    fn selection_text_empty_lines() {
+        let lines: Vec<Line<'static>> = Vec::new();
+        let sel = Selection::new(DisplayPos { row: 0, col: 0 }, DisplayPos { row: 0, col: 3 });
+        assert_eq!(selection_text(&lines, sel), "");
+    }
+
+    #[test]
+    fn selection_text_wrapped_line_rows() {
+        let raw = vec![Line::from(Span::raw("abcdefghij"))];
+        let display = prewrap_lines(&raw, 5);
+        assert_eq!(display.len(), 2);
+        let sel = Selection::new(DisplayPos { row: 0, col: 3 }, DisplayPos { row: 1, col: 2 });
+        assert_eq!(selection_text(&display, sel), "de\nfg");
+    }
+
+    #[test]
+    fn word_bounds_finds_word() {
+        let lines = mk_lines(&["foo bar baz"]);
+        let pos = DisplayPos { row: 0, col: 4 };
+        let sel = word_bounds(&lines, pos).unwrap();
+        let (lo, hi) = sel.ordered();
+        assert_eq!(lo.col, 4);
+        assert_eq!(hi.col, 7);
+        assert_eq!(selection_text(&lines, sel), "bar");
+    }
+
+    #[test]
+    fn word_bounds_on_whitespace_returns_none() {
+        let lines = mk_lines(&["foo bar"]);
+        let pos = DisplayPos { row: 0, col: 3 };
+        assert!(word_bounds(&lines, pos).is_none());
+    }
+
+    #[test]
+    fn word_bounds_first_word() {
+        let lines = mk_lines(&["hello world"]);
+        let pos = DisplayPos { row: 0, col: 0 };
+        let sel = word_bounds(&lines, pos).unwrap();
+        assert_eq!(selection_text(&lines, sel), "hello");
+    }
+
+    #[test]
+    fn apply_selection_highlight_single_row() {
+        let lines = mk_lines(&["hello world"]);
+        let sel = Some(Selection::new(
+            DisplayPos { row: 0, col: 0 },
+            DisplayPos { row: 0, col: 5 },
+        ));
+        let out = apply_selection_highlight(lines, sel);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].spans.len(), 2);
+        assert_eq!(out[0].spans[0].content, "hello");
+        assert_eq!(out[0].spans[1].content, " world");
+    }
+
+    #[test]
+    fn apply_selection_highlight_none_unchanged() {
+        let lines = mk_lines(&["hello", "world"]);
+        let out = apply_selection_highlight(lines, None);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].spans.len(), 1);
+        assert_eq!(out[0].spans[0].content, "hello");
+    }
+
+    #[test]
+    fn apply_selection_highlight_multi_row() {
+        let lines = mk_lines(&["abc", "def", "ghi"]);
+        let sel = Some(Selection::new(
+            DisplayPos { row: 0, col: 1 },
+            DisplayPos { row: 2, col: 2 },
+        ));
+        let out = apply_selection_highlight(lines, sel);
+        assert_eq!(out[0].spans.len(), 2);
+        assert_eq!(out[0].spans[0].content, "a");
+        assert_eq!(out[0].spans[1].content, "bc");
+        assert_eq!(out[1].spans.len(), 1);
+        assert_eq!(out[1].spans[0].content, "def");
+        assert_eq!(out[2].spans.len(), 2);
+        assert_eq!(out[2].spans[0].content, "gh");
+        assert_eq!(out[2].spans[1].content, "i");
+    }
+
+    #[test]
+    fn mouse_to_display_pos_outside_returns_none() {
+        let rect = Rect::new(0, 1, 80, 20);
+        let m = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert!(mouse_to_display_pos(&m, rect).is_none());
+    }
+
+    #[test]
+    fn mouse_to_display_pos_inside_adjusts_for_border() {
+        let rect = Rect::new(0, 1, 80, 20);
+        let m = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 5,
+            row: 3,
+            modifiers: KeyModifiers::NONE,
+        };
+        let pos = mouse_to_display_pos(&m, rect).unwrap();
+        assert_eq!(pos.row, 2);
+        assert_eq!(pos.col, 3);
+    }
+
     fn dummy_state() -> TuiState {
         TuiState {
             log: Vec::new(),
@@ -1545,6 +2064,9 @@ mod tests {
             pending_question_text: None,
             session_messages: Vec::new(),
             task_handle: None,
+            selection: None,
+            last_click: None,
+            copy_status: None,
         }
     }
 }
