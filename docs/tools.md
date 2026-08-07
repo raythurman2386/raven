@@ -9,13 +9,27 @@ All file paths are **relative to the workspace root** and confined to it. See [a
 | Tool | Purpose | Sandbox behavior |
 |---|---|---|
 | `list_dir` | List files/directories | Read-only, workspace-confined |
-| `read_file` | Read a file (optional line range, 1-based) | Read-only, workspace-confined; lines truncated at 2000 chars |
+| `read_file` | Read a file (optional line range, 1-based) | Read-only, workspace-confined; lines truncated at 2000 chars; extracts .docx/.pdf/.xlsx/.odt/.epub/.pptx/.csv/.rtf/.ods/.odp/.doc/.xls/.ppt to Markdown |
 | `search_replace` | Edit a file by replacing an exact string | Workspace-confined; rejects directories |
 | `write_file` | Full file write (create/overwrite) | Workspace-confined; creates parent dirs |
 | `grep` | Regex content search with optional glob filter | Read-only; skips hidden dirs and build artifacts |
 | `run_shell` | Run a shell command | `cwd` forced to workspace; dangerous patterns blocked; secret env vars stripped; 60s default timeout; output capped at 12 000 chars |
 | `search_code` | Literal case-insensitive search across source files | Read-only; source extensions only |
 | `todo_write` | Create/replace a structured task list (full-replace) | In-memory, per agent run |
+| `memory_update` | Save a durable project fact to `.raven/MEMORY.md` | Writes to workspace memory file |
+| `memory_search` | Search project memory by keyword | Read-only; scans `.raven/MEMORY.md` |
+| `git_status` | Show working tree status | Read-only; runs `git status --porcelain` |
+| `git_diff` | Show unstaged or staged changes | Read-only; runs `git diff` |
+| `git_log` | Show recent commit history | Read-only; runs `git log` |
+| `git_commit` | Stage all changes and create a commit | Mutates repo; runs `git add -A && git commit` |
+| `apply_patch` | Apply a unified diff patch to files | Workspace-confined; parses and applies patches |
+| `run_tests` | Auto-detect and run project test suite | Runs `cargo test` / `npm test` / `pytest` |
+| `run_lint` | Auto-detect and run project linter/type checker | Runs `cargo clippy` / `tsc` / `eslint` / `python -m compileall` |
+| `ask_user` | Ask the user a question | Pauses agent; user response fed back as tool result |
+| `web_search` | Search the web via DuckDuckGo | Read-only; no API key needed; 10 results per page |
+| `web_fetch` | Fetch a URL and return readable text | Read-only; only http/https; strips HTML; 20s timeout |
+| `skill_search` | List skills matching a query | Read-only; searches SKILL.md files |
+| `skill_load` | Load a skill's instructions into context | Read-only; returns skill body wrapped in `<skill>` envelope |
 
 ---
 
@@ -133,6 +147,130 @@ Full-replace semantics: each call replaces the entire todo list. Returns a summa
 ```
 
 State is in-memory and per agent run (not persisted across sessions).
+
+### `memory_update`
+
+```json
+{
+  "section": "Conventions | Decisions | Context (required)",
+  "content": "string (required)"
+}
+```
+
+Appends a section to `.raven/MEMORY.md`. The first 25KB of this file is injected into the system prompt on each run.
+
+### `memory_search`
+
+```json
+{
+  "query": "string (required)"
+}
+```
+
+Keyword-scans `.raven/MEMORY.md` and returns matching lines as ranked `path:line — content` snippets. Lines with more query-token hits rank first. Read-only and available during planning.
+
+### `git_status`
+
+No parameters. Returns `git status --porcelain` output.
+
+### `git_diff`
+
+```json
+{
+  "staged": "boolean (optional, default false)"
+}
+```
+
+Returns `git diff` (unstaged) or `git diff --staged` output.
+
+### `git_log`
+
+```json
+{
+  "n": "integer (optional, default 10)"
+}
+```
+
+Returns the last N commits in `git log --oneline` format.
+
+### `git_commit`
+
+```json
+{
+  "message": "string (required)"
+}
+```
+
+Stages all changes (`git add -A`) and creates a commit with the given message. Returns the new HEAD line. Only available in the full toolset (not during planning).
+
+### `apply_patch`
+
+```json
+{
+  "patch": "string (required, unified diff)"
+}
+```
+
+Parses and applies a unified diff patch to workspace files. Returns a summary of files changed.
+
+### `run_tests`
+
+No parameters. Auto-detects the project test runner (`cargo test` for Rust, `npm test` for Node, `pytest` for Python) and runs it. Returns the test output.
+
+### `run_lint`
+
+No parameters. Auto-detects the project linter/type checker (`cargo clippy` for Rust, `tsc`/`eslint` for TypeScript/JavaScript, `python -m compileall` for Python) and runs it. Returns the lint output. After file-editing turns, Raven auto-runs the linter and feeds errors back to the model.
+
+### `ask_user`
+
+```json
+{
+  "question": "string (required)"
+}
+```
+
+Pauses the agent and asks the user a question. In the TUI the input box repurposes to show the question; in headless mode the question is printed to stderr and the answer is read from stdin. The user's response is fed back as the tool result.
+
+### `web_search`
+
+```json
+{
+  "query": "string (required)",
+  "page": "integer (optional, 1-indexed, default 1)"
+}
+```
+
+Searches the web via DuckDuckGo's HTML endpoint. No API key required. Returns up to 10 results per page (title + URL). Output capped at 12 000 chars. Read-only and available during planning.
+
+### `web_fetch`
+
+```json
+{
+  "url": "string (required, http/https only)"
+}
+```
+
+Fetches a URL and returns the page content as readable text (HTML stripped). Only `http://` and `https://` URLs are allowed. 20s total timeout, 10s connect timeout. Output capped at 12 000 chars. Read-only and available during planning.
+
+### `skill_search`
+
+```json
+{
+  "query": "string (required, empty = list all)"
+}
+```
+
+Searches for skills (SKILL.md files) by name or description. Searches `.raven/skills/` (project) and `~/.raven/skills/` (global). Returns matching skill names and descriptions. Read-only and available during planning.
+
+### `skill_load`
+
+```json
+{
+  "name": "string (required, exact skill name)"
+}
+```
+
+Loads a skill's full instructions into context. Returns the skill body wrapped in a `<skill>` envelope. Read-only and available during planning.
 
 ---
 

@@ -2,7 +2,7 @@
 
 **Raven** reads a layered **TOML config file** in addition to CLI flags and environment variables. Precedence (highest wins): **CLI flag > env var > workspace config `.raven/config.toml` > global config `~/.raven/config.toml` > built-in default**.
 
-See the [root README CLI reference](../README.md#cli-reference) for the full flag list.
+See the [root README quick start](../README.md#quick-start) for the full flag list.
 
 ---
 
@@ -53,6 +53,7 @@ Layered TOML config, loaded from the workspace first (higher priority), then the
 | `plan_first` | `true` | Propose a plan before executing |
 | `temperature` | `0.2` | Sampling temperature |
 | `no_stream` | `false` | Disable streaming (single request per turn) |
+| `verify` | `true` | Enforce verification gate (agent must run tests after edits) |
 
 ```toml
 # .raven/config.toml  (workspace)  or  ~/.raven/config.toml  (global)
@@ -64,6 +65,7 @@ max_iterations = 30
 plan_first = true
 temperature = 0.2
 no_stream = false
+verify = true
 ```
 
 CLI flags still win over config file values; env vars take precedence over the config file but lose to explicit CLI flags.
@@ -76,7 +78,8 @@ The context window is fetched from the model's actual metadata via Ollama's `/ap
 
 | Model name contains | Inferred window |
 |---|---|
-| `gemma4`, `gemma3`, `qwen2.5`, `qwen3`, `llama3.1`, `llama3.2`, `deepseek`, `codestral` | 128 000 |
+| `glm` + `cloud` | 1 000 000 |
+| `gemma4`, `gemma3`, `qwen2.5`, `qwen3`, `llama3.1`, `llama3.2`, `deepseek`, `codestral`, `glm` | 128 000 |
 | `llama3`, `codellama`, `32k` | 32 768 |
 | `mistral`, `8k` | 8 192 |
 | _(anything else)_ | 32 768 |
@@ -89,7 +92,7 @@ RAVEN_CONTEXT_WINDOW=65536 raven -p "..."
 OG_CONTEXT_WINDOW=65536 raven -p "..."
 ```
 
-The `max_tokens` output budget is derived as `context_window / 8`, clamped to `[1024, 8192]`. Per iteration, it is further clamped so `prompt_tokens + max_tokens + 64 ≤ context_window`.
+The `max_tokens` output budget is derived as `context_window / 8`, clamped to `[1024, 32768]`. Per iteration, it is further clamped so `prompt_tokens + max_tokens + 64 ≤ context_window`.
 
 ---
 

@@ -1,6 +1,6 @@
 # Architecture
 
-Design overview for **Raven**. See the [module map](../README.md#module-map) for a summary, and [contributing.md](contributing.md) for how to extend the codebase.
+Design overview for **Raven**. See the [project layout](../README.md#project-layout) for a summary, and [contributing.md](contributing.md) for how to extend the codebase.
 
 ## High-level data flow
 
@@ -79,11 +79,12 @@ When `history_tokens(messages) > compact_threshold × (context_window − output
 ### What it does
 
 1. **Keep the system message** (index 0) — always.
-2. **Compute a trailing budget** = ~40% of `(context_window − output_reserve)`.
-3. **Find the tail**: walk backward from the end, accumulating messages until the trailing budget is exceeded. Adjust the start so tool-call/tool-result pairs aren't split (see `find_safe_tail_start`).
-4. **Summarize the middle**: everything between the system message and the tail is condensed into a synthetic user message (`[Compacted conversation summary]`) + an assistant acknowledgement. User asks, assistant actions, tool names, and truncated tool bodies are captured. Summary is capped at 4000 chars.
-5. **Replace history**: `[system, summary_user, summary_assistant, ...tail]`.
-6. **Emit a `Compacted` event** with `before_tokens` / `after_tokens`.
+2. **Soft-prune old tool results** — trim tool outputs older than 3 turns (keep head 1500 + tail 1500 chars with a truncation marker). If this brings tokens under the limit, stop here.
+3. **Compute a trailing budget** = ~40% of `(context_window − output_reserve)`.
+4. **Find the tail**: walk backward from the end, accumulating messages until the trailing budget is exceeded. Adjust the start so tool-call/tool-result pairs aren't split (see `find_safe_tail_start`).
+5. **LLM summarization**: the middle messages are sent to the model in a dedicated non-streaming request for summarization (max ~150 words). If the LLM call fails, an extractive fallback summarizer condenses the middle into a synthetic user message (`[Compacted conversation summary]`) + an assistant acknowledgement. User asks, assistant actions, tool names, and truncated tool bodies are captured. Summary is capped at 4000 chars.
+6. **Replace history**: `[system, summary_user, summary_assistant, ...tail]`.
+7. **Emit a `Compacted` event** with `before_tokens` / `after_tokens`.
 
 ### Limitations
 
@@ -95,7 +96,7 @@ When `history_tokens(messages) > compact_threshold × (context_window − output
 
 ## Sandbox
 
-Implemented in [`tools.rs`](../src/tools.rs). See [tools.md](tools.md) for the full tool contracts.
+Implemented in [`src/tools/`](../src/tools/). See [tools.md](tools.md) for the full tool contracts.
 
 ### Path confinement
 

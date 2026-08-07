@@ -12,7 +12,7 @@ A **privacy-first** local coding-agent harness written in Rust for [Ollama](http
 |---|---|
 | Streaming agent loop (OpenAI-compatible `/v1/chat/completions`) | MCP server marketplace |
 | 22 tools: `list_dir`, `read_file`, `search_replace`, `write_file`, `grep`, `run_shell`, `search_code`, `todo_write`, `memory_update`, `memory_search`, `git_status`, `git_diff`, `git_log`, `git_commit`, `apply_patch`, `run_tests`, `run_lint`, `ask_user`, `web_search`, `web_fetch`, `skill_search`, `skill_load` | MCP server marketplace |
-| Document extraction: `read_file` converts `.docx`, `.pdf`, `.xlsx`, `.odt`, `.epub`, `.pptx`, `.csv` and more to Markdown (via the `anydoc` engine) | MCP server marketplace |
+| Document extraction: `read_file` converts `.docx`, `.pdf`, `.xlsx`, `.odt`, `.epub`, `.pptx`, `.csv`, `.rtf`, `.ods`, `.odp`, `.doc`, `.xls`, `.ppt` and more to Markdown (via the `anydoc` engine) | MCP server marketplace |
 | Workspace sandbox (path confinement + dangerous-command filter) | OS-level kernel sandbox (Landlock/seccomp) |
 | Structured plan mode (parse → approve → revise → execute) | Worktree isolation |
 | Skills (`SKILL.md` discovery + `skill_search`/`skill_load`) | Rhai workflow engine |
@@ -48,7 +48,7 @@ Suggested models: `qwen2.5-coder:7b`, `qwen2.5-coder:14b`, `llama3.1:8b`, `deeps
 ## Install & build
 
 ```bash
-cd ollama-grok-rs
+cd raven
 cargo build --release
 # binary: target/release/raven
 ```
@@ -164,9 +164,10 @@ The agent tracks token usage with a built-in BPE tokenizer (no external vocab fi
 
 Context window sizes are fetched from the model's actual metadata via Ollama's `/api/show` endpoint. This returns the real `context_length` from the model file (e.g. `gemma4` → 131K, `qwen3.5` → 262K, `deepseek-v4` → 1M). If the API is unreachable (Ollama not running, model not found), a name-based heuristic is used as fallback:
 
-- `gemma4`, `gemma3`, `qwen2.5`, `qwen3`, `llama3.1`, `llama3.2`, `deepseek`, `codestral` → 128K
+- `gemma4`, `gemma3`, `qwen2.5`, `qwen3`, `llama3.1`, `llama3.2`, `deepseek`, `codestral`, `glm` → 128K
 - `llama3`, `codellama` → 32K
 - `mistral` → 8K
+- `glm:cloud` → 1M
 - Unknown models → 32K (safe default)
 
 ---
@@ -201,7 +202,7 @@ The `--yolo` flag disables confirmation entirely, but the denylist still applies
 ## Testing
 
 ```bash
-cargo test                    # 121 tests, all offline
+cargo test                    # 304 tests, all offline
 cargo clippy                  # zero warnings
 cargo clippy -- -W clippy::pedantic  # stricter linting
 ```
@@ -225,7 +226,11 @@ src/
   session.rs    # JSONL session persistence, resume, list
   plan.rs       # Structured plan mode, parse_plan, format_plan
   memory.rs     # Cross-session MEMORY.md
+  skills.rs     # SKILL.md discovery + skill_search/skill_load
+  repomap.rs    # Lightweight repo symbol map
+  web.rs        # Web tools (web_search, web_fetch)
   error.rs      # Typed AgentError enum
+  runner.rs     # Shared event-draining and plan-approval flow
 ```
 
 ---

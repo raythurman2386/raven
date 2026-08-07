@@ -69,8 +69,9 @@ tool calls), the harness falls back to prompting you to approve/revise/abort.
 During the plan-proposal turn (and any revision turn), the agent is limited to a **read-only toolset** so it can gather context without modifying the workspace before you approve:
 
 - `list_dir`, `read_file`, `grep`, `search_code`, `git_status`, `git_diff`, `git_log`
+- `web_search`, `web_fetch`, `skill_search`, `skill_load`, `memory_search`
 
-The mutating and shell tools (`write_file`, `search_replace`, `run_shell`, `todo_write`, `memory_update`, `apply_patch`, `run_tests`) are **not advertised** to the model during planning, so it physically cannot change files or run commands until you approve. Only after approval does the full toolset become available.
+The mutating and shell tools (`write_file`, `search_replace`, `run_shell`, `todo_write`, `memory_update`, `apply_patch`, `run_tests`, `run_lint`, `git_commit`, `ask_user`) are **not advertised** to the model during planning, so it physically cannot change files or run commands until you approve. Only after approval does the full toolset become available.
 
 ---
 
@@ -241,7 +242,7 @@ automatically runs the linter and feeds any errors back to the model as a
 reminder on the *next* request — so the agent self-corrects before you see the
 damage. On a clean lint pass nothing is injected, keeping the loop quiet.
 
-### Enforced verification (`--verify`)
+### Enforced verification (`--no-verify`)
 
 Raven enforces that the agent runs the test suite after editing files before it
 can finish a turn. When a turn calls `write_file`/`search_replace`/`apply_patch`
@@ -270,7 +271,7 @@ quitting (Ctrl+C/Esc/`/quit`) always flushes the session before exit.
 
 ### TUI limitations
 
-- Each submission spawns a **fresh agent** — conversation history is not carried across turns.
+- Each submission spawns a **fresh agent** — conversation history is carried across turns via in-memory session messages and persisted to `.raven/sessions/`.
 - Plan approval is heuristic: type `yes`/`y`/`approve`/`go`/`execute`/`ok` to execute, or any other text to revise.
 - Scrollback is limited to the on-screen log window.
 

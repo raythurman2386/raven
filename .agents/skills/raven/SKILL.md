@@ -21,7 +21,7 @@ correctly.
 ## When to Use
 
 - Implementing or fixing issues in the raven repo
-- Adding or modifying tools in `src/tools.rs`
+- Adding or modifying tools in `src/tools/`
 - Changing the agent loop, compaction, or context management
 - Modifying the TUI, session persistence, or CLI
 - Reviewing PRs to the repo
@@ -38,7 +38,7 @@ CLI (main.rs)
        ├─ system prompt (SYSTEM_BASE + AGENTS.md + --rules)
        ├─ streaming loop ── POST /v1/chat/completions (Ollama)
        ├─ compaction (context.rs) ── estimate tokens, summarize middle
-       ├─ tool dispatch (tools.rs) ── parallel via spawn_blocking
+       ├─ tool dispatch (tools/) ── parallel via spawn_blocking
        └─ events (mpsc) ── TextDelta, ToolStart/End, Iteration, Compacted, Done, Error
   └─ TUI (tui.rs)  ── ratatui event loop, drains agent events
   └─ run_parallel ── N independent Agent tasks on tokio tasks
@@ -49,6 +49,7 @@ CLI (main.rs)
 | Path | Purpose |
 |------|---------|
 | `src/main.rs` | CLI entry, headless runner, session management |
+| `src/lib.rs` | Library crate re-exports for benchmarks/integration tests |
 | `src/agent.rs` | Streaming agent loop, `AgentEvent`, parallel sub-agents, enforced-verify gate |
 | `src/commands.rs` | Slash-command registry + parsing for the TUI |
 | `src/config.rs` | `Settings`, config.toml loading, context-window inference, AGENTS.md loader |
@@ -57,10 +58,11 @@ CLI (main.rs)
 | `src/memory.rs` | Cross-session project memory (`.raven/MEMORY.md`) |
 | `src/plan.rs` | Structured plan mode, `parse_plan`, `format_plan` |
 | `src/repomap.rs` | Lightweight repo symbol map (`<repo_map>` for large workspaces) |
+| `src/runner.rs` | Shared event-draining and plan-approval flow |
 | `src/session.rs` | JSONL session persistence, resume, list |
 | `src/skills.rs` | `SKILL.md` discovery + `skill_search`/`skill_load` |
 | `src/tokenizer.rs` | Pure-Rust BPE token estimator (no external vocab) |
-| `src/tools.rs` | 22 tools + workspace sandbox (path confinement, shell filter) |
+| `src/tools/` | 22 tools + workspace sandbox (path confinement, shell filter) — split into `mod.rs`, `definitions.rs`, `dispatch.rs`, `sandbox.rs`, `document.rs`, `git.rs`, `patch.rs` |
 | `src/tui.rs` | ratatui TUI with status bar, streaming, scrollback, /commands |
 | `src/web.rs` | Web tools (`web_search`, `web_fetch`) |
 
@@ -69,7 +71,7 @@ CLI (main.rs)
 ### Rust
 
 - **Rust 2021 edition.** Target MSRV: 1.85+ (pinned in `rust-toolchain.toml`).
-- Keep the binary small and dependency-light. No MCP, no skills, no kernel sandbox.
+- Keep the binary small and dependency-light. No MCP, no kernel sandbox.
 - Every public struct, enum, and fn should have a doc comment.
 - `cargo doc --no-deps` must build with no warnings.
 - `cargo build` must build with no warnings.
@@ -88,7 +90,7 @@ CLI (main.rs)
 ```bash
 cargo build                    # debug build, must be warning-free
 cargo build --release          # LTO + strip
-cargo test                     # 185+ tests, all offline (no Ollama needed)
+cargo test                     # 304 tests, all offline (no Ollama needed)
 cargo clippy --all-targets -- -D warnings   # must be zero warnings
 cargo fmt --all --check        # formatting check
 cargo doc --no-deps            # docs must build with no warnings
@@ -119,8 +121,10 @@ test`, `cargo clippy`, `cargo fmt`) — do not rely on the agent's simulated
 
 ## Common Pitfalls
 
-1. **`tools.rs` is 2300+ lines** — the largest file. When adding a tool, keep
-   the existing structure; a refactor to split it is tracked as issue #1.
+1. **`tools/` directory** — the tool module was split from a single `tools.rs`
+   into `tools/mod.rs`, `definitions.rs`, `dispatch.rs`, `sandbox.rs`,
+   `document.rs`, `git.rs`, `patch.rs`. When adding a tool, keep the existing
+   structure; definitions go in `definitions.rs`, dispatch in `dispatch.rs`.
 2. **Tokenizer is a fast estimator, not exact** — it targets ±15% of real
    tiktoken counts, biased slightly high so compaction triggers early. Don't
    "fix" it to be exact without a real tokenizer to validate against (issue #4).
