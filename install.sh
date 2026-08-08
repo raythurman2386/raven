@@ -147,33 +147,40 @@ main() {
         exit 1
     fi
 
-    if curl -fsSL --retry 3 --retry-delay 2 -o "$tmp_dir/checksums.txt" "$checksum_url" 2>/dev/null; then
-        echo "==> Verifying checksum ..."
-        local expected
-        expected="$(grep "$artifact" "$tmp_dir/checksums.txt" | awk '{print $1}')"
-        if [[ -z "$expected" ]]; then
-            echo "Warning: no checksum entry found for $artifact, skipping verification" >&2
-        else
-            local actual
-            if command -v sha256sum &>/dev/null; then
-                actual="$(sha256sum "$tmp_dir/$artifact" | awk '{print $1}')"
-            elif command -v shasum &>/dev/null; then
-                actual="$(shasum -a 256 "$tmp_dir/$artifact" | awk '{print $1}')"
-            else
-                echo "Warning: no sha256sum or shasum found, skipping verification" >&2
-                actual=""
-            fi
-            if [[ -n "$actual" ]] && [[ "$actual" != "$expected" ]]; then
-                echo "Error: checksum mismatch!" >&2
-                echo "  expected: $expected" >&2
-                echo "  actual:   $actual" >&2
-                exit 1
-            fi
-            echo "==> Checksum OK"
-        fi
-    else
-        echo "==> No checksums file found, skipping verification"
+    # Fail closed on integrity: the checksum file and matching entry are
+    # required. If they're missing, refuse to install rather than silently
+    # shipping an unverified binary.
+    if ! curl -fsSL --retry 3 --retry-delay 2 -o "$tmp_dir/checksums.txt" "$checksum_url" 2>/dev/null; then
+        echo "Error: failed to download checksums.txt from $checksum_url" >&2
+        echo "Refusing to install without a checksum. Verify the release is complete." >&2
+        exit 1
     fi
+
+    local expected
+    expected="$(grep "$artifact" "$tmp_dir/checksums.txt" | awk '{print $1}')"
+    if [[ -z "$expected" ]]; then
+        echo "Error: no checksum entry found for $artifact in checksums.txt" >&2
+        echo "Refusing to install an unverified binary." >&2
+        exit 1
+    fi
+
+    local actual
+    if command -v sha256sum &>/dev/null; then
+        actual="$(sha256sum "$tmp_dir/$artifact" | awk '{print $1}')"
+    elif command -v shasum &>/dev/null; then
+        actual="$(shasum -a 256 "$tmp_dir/$artifact" | awk '{print $1}')"
+    else
+        echo "Error: neither sha256sum nor shasum is available to verify the download" >&2
+        exit 1
+    fi
+
+    if [[ "$actual" != "$expected" ]]; then
+        echo "Error: checksum mismatch!" >&2
+        echo "  expected: $expected" >&2
+        echo "  actual:   $actual" >&2
+        exit 1
+    fi
+    echo "==> Checksum OK"
 
     mkdir -p "$INSTALL_DIR"
     mv "$tmp_dir/$artifact" "$INSTALL_DIR/$BINARY"

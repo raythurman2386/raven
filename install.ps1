@@ -105,31 +105,39 @@ try {
         exit 1
     }
 
+    # Fail closed on integrity: the checksum file and matching entry are
+    # required. If they're missing, refuse to install rather than silently
+    # shipping an unverified binary.
     try {
         $checksumPath = Join-Path $tmpDir "checksums.txt"
         Invoke-WebRequest -Uri $checksumUrl -OutFile $checksumPath -ErrorAction Stop
-        Write-Host "==> Verifying checksum ..."
-        $checksums = Get-Content $checksumPath
-        $expected = $null
-        foreach ($line in $checksums) {
-            if ($line -match "^\s*([a-f0-9]+)\s+.*$([regex]::Escape($artifact))") {
-                $expected = $Matches[1]
-                break
-            }
-        }
-        if (-not $expected) {
-            Write-Warning "No checksum entry found for $artifact, skipping verification"
-        } else {
-            $actual = (Get-FileHash -Path $artifactPath -Algorithm SHA256).Hash.ToLower()
-            if ($actual -ne $expected) {
-                Write-Error "Checksum mismatch!`n  expected: $expected`n  actual:   $actual"
-                exit 1
-            }
-            Write-Host "==> Checksum OK"
-        }
     } catch {
-        Write-Host "==> No checksums file found, skipping verification"
+        Write-Error "Failed to download checksums.txt from $checksumUrl"
+        Write-Error "Refusing to install without a checksum. Verify the release is complete."
+        exit 1
     }
+
+    Write-Host "==> Verifying checksum ..."
+    $checksums = Get-Content $checksumPath
+    $expected = $null
+    foreach ($line in $checksums) {
+        if ($line -match "^\s*([a-f0-9]+)\s+.*$([regex]::Escape($artifact))") {
+            $expected = $Matches[1]
+            break
+        }
+    }
+    if (-not $expected) {
+        Write-Error "No checksum entry found for $artifact in checksums.txt"
+        Write-Error "Refusing to install an unverified binary."
+        exit 1
+    }
+
+    $actual = (Get-FileHash -Path $artifactPath -Algorithm SHA256).Hash.ToLower()
+    if ($actual -ne $expected) {
+        Write-Error "Checksum mismatch!`n  expected: $expected`n  actual:   $actual"
+        exit 1
+    }
+    Write-Host "==> Checksum OK"
 
     if (-not (Test-Path $To)) {
         New-Item -ItemType Directory -Path $To -Force | Out-Null

@@ -91,6 +91,16 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      - name: Generate checksums
+        # Compute SHA-256 over every built binary so the installers can verify
+        # integrity. Written into the artifacts dir so it's uploaded alongside
+        # the binaries and the installers find it as checksums.txt.
+        working-directory: artifacts
+        shell: bash
+        run: |
+          sha256sum * > checksums.txt
+          cat checksums.txt
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
