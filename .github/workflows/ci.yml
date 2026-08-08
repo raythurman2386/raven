@@ -83,3 +83,20 @@ jobs:
         run: cargo install cargo-audit --locked
       - name: Run security audit
         run: cargo audit
+
+  build-release:
+    name: Build (release)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.97"
+      - name: Build release
+        run: cargo build --release
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: raven-linux-x86_64
+          path: target/release/raven

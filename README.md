@@ -45,7 +45,34 @@ Suggested models: `qwen2.5-coder:7b`, `qwen2.5-coder:14b`, `llama3.1:8b`, `deeps
 
 ---
 
-## Install & build
+## Install
+
+### One-liner (recommended)
+
+**Linux / macOS / Raspberry Pi:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/raythurman2386/raven/master/install.sh | sh
+```
+
+**Windows (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/raythurman2386/raven/master/install.ps1 | iex
+```
+
+The script detects your platform, downloads the latest prebuilt binary from
+GitHub Releases, verifies the SHA-256 checksum, and installs to `~/.cargo/bin`.
+
+Options:
+
+```bash
+curl -fsSL .../install.sh | sh -s -- --version 0.1.0   # pin a version
+curl -fsSL .../install.sh | sh -s -- --to /usr/local/bin  # custom install dir
+curl -fsSL .../install.sh | sh -s -- --force              # overwrite existing
+```
+
+### Build from source
 
 ```bash
 cd raven
