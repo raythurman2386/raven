@@ -23,10 +23,12 @@ use super::Theme;
 pub fn render_blocks(blocks: &[BlockKind], tick: u64) -> (Vec<Line<'static>>, usize) {
     let mut lines = Vec::with_capacity(blocks.len().saturating_mul(2));
     let mut last_assistant_start: Option<usize> = None;
-    // With parallel tool dispatch, several tool blocks can be `active`
-    // simultaneously. Animating a spinner on all of them at once reads as
-    // visual chaos. Show the live spinner/glimmer on only the most recent
-    // active tool; earlier active tools render dimmed without a spinner.
+    // Only the most recent tool call is rendered as a live line. Every earlier
+    // tool block is skipped (no line emitted), so a burst of parallel tool
+    // calls doesn't accumulate a wall of lines that rebuilds the log every
+    // frame — the whole point is to keep per-frame rendering cheap.
+    let last_tool = blocks.iter().rposition(|b| matches!(b, BlockKind::Tool(_)));
+    // The last active tool (if any) is the one that glimmers with a spinner.
     let last_active_tool = blocks
         .iter()
         .rposition(|b| matches!(b, BlockKind::Tool(t) if t.active));
@@ -64,6 +66,13 @@ pub fn render_blocks(blocks: &[BlockKind], tick: u64) -> (Vec<Line<'static>>, us
                 }
             }
             BlockKind::Tool(t) => {
+                // Skip all but the newest tool line.
+                if last_tool != Some(i) {
+                    // Still break any open assistant tail so a tool between
+                    // two assistants doesn't inflate the trailing count.
+                    last_assistant_start = None;
+                    continue;
+                }
                 let is_last_active = last_active_tool == Some(i);
                 let style = tool_style(t, tick, is_last_active);
                 let prefix = if is_last_active {
@@ -506,9 +515,11 @@ mod tests {
     }
 
     #[test]
-    fn render_blocks_only_last_active_tool_glimmers() {
-        // Two parallel tools both active: only the newest should show the
-        // spinner + bold glimmer; the earlier one renders dimmed (no spinner).
+    fn render_blocks_only_last_tool_rendered() {
+        // Two parallel tools: only the newest is rendered as a live line.
+        // The earlier one is suppressed entirely — it must not appear in the
+        // output lines, so a burst of parallel calls can't build a wall of
+        // tool lines that slows per-frame rendering.
         let mut tb1 = ToolBlock::new("→ read_file(a)".to_string());
         tb1.active = true;
         let mut tb2 = ToolBlock::new("→ search_code(b)".to_string());
@@ -516,39 +527,27 @@ mod tests {
         let blocks = vec![BlockKind::Tool(tb1), BlockKind::Tool(tb2)];
         let (lines, _tail) = render_blocks(&blocks, 0);
 
-        let first = lines[0].to_string();
-        let second = lines[1].to_string();
+        assert_eq!(lines.len(), 1, "only the newest tool line should render");
+        let rendered = lines[0].to_string();
         assert!(
-            first.contains("read_file(a)"),
-            "first tool text should render, got {first:?}"
+            rendered.contains("search_code(b)"),
+            "newest tool should render, got {rendered:?}"
         );
         assert!(
-            second.contains("search_code(b)"),
-            "second tool text should render, got {second:?}"
+            !rendered.contains("read_file(a)"),
+            "earlier tool should be suppressed, got {rendered:?}"
         );
         // Newest active tool glimmers (bold + spinner prefix).
         assert!(
-            lines[1].spans[0]
+            lines[0].spans[0]
                 .style
                 .add_modifier
                 .contains(Modifier::BOLD),
-            "newest active tool should be bold, got {second:?}"
+            "newest active tool should be bold, got {rendered:?}"
         );
         assert!(
-            second.starts_with('⠋'),
-            "newest active tool should carry a spinner prefix, got {second:?}"
-        );
-        // Earlier active tool is dimmed and has no spinner prefix.
-        assert!(
-            !lines[0].spans[0]
-                .style
-                .add_modifier
-                .contains(Modifier::BOLD),
-            "earlier active tool should not be bold, got {first:?}"
-        );
-        assert!(
-            first.starts_with('→'),
-            "earlier active tool should have no spinner prefix, got {first:?}"
+            rendered.starts_with('⠋'),
+            "newest active tool should carry a spinner prefix, got {rendered:?}"
         );
     }
 
