@@ -3,7 +3,9 @@
 use anyhow::{Context, Result};
 use std::process::Command;
 
-use super::sandbox::{cap_output, truncate_output, wait_for_child, Sandbox, MAX_TOOL_OUTPUT};
+use super::sandbox::{
+    cap_output, spawn_confined, truncate_output, wait_for_child, Sandbox, MAX_TOOL_OUTPUT,
+};
 
 impl Sandbox {
     /// `git status --porcelain=v1` — structured, compact output.
@@ -131,28 +133,26 @@ impl Sandbox {
     }
 
     pub(crate) fn is_git_repo(&self) -> Result<bool> {
-        let mut child = Command::new("git")
-            .args(["rev-parse", "--is-inside-work-tree"])
+        let mut cmd = Command::new("git");
+        cmd.args(["rev-parse", "--is-inside-work-tree"])
             .current_dir(&self.workspace)
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .context("spawn git")?;
-        match wait_for_child(&mut child, 30) {
+            .stderr(std::process::Stdio::null());
+        let mut confined = spawn_confined(&mut cmd, &self.workspace).context("spawn git")?;
+        match wait_for_child(&mut confined.child, 30) {
             Some((status, _, _)) => Ok(status.success()),
             None => Ok(false),
         }
     }
 
     pub(crate) fn run_git(&self, args: &[&str]) -> Result<String> {
-        let mut child = Command::new("git")
-            .args(args)
+        let mut cmd = Command::new("git");
+        cmd.args(args)
             .current_dir(&self.workspace)
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .context("spawn git")?;
-        match wait_for_child(&mut child, 30) {
+            .stderr(std::process::Stdio::piped());
+        let mut confined = spawn_confined(&mut cmd, &self.workspace).context("spawn git")?;
+        match wait_for_child(&mut confined.child, 30) {
             Some((status, stdout, stderr)) => {
                 let mut out = String::new();
                 if !stdout.is_empty() {

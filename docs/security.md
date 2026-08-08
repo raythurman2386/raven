@@ -106,7 +106,37 @@ oversized writes (`RLIMIT_FSIZE`), runaway CPU (`RLIMIT_CPU`), and fd exhaustion
 
 **Limitation:** Best-effort — a kernel that doesn't support a limit is ignored.
 
-### 5. Shell safety (denylist + allowlist + direct exec)
+### 5. Windows Job Objects (resource limits + process-tree confinement)
+
+**What it does:** On Windows, every subprocess Raven spawns is assigned to a
+fresh Job Object configured with:
+
+- `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` — all processes in the job are killed
+  when the job handle closes, so a runaway child (and its entire process tree)
+  cannot outlive the parent Raven process.
+- `JOB_OBJECT_LIMIT_ACTIVE_PROCESS` (max 256) — caps the process tree size.
+- `JOB_OBJECT_LIMIT_PROCESS_MEMORY` / `JOB_OBJECT_LIMIT_JOB_MEMORY` (1 GiB
+  each) — caps per-process and per-job memory, matching the Unix `RLIMIT_AS`
+  value.
+
+The child is opened with the minimal access rights (`PROCESS_SET_QUOTA |
+PROCESS_QUERY_INFORMATION | PROCESS_TERMINATE`) — deliberately *not*
+`PROCESS_ALL_ACCESS`.
+
+**Why:** Job Objects are the Windows-native equivalent of the Unix
+Landlock/seccomp/rlimits model. A process in a job cannot escape it, so a
+misbehaving child's grandchildren are confined to the same limits, and a
+fork-bomb/runaway process is killed when Raven exits.
+
+**Platforms:** Windows only.
+
+**Limitation:** Best-effort. If creating or assigning the Job Object fails
+(kernel policy, handle exhaustion), Raven logs a warning and the child runs
+without job confinement — the same posture as the Unix layers. Job Objects do
+not provide filesystem confinement (that is Landlock's role, which has no
+Windows equivalent) or a network block (seccomp, also Linux-only).
+
+### 6. Shell safety (denylist + allowlist + direct exec)
 
 **What it does:**
 - **Denylist** (`dangerous_re`): blocks obviously destructive patterns
@@ -134,9 +164,11 @@ the OS-level layers above.
 
 ## What Raven does NOT do
 
-- **No OS-level kernel sandbox on Windows.** Windows is best-effort: path
-  confinement + shell filtering apply, but there is no Landlock/seccomp
-  equivalent. This is the same posture as most tools in this space.
+- **No Windows filesystem confinement.** Windows gets Job Objects (resource
+  limits + process-tree confinement + kill-on-close) and shell filtering, but
+  there is no Landlock/seccomp equivalent — a subprocess on Windows can still
+  read/write any file the user can, and can make network calls. This is the
+  same posture as most tools in this space.
 - **No container/VM isolation.** Raven does not require Docker or any
   container runtime. If you need stronger isolation, run Raven inside a
   container or VM yourself.

@@ -37,6 +37,15 @@ libc = "0.2"
 landlock = "0.4.7"
 seccompiler = "0.5.0"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
+
 [dev-dependencies]
 criterion = "0.8"
 zip = "8.6"

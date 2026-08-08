@@ -39,6 +39,58 @@ use walkdir::WalkDir;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 
+/// Cross-platform open flags for [`Sandbox::open_beneath`].
+///
+/// Kept intentionally small — just the flags the sandbox's file tools need.
+/// Linux maps these onto `rustix::fs::OFlags` for `openat2`; other platforms
+/// map them onto `std::fs::OpenOptions`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct OpenFlags(u32);
+
+impl std::ops::BitOr for OpenFlags {
+    type Output = Self;
+    fn bitor(self, rhs: Self) -> Self {
+        Self(self.0 | rhs.0)
+    }
+}
+
+impl OpenFlags {
+    pub(crate) const RDONLY: Self = Self(1 << 0);
+    pub(crate) const WRONLY: Self = Self(1 << 1);
+    pub(crate) const CREATE: Self = Self(1 << 2);
+    pub(crate) const TRUNC: Self = Self(1 << 3);
+    pub(crate) const APPEND: Self = Self(1 << 4);
+    pub(crate) const CLOEXEC: Self = Self(1 << 5);
+
+    fn contains(self, other: Self) -> bool {
+        self.0 & other.0 != 0
+    }
+
+    #[cfg(target_os = "linux")]
+    fn to_rustix(self) -> rustix::fs::OFlags {
+        let mut f = rustix::fs::OFlags::empty();
+        if self.contains(Self::RDONLY) {
+            f |= rustix::fs::OFlags::RDONLY;
+        }
+        if self.contains(Self::WRONLY) {
+            f |= rustix::fs::OFlags::WRONLY;
+        }
+        if self.contains(Self::CREATE) {
+            f |= rustix::fs::OFlags::CREATE;
+        }
+        if self.contains(Self::TRUNC) {
+            f |= rustix::fs::OFlags::TRUNC;
+        }
+        if self.contains(Self::APPEND) {
+            f |= rustix::fs::OFlags::APPEND;
+        }
+        if self.contains(Self::CLOEXEC) {
+            f |= rustix::fs::OFlags::CLOEXEC;
+        }
+        f
+    }
+}
+
 pub(crate) const MAX_TOOL_OUTPUT: usize = 12_000;
 const MAX_LINE_LENGTH: usize = 2000;
 const REPLACE_ALL_WARN_THRESHOLD: usize = 20;
@@ -191,8 +243,8 @@ impl Sandbox {
     pub(crate) fn open_beneath(
         &self,
         path: &str,
-        oflags: rustix::fs::OFlags,
-        mode: rustix::fs::Mode,
+        flags: OpenFlags,
+        #[cfg_attr(not(target_os = "linux"), allow(unused_variables))] mode: u32,
     ) -> Result<std::fs::File> {
         #[cfg(target_os = "linux")]
         {
@@ -202,8 +254,8 @@ impl Sandbox {
             let fd = openat2(
                 &ws_dir,
                 path,
-                oflags,
-                mode,
+                flags.to_rustix(),
+                rustix::fs::Mode::from_bits_truncate(mode),
                 ResolveFlags::BENEATH | ResolveFlags::NO_MAGICLINKS,
             )
             .map_err(|e| {
@@ -217,10 +269,11 @@ impl Sandbox {
         {
             let p = self.safe_resolve(path)?;
             let file = std::fs::OpenOptions::new()
-                .read(oflags.contains(rustix::fs::OFlags::RDONLY))
-                .write(oflags.contains(rustix::fs::OFlags::WRONLY))
-                .create(oflags.contains(rustix::fs::OFlags::CREATE))
-                .truncate(oflags.contains(rustix::fs::OFlags::TRUNC))
+                .read(flags.contains(OpenFlags::RDONLY))
+                .write(flags.contains(OpenFlags::WRONLY))
+                .create(flags.contains(OpenFlags::CREATE))
+                .append(flags.contains(OpenFlags::APPEND))
+                .truncate(flags.contains(OpenFlags::TRUNC))
                 .open(&p)?;
             Ok(file)
         }
@@ -331,11 +384,7 @@ impl Sandbox {
         }
 
         // Open via openat2 (kernel-enforced confinement, no TOCTOU race).
-        let file = self.open_beneath(
-            path,
-            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC,
-            rustix::fs::Mode::empty(),
-        )?;
+        let file = self.open_beneath(path, OpenFlags::RDONLY | OpenFlags::CLOEXEC, 0)?;
         let text = std::io::read_to_string(file).context("read file")?;
         let lines: Vec<&str> = text.lines().collect();
         let start = start_line.saturating_sub(1);
@@ -372,11 +421,8 @@ impl Sandbox {
         // Open via openat2 (kernel-enforced confinement, no TOCTOU race).
         let mut file = self.open_beneath(
             path,
-            rustix::fs::OFlags::WRONLY
-                | rustix::fs::OFlags::CREATE
-                | rustix::fs::OFlags::TRUNC
-                | rustix::fs::OFlags::CLOEXEC,
-            rustix::fs::Mode::from(0o644),
+            OpenFlags::WRONLY | OpenFlags::CREATE | OpenFlags::TRUNC | OpenFlags::CLOEXEC,
+            0o644,
         )?;
         use std::io::Write;
         file.write_all(content.as_bytes())?;
@@ -413,11 +459,8 @@ impl Sandbox {
             // Open via openat2 (kernel-enforced confinement, no TOCTOU race).
             let mut file = self.open_beneath(
                 path,
-                rustix::fs::OFlags::WRONLY
-                    | rustix::fs::OFlags::CREATE
-                    | rustix::fs::OFlags::TRUNC
-                    | rustix::fs::OFlags::CLOEXEC,
-                rustix::fs::Mode::from(0o644),
+                OpenFlags::WRONLY | OpenFlags::CREATE | OpenFlags::TRUNC | OpenFlags::CLOEXEC,
+                0o644,
             )?;
             use std::io::Write;
             file.write_all(new_string.as_bytes())?;
@@ -429,11 +472,7 @@ impl Sandbox {
         }
 
         // Open via openat2 (kernel-enforced confinement, no TOCTOU race).
-        let file = self.open_beneath(
-            path,
-            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC,
-            rustix::fs::Mode::empty(),
-        )?;
+        let file = self.open_beneath(path, OpenFlags::RDONLY | OpenFlags::CLOEXEC, 0)?;
         let content = std::io::read_to_string(file).context("read file before edit")?;
 
         if replace_all {
@@ -452,10 +491,8 @@ impl Sandbox {
             let new_content = content.replace(old_string, new_string);
             let mut file = self.open_beneath(
                 path,
-                rustix::fs::OFlags::WRONLY
-                    | rustix::fs::OFlags::TRUNC
-                    | rustix::fs::OFlags::CLOEXEC,
-                rustix::fs::Mode::empty(),
+                OpenFlags::WRONLY | OpenFlags::TRUNC | OpenFlags::CLOEXEC,
+                0,
             )?;
             use std::io::Write;
             file.write_all(new_content.as_bytes())?;
@@ -472,10 +509,8 @@ impl Sandbox {
                 new_content.push_str(&content[f + old_string.len()..]);
                 let mut file = self.open_beneath(
                     path,
-                    rustix::fs::OFlags::WRONLY
-                        | rustix::fs::OFlags::TRUNC
-                        | rustix::fs::OFlags::CLOEXEC,
-                    rustix::fs::Mode::empty(),
+                    OpenFlags::WRONLY | OpenFlags::TRUNC | OpenFlags::CLOEXEC,
+                    0,
                 )?;
                 use std::io::Write;
                 file.write_all(new_content.as_bytes())?;
@@ -509,62 +544,27 @@ impl Sandbox {
         // Direct-exec path: if the command is a known-safe single binary with
         // no shell metacharacters, run it without a shell. This removes the
         // shell-injection surface entirely for the common case.
-        if is_direct_exec_command(command) {
-            if let Some(argv) = parse_argv(command) {
-                if let Some((bin, args)) = argv.split_first() {
-                    let mut cmd = Command::new(bin);
-                    cmd.args(args);
-                    cmd.current_dir(&self.workspace);
-                    setup_shell_env(&mut cmd, &self.workspace);
-                    cmd.stdout(std::process::Stdio::piped())
-                        .stderr(std::process::Stdio::piped());
-                    // Apply OS-level confinement (Landlock/seccomp/rlimits) in
-                    // the child before exec.
-                    let ws = self.workspace.clone();
-                    unsafe {
-                        cmd.pre_exec(move || {
-                            apply_os_confinement(&ws);
-                            Ok(())
-                        });
-                    }
-                    let mut child = cmd.spawn().context("spawn command")?;
-                    return match wait_for_child(&mut child, timeout_secs) {
-                        Some((status, stdout, stderr)) => {
-                            let mut out = format!("exit={}\n", status.code().unwrap_or(-1));
-                            out.push_str(&String::from_utf8_lossy(&stdout));
-                            out.push_str(&String::from_utf8_lossy(&stderr));
-                            Ok(cap_output(out))
-                        }
-                        None => Ok("Error: command timed out".into()),
-                    };
-                }
+        let mut cmd = if is_direct_exec_command(command) {
+            match parse_argv(command).and_then(|argv| {
+                let mut it = argv.into_iter();
+                let bin = it.next()?;
+                let mut c = Command::new(bin);
+                c.args(it);
+                Some(c)
+            }) {
+                Some(c) => c,
+                None => shell_command(command),
             }
-        }
+        } else {
+            shell_command(command)
+        };
 
-        // Shell fallback path: still denylist-filtered + confirmation-gated.
-        let mut cmd = shell_command(command);
         cmd.current_dir(&self.workspace);
         setup_shell_env(&mut cmd, &self.workspace);
         cmd.stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
-        let ws = self.workspace.clone();
-        unsafe {
-            cmd.pre_exec(move || {
-                apply_os_confinement(&ws);
-                Ok(())
-            });
-        }
 
-        let mut child = cmd.spawn().context("spawn shell")?;
-        match wait_for_child(&mut child, timeout_secs) {
-            Some((status, stdout, stderr)) => {
-                let mut out = format!("exit={}\n", status.code().unwrap_or(-1));
-                out.push_str(&String::from_utf8_lossy(&stdout));
-                out.push_str(&String::from_utf8_lossy(&stderr));
-                Ok(cap_output(out))
-            }
-            None => Ok("Error: command timed out".into()),
-        }
+        run_confined(&mut cmd, &self.workspace, timeout_secs)
     }
 
     /// Regex content search (Grok Build `grep` semantics, pure-Rust fallback).
@@ -706,15 +706,16 @@ impl Sandbox {
             TestRunner::Pytest => ("pytest", vec![]),
         };
 
-        let mut child = Command::new(resolve_command(cmd))
+        let mut command = Command::new(resolve_command(cmd));
+        command
             .args(&args)
             .current_dir(&self.workspace)
             .env("CI", "true")
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .context("spawn test runner")?;
-        match wait_for_child(&mut child, 600) {
+            .stderr(std::process::Stdio::piped());
+        let mut confined =
+            spawn_confined(&mut command, &self.workspace).context("spawn test runner")?;
+        match wait_for_child(&mut confined.child, 600) {
             Some((status, stdout, stderr)) => {
                 let mut out = format!(
                     "--- run_tests ({}) exit={} ---\n",
@@ -798,14 +799,14 @@ impl Sandbox {
             return Ok("No linter detected (no Cargo.toml, tsconfig.json, package.json, or Python config found)".into());
         };
 
-        let mut child = Command::new(resolve_command(cmd))
+        let mut command = Command::new(resolve_command(cmd));
+        command
             .args(&args)
             .current_dir(&self.workspace)
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .context("spawn linter")?;
-        match wait_for_child(&mut child, 600) {
+            .stderr(std::process::Stdio::piped());
+        let mut confined = spawn_confined(&mut command, &self.workspace).context("spawn linter")?;
+        match wait_for_child(&mut confined.child, 600) {
             Some((status, stdout, stderr)) => {
                 let mut out = format!(
                     "--- run_lint ({}) exit={} ---\n",
@@ -1049,9 +1050,10 @@ fn apply_seccomp_network_block() {
 
 /// Apply all OS-level confinement to the calling process (the child).
 ///
-/// Called from `pre_exec` before `exec`. Best-effort: each layer logs and
-/// continues on failure so a kernel that doesn't support a feature doesn't
-/// break the child.
+/// Called from `pre_exec` before `exec` (Unix only). Best-effort: each layer
+/// logs and continues on failure so a kernel that doesn't support a feature
+/// doesn't break the child.
+#[cfg(unix)]
 fn apply_os_confinement(workspace: &Path) {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     apply_rlimits();
@@ -1211,6 +1213,90 @@ pub(crate) fn wait_for_child(
         .and_then(|h| h.join().ok())
         .unwrap_or_default();
     Some((status, stdout, stderr))
+}
+
+/// A running subprocess plus its OS-level confinement guard.
+///
+/// The guard's scope is the whole subprocess lifetime: on Windows it owns the
+/// Job Object handle, which must stay open until the child is reaped (with
+/// `KILL_ON_JOB_CLOSE`, dropping it early would kill the child). Keep this
+/// value alive for as long as the [`Self::child`] is being waited on.
+pub(crate) struct ConfinedChild {
+    pub(crate) child: std::process::Child,
+    #[cfg(windows)]
+    _job: Option<crate::tools::windows::JobObject>,
+}
+
+/// Spawn a configured `Command` under OS-level confinement, returning the
+/// running child. This is the single spawn path shared by `run_shell`,
+/// `run_tests`, `run_lint`, and the git tools, so every subprocess inherits
+/// the hardening.
+///
+/// - On Unix, confinement is applied in the child via `pre_exec` (rlimits,
+///   Landlock, seccomp) before `exec`.
+/// - On Windows, confinement is applied from the parent via a Job Object
+///   (resource limits + kill-on-close + process-tree confinement), which is
+///   the native equivalent to the Unix child-side model.
+///
+/// The `Command` must already have its env, cwd, and stdio configured. The
+/// caller drains pipes and waits on [`ConfinedChild::child`] while keeping the
+/// returned [`ConfinedChild`] alive.
+pub(crate) fn spawn_confined(
+    cmd: &mut Command,
+    #[cfg_attr(not(unix), allow(unused_variables))] workspace: &Path,
+) -> Result<ConfinedChild> {
+    #[cfg(unix)]
+    {
+        let ws = workspace.to_path_buf();
+        unsafe {
+            cmd.pre_exec(move || {
+                apply_os_confinement(&ws);
+                Ok(())
+            });
+        }
+    }
+
+    let child = cmd.spawn().context("spawn command")?;
+
+    #[cfg(windows)]
+    {
+        match crate::tools::windows::JobObject::new() {
+            Some(job) => {
+                job.assign_process(child.id());
+                // The Job Object handle stays open for the child's lifetime; it
+                // is closed when the ConfinedChild (and thus the guard) drops.
+                Ok(ConfinedChild {
+                    child,
+                    _job: Some(job),
+                })
+            }
+            None => Ok(ConfinedChild { child, _job: None }),
+        }
+    }
+
+    #[cfg(not(windows))]
+    Ok(ConfinedChild { child })
+}
+
+/// Run a configured `Command` under OS-level confinement and wait for it.
+///
+/// Thin wrapper over [`spawn_confined`] that also drains pipes and waits,
+/// returning the capped command output or an error string on timeout.
+pub(crate) fn run_confined(
+    cmd: &mut Command,
+    workspace: &Path,
+    timeout_secs: u64,
+) -> Result<String> {
+    let mut confined = spawn_confined(cmd, workspace)?;
+    match wait_for_child(&mut confined.child, timeout_secs) {
+        Some((status, stdout, stderr)) => {
+            let mut out = format!("exit={}\n", status.code().unwrap_or(-1));
+            out.push_str(&String::from_utf8_lossy(&stdout));
+            out.push_str(&String::from_utf8_lossy(&stderr));
+            Ok(cap_output(out))
+        }
+        None => Ok("Error: command timed out".into()),
+    }
 }
 
 pub(crate) enum TestRunner {

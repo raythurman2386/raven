@@ -474,10 +474,17 @@ max_iterations = 10
     fn config_file_missing_returns_defaults() {
         // Isolate HOME so a real user global config (~/.raven/config.toml)
         // doesn't leak into this test.
+        let original_home = std::env::var_os("HOME");
         let home = tempfile::tempdir().unwrap();
         std::env::set_var("HOME", home.path());
         let tmp = tempfile::tempdir().unwrap();
         let cfg = load_config_file(tmp.path());
+        // Restore HOME so this test can't pollute later tests (which under
+        // Landlock confinement need a valid HOME to spawn subprocesses).
+        match original_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
         assert!(cfg.model.is_none());
         assert!(cfg.host.is_none());
     }

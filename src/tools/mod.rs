@@ -13,6 +13,8 @@ mod document;
 mod git;
 mod patch;
 mod sandbox;
+#[cfg(windows)]
+mod windows;
 
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
@@ -99,7 +101,7 @@ mod tests {
     use super::patch::parse_unified_diff;
     #[cfg(unix)]
     use super::sandbox::wait_for_child;
-    use super::sandbox::{dangerous_re, safe_command_re, truncate_output};
+    use super::sandbox::{dangerous_re, safe_command_re, truncate_output, OpenFlags};
     use super::*;
     use std::io::Write;
     #[cfg(unix)]
@@ -191,8 +193,8 @@ mod tests {
         let sb = sandbox();
         let res = sb.open_beneath(
             "../../escaped.txt",
-            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC,
-            rustix::fs::Mode::empty(),
+            OpenFlags::RDONLY | OpenFlags::CLOEXEC,
+            0,
         );
         assert!(
             res.is_err(),
@@ -204,11 +206,7 @@ mod tests {
     #[test]
     fn open_beneath_rejects_absolute_outside() {
         let sb = sandbox();
-        let res = sb.open_beneath(
-            "/etc/passwd",
-            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC,
-            rustix::fs::Mode::empty(),
-        );
+        let res = sb.open_beneath("/etc/passwd", OpenFlags::RDONLY | OpenFlags::CLOEXEC, 0);
         assert!(
             res.is_err(),
             "open_beneath should reject absolute paths outside workspace: {:?}",
@@ -229,11 +227,7 @@ mod tests {
         {
             std::os::unix::fs::symlink(outside.path(), ws.join("evil")).unwrap();
             let sb = Sandbox::new(ws.clone());
-            let res = sb.open_beneath(
-                "evil/secret.txt",
-                rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC,
-                rustix::fs::Mode::empty(),
-            );
+            let res = sb.open_beneath("evil/secret.txt", OpenFlags::RDONLY | OpenFlags::CLOEXEC, 0);
             assert!(
                 res.is_err(),
                 "open_beneath should reject symlink escape: {:?}",
@@ -256,11 +250,8 @@ mod tests {
             let sb = Sandbox::new(ws.clone());
             let res = sb.open_beneath(
                 "evil/escaped.txt",
-                rustix::fs::OFlags::WRONLY
-                    | rustix::fs::OFlags::CREATE
-                    | rustix::fs::OFlags::TRUNC
-                    | rustix::fs::OFlags::CLOEXEC,
-                rustix::fs::Mode::from(0o644),
+                OpenFlags::WRONLY | OpenFlags::CREATE | OpenFlags::TRUNC | OpenFlags::CLOEXEC,
+                0o644,
             );
             assert!(
                 res.is_err(),
@@ -281,11 +272,7 @@ mod tests {
         std::fs::write(tmp.path().join("a.txt"), "hello").unwrap();
         let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
         let file = sb
-            .open_beneath(
-                "a.txt",
-                rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC,
-                rustix::fs::Mode::empty(),
-            )
+            .open_beneath("a.txt", OpenFlags::RDONLY | OpenFlags::CLOEXEC, 0)
             .unwrap();
         let content = std::io::read_to_string(file).unwrap();
         assert_eq!(content, "hello");
