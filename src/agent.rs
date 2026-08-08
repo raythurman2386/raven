@@ -818,12 +818,21 @@ impl Agent {
                         s
                     }
                     Err(e) => {
-                        let msg = format!("Tool error: {e}");
                         if e.is_transient() {
                             tracing::warn!("Transient tool error (retryable): {e}");
                         } else {
                             tracing::error!("Tool error: {e}");
                         }
+                        // Surface the retry guidance so the model can act on
+                        // the classification: a transient error (I/O, timeout,
+                        // permission) may be worth retrying once; a
+                        // deterministic error will not succeed on retry.
+                        let retry_hint = if e.is_transient() {
+                            " This may be transient; a single retry is reasonable."
+                        } else {
+                            " This is a deterministic error; do not retry the same call — adjust the inputs or use a different approach."
+                        };
+                        let msg = format!("Tool error: {e}{retry_hint}");
                         let failure_key = (name.clone(), cache_key.clone());
                         if self.consecutive_failure_key.as_ref() == Some(&failure_key) {
                             self.consecutive_failure_count += 1;
