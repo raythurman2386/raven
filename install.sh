@@ -62,9 +62,8 @@ detect_platform() {
 
     case "$os" in
         Linux)  os="unknown-linux-gnu" ;;
-        Darwin) os="apple-darwin" ;;
         *)
-            echo "Error: unsupported OS: $os" >&2
+            echo "Error: unsupported OS: $os (prebuilt binaries are Linux-only)" >&2
             exit 1
             ;;
     esac

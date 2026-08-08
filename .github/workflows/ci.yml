@@ -18,7 +18,7 @@ jobs:
     name: Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
@@ -31,7 +31,7 @@ jobs:
     name: Lint (clippy)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
@@ -44,7 +44,7 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
@@ -60,7 +60,7 @@ jobs:
     name: Test (Windows)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
@@ -74,7 +74,7 @@ jobs:
     name: Audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
@@ -88,7 +88,7 @@ jobs:
     name: Build (release)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
@@ -96,7 +96,7 @@ jobs:
       - name: Build release
         run: cargo build --release
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: raven-linux-x86_64
           path: target/release/raven
