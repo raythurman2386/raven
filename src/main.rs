@@ -276,13 +276,9 @@ async fn main() -> Result<()> {
     // --resume [id]: load a session
     let resume_session: Option<Session> = if let Some(maybe_id) = &cli.resume {
         let session = if let Some(id) = maybe_id {
-            match store.load(id) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("Failed to load session {}: {}", id, e);
-                    return Ok(());
-                }
-            }
+            store
+                .load(id)
+                .map_err(|e| anyhow::anyhow!("Failed to load session {id}: {e}"))?
         } else {
             match store.latest()? {
                 Some(s) => s,
