@@ -26,7 +26,7 @@ toml = "1.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 crossterm = "0.29"
-ratatui = "0.26"
+ratatui = "0.30"
 anydoc = "0.1.6"
 tempfile = "3"
 
