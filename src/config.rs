@@ -295,6 +295,22 @@ mod tests {
     }
 
     #[test]
+    fn infer_context_window_qwen35_is_256k() {
+        // qwen3.5 must be 256K, not the generic qwen3 → 128K.
+        assert_eq!(infer_context_window("qwen3.5:0.8b"), 262_144);
+        assert_eq!(infer_context_window("qwen3.5"), 262_144);
+    }
+
+    #[test]
+    fn infer_context_window_deepseek_cloud_variants() {
+        // deepseek-v4-flash:cloud is 1M; pro:cloud is 512K.
+        assert_eq!(infer_context_window("deepseek-v4-flash:cloud"), 1_000_000);
+        assert_eq!(infer_context_window("deepseek-v4-pro:cloud"), 524_288);
+        // Non-cloud deepseek falls back to the generic 128K.
+        assert_eq!(infer_context_window("deepseek-r1:14b"), 128_000);
+    }
+
+    #[test]
     fn infer_context_window_glm_cloud() {
         assert_eq!(infer_context_window("glm-5.2:cloud"), 1_000_000);
         assert_eq!(infer_context_window("glm-5.2:cloud"), 1_000_000);
