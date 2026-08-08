@@ -36,6 +36,9 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
 use walkdir::WalkDir;
 
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+
 pub(crate) const MAX_TOOL_OUTPUT: usize = 12_000;
 const MAX_LINE_LENGTH: usize = 2000;
 const REPLACE_ALL_WARN_THRESHOLD: usize = 20;
@@ -175,6 +178,54 @@ impl Sandbox {
         Ok(target)
     }
 
+    /// Open a file relative to the workspace root with kernel-enforced path
+    /// confinement.
+    ///
+    /// On Linux, uses `openat2` with `RESOLVE_BENEATH | NO_MAGICLINKS`, which
+    /// makes the kernel refuse to resolve any path that escapes the workspace
+    /// — atomically, with no TOCTOU race (a symlink cannot be swapped in
+    /// between the check and the open). On other platforms, falls back to
+    /// [`Self::safe_resolve`] + `std::fs::File::open`.
+    ///
+    /// `path` must be relative to the workspace root (e.g. `src/main.rs`).
+    pub(crate) fn open_beneath(
+        &self,
+        path: &str,
+        oflags: rustix::fs::OFlags,
+        mode: rustix::fs::Mode,
+    ) -> Result<std::fs::File> {
+        #[cfg(target_os = "linux")]
+        {
+            use rustix::fs::{openat2, ResolveFlags};
+            let ws_dir = std::fs::File::open(&self.workspace)
+                .map_err(|e| anyhow::anyhow!("open workspace dir: {e}"))?;
+            let fd = openat2(
+                &ws_dir,
+                path,
+                oflags,
+                mode,
+                ResolveFlags::BENEATH | ResolveFlags::NO_MAGICLINKS,
+            )
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Path outside workspace or unopenable: {path}. Use relative paths like 'src/main.rs', not absolute paths starting with / ({e})"
+                )
+            })?;
+            Ok(std::fs::File::from(fd))
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let p = self.safe_resolve(path)?;
+            let file = std::fs::OpenOptions::new()
+                .read(oflags.contains(rustix::fs::OFlags::RDONLY))
+                .write(oflags.contains(rustix::fs::OFlags::WRONLY))
+                .create(oflags.contains(rustix::fs::OFlags::CREATE))
+                .truncate(oflags.contains(rustix::fs::OFlags::TRUNC))
+                .open(&p)?;
+            Ok(file)
+        }
+    }
+
     /// List the contents of a directory (dirs first, then files, alphabetical).
     pub fn list_dir(&self, path: &str) -> Result<String> {
         let p = self.safe_resolve(path)?;
@@ -279,7 +330,13 @@ impl Sandbox {
             ));
         }
 
-        let text = std::fs::read_to_string(&p).context("read file")?;
+        // Open via openat2 (kernel-enforced confinement, no TOCTOU race).
+        let file = self.open_beneath(
+            path,
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )?;
+        let text = std::io::read_to_string(file).context("read file")?;
         let lines: Vec<&str> = text.lines().collect();
         let start = start_line.saturating_sub(1);
         let end = (start + max_lines).min(lines.len());
@@ -307,11 +364,22 @@ impl Sandbox {
 
     /// Full file write (create/overwrite).
     pub fn write_file(&self, path: &str, content: &str) -> Result<String> {
+        // Ensure parent dirs exist (via safe_resolve for validation).
         let p = self.safe_resolve(path)?;
         if let Some(parent) = p.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(&p, content)?;
+        // Open via openat2 (kernel-enforced confinement, no TOCTOU race).
+        let mut file = self.open_beneath(
+            path,
+            rustix::fs::OFlags::WRONLY
+                | rustix::fs::OFlags::CREATE
+                | rustix::fs::OFlags::TRUNC
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::from(0o644),
+        )?;
+        use std::io::Write;
+        file.write_all(content.as_bytes())?;
         Ok(format!("Wrote {} bytes → {}", content.len(), path))
     }
 
@@ -342,7 +410,17 @@ impl Sandbox {
             if let Some(parent) = p.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            std::fs::write(&p, new_string)?;
+            // Open via openat2 (kernel-enforced confinement, no TOCTOU race).
+            let mut file = self.open_beneath(
+                path,
+                rustix::fs::OFlags::WRONLY
+                    | rustix::fs::OFlags::CREATE
+                    | rustix::fs::OFlags::TRUNC
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::from(0o644),
+            )?;
+            use std::io::Write;
+            file.write_all(new_string.as_bytes())?;
             return Ok(format!("Created {} ({} bytes)", path, new_string.len()));
         }
 
@@ -350,7 +428,13 @@ impl Sandbox {
             return Ok(format!("Error: {} is not a file", path));
         }
 
-        let content = std::fs::read_to_string(&p).context("read file before edit")?;
+        // Open via openat2 (kernel-enforced confinement, no TOCTOU race).
+        let file = self.open_beneath(
+            path,
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )?;
+        let content = std::io::read_to_string(file).context("read file before edit")?;
 
         if replace_all {
             let count = content.matches(old_string).count();
@@ -366,7 +450,15 @@ impl Sandbox {
                 ));
             }
             let new_content = content.replace(old_string, new_string);
-            std::fs::write(&p, &new_content)?;
+            let mut file = self.open_beneath(
+                path,
+                rustix::fs::OFlags::WRONLY
+                    | rustix::fs::OFlags::TRUNC
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            )?;
+            use std::io::Write;
+            file.write_all(new_content.as_bytes())?;
             return Ok(format!("Replaced {} occurrence(s) in {}", count, path));
         }
 
@@ -378,7 +470,15 @@ impl Sandbox {
                 new_content.push_str(&content[..f]);
                 new_content.push_str(new_string);
                 new_content.push_str(&content[f + old_string.len()..]);
-                std::fs::write(&p, &new_content)?;
+                let mut file = self.open_beneath(
+                    path,
+                    rustix::fs::OFlags::WRONLY
+                        | rustix::fs::OFlags::TRUNC
+                        | rustix::fs::OFlags::CLOEXEC,
+                    rustix::fs::Mode::empty(),
+                )?;
+                use std::io::Write;
+                file.write_all(new_content.as_bytes())?;
                 Ok(format!("Edited {}", path))
             }
             (Some(_), Some(_)) => Ok(format!(
@@ -405,11 +505,55 @@ impl Sandbox {
         if dangerous_re().is_match(command) {
             return Ok("Error: command blocked by sandbox filter".into());
         }
+
+        // Direct-exec path: if the command is a known-safe single binary with
+        // no shell metacharacters, run it without a shell. This removes the
+        // shell-injection surface entirely for the common case.
+        if is_direct_exec_command(command) {
+            if let Some(argv) = parse_argv(command) {
+                if let Some((bin, args)) = argv.split_first() {
+                    let mut cmd = Command::new(bin);
+                    cmd.args(args);
+                    cmd.current_dir(&self.workspace);
+                    setup_shell_env(&mut cmd, &self.workspace);
+                    cmd.stdout(std::process::Stdio::piped())
+                        .stderr(std::process::Stdio::piped());
+                    // Apply OS-level confinement (Landlock/seccomp/rlimits) in
+                    // the child before exec.
+                    let ws = self.workspace.clone();
+                    unsafe {
+                        cmd.pre_exec(move || {
+                            apply_os_confinement(&ws);
+                            Ok(())
+                        });
+                    }
+                    let mut child = cmd.spawn().context("spawn command")?;
+                    return match wait_for_child(&mut child, timeout_secs) {
+                        Some((status, stdout, stderr)) => {
+                            let mut out = format!("exit={}\n", status.code().unwrap_or(-1));
+                            out.push_str(&String::from_utf8_lossy(&stdout));
+                            out.push_str(&String::from_utf8_lossy(&stderr));
+                            Ok(cap_output(out))
+                        }
+                        None => Ok("Error: command timed out".into()),
+                    };
+                }
+            }
+        }
+
+        // Shell fallback path: still denylist-filtered + confirmation-gated.
         let mut cmd = shell_command(command);
         cmd.current_dir(&self.workspace);
         setup_shell_env(&mut cmd, &self.workspace);
         cmd.stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
+        let ws = self.workspace.clone();
+        unsafe {
+            cmd.pre_exec(move || {
+                apply_os_confinement(&ws);
+                Ok(())
+            });
+        }
 
         let mut child = cmd.spawn().context("spawn shell")?;
         match wait_for_child(&mut child, timeout_secs) {
@@ -677,6 +821,244 @@ impl Sandbox {
             None => Ok("Error: linter timed out".into()),
         }
     }
+}
+
+/// Shell metacharacters that indicate a command needs a real shell.
+///
+/// When a command contains none of these and its first token is on the
+/// allowlist, we can run it via direct exec (no shell, no injection surface).
+fn has_shell_metachars(command: &str) -> bool {
+    command.chars().any(|c| {
+        matches!(
+            c,
+            ';' | '&' | '|' | '>' | '<' | '`' | '$' | '(' | ')' | '\n'
+        )
+    })
+}
+
+/// Parse a command into argv via `shlex`. Returns `None` if the command
+/// contains shell metacharacters or fails to parse.
+fn parse_argv(command: &str) -> Option<Vec<String>> {
+    if has_shell_metachars(command) {
+        return None;
+    }
+    shlex::split(command)
+}
+
+/// Whether a command can be run via direct exec (no shell).
+///
+/// The first token must be on the `safe_command_re` allowlist AND the command
+/// must contain no shell metacharacters. This flips the model from "denylist
+/// dangerous" toward "allowlist safe": known-safe commands run without a
+/// shell (no injection surface), everything else falls back to the shell path
+/// (still denylist-filtered + confirmation-gated).
+pub(crate) fn is_direct_exec_command(command: &str) -> bool {
+    if has_shell_metachars(command) {
+        return false;
+    }
+    let Some(argv) = parse_argv(command) else {
+        return false;
+    };
+    let Some(first) = argv.first() else {
+        return false;
+    };
+    safe_command_re().is_match(first)
+}
+
+/// Apply resource limits (RLIMIT_*) to the calling process.
+///
+/// Linux + macOS. Kills fork bombs (RLIMIT_NPROC), runaway memory
+/// (RLIMIT_AS), oversized writes (RLIMIT_FSIZE), runaway CPU (RLIMIT_CPU),
+/// and fd exhaustion (RLIMIT_NOFILE). Best-effort: failures are ignored so a
+/// kernel that doesn't support a limit doesn't break the child.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn apply_rlimits() {
+    use rustix::process::{setrlimit, Resource, Rlimit};
+    // 30s CPU, 1 GiB address space, 64 MiB max file write, 1024 fds,
+    // 1024 procs (high enough for real build tools, low enough to stop
+    // runaway fork bombs).
+    let limits = [
+        (
+            Resource::Cpu,
+            Rlimit {
+                current: Some(30),
+                maximum: Some(30),
+            },
+        ),
+        (
+            Resource::As,
+            Rlimit {
+                current: Some(1 << 30),
+                maximum: Some(1 << 30),
+            },
+        ),
+        (
+            Resource::Fsize,
+            Rlimit {
+                current: Some(64 << 20),
+                maximum: Some(64 << 20),
+            },
+        ),
+        (
+            Resource::Nofile,
+            Rlimit {
+                current: Some(1024),
+                maximum: Some(1024),
+            },
+        ),
+        (
+            Resource::Nproc,
+            Rlimit {
+                current: Some(1024),
+                maximum: Some(1024),
+            },
+        ),
+    ];
+    for (res, lim) in limits {
+        let _ = setrlimit(res, lim);
+    }
+}
+
+/// Apply Landlock filesystem confinement to the calling process.
+///
+/// Linux-only. Grants read/write only under the workspace (plus temp dirs)
+/// and denies everything else. This is the real fix for "uploading full
+/// directories" — the process literally cannot open a file outside the
+/// workspace regardless of what the model does. Best-effort: if the kernel
+/// doesn't support Landlock, we log and continue (the caller decides whether
+/// that's acceptable).
+#[cfg(target_os = "linux")]
+fn apply_landlock(workspace: &Path) {
+    use landlock::{
+        path_beneath_rules, Access, AccessFs, CompatLevel, Compatible, Ruleset, RulesetAttr,
+        RulesetCreatedAttr, ABI,
+    };
+    // The Landlock ABI should be incremented (and tested) regularly.
+    let abi = ABI::V1;
+    let access_all = AccessFs::from_all(abi);
+    let access_read = AccessFs::from_read(abi);
+
+    let mut paths: Vec<PathBuf> = vec![workspace.to_path_buf()];
+    // Allow temp dirs so tools can write scratch files.
+    if let Ok(tmp) = std::env::temp_dir().canonicalize() {
+        paths.push(tmp);
+    }
+    // Allow the user's home directory so tools can read/write config and
+    // caches (git config, npm/cargo caches, etc.). This is a pragmatic
+    // tradeoff: the primary protection is confining to the workspace, but
+    // blocking HOME entirely breaks most dev tools.
+    if let Ok(home) = std::env::var("HOME").map(PathBuf::from) {
+        if let Ok(home_canon) = home.canonicalize() {
+            paths.push(home_canon);
+        }
+    }
+    // Allow /dev so tools can open /dev/null (git, etc.). This is a narrow,
+    // pragmatic exception — /dev/null is harmless and most dev tools need it.
+    paths.push(PathBuf::from("/dev"));
+
+    let result = Ruleset::default()
+        .set_compatibility(CompatLevel::BestEffort)
+        .handle_access(access_all)
+        .and_then(|r| r.create())
+        .and_then(|r| r.add_rules(path_beneath_rules(&paths, access_all)))
+        .and_then(|r| {
+            r.add_rules(path_beneath_rules(
+                &["/usr", "/bin", "/lib", "/lib64", "/etc"],
+                access_read,
+            ))
+        })
+        .and_then(|r| r.restrict_self());
+
+    match result {
+        Ok(status) => {
+            if status.ruleset == landlock::RulesetStatus::NotEnforced {
+                tracing::warn!("Landlock not enforced (kernel too old?); filesystem confinement is best-effort");
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Landlock failed to apply: {e}; filesystem confinement is best-effort");
+        }
+    }
+}
+
+/// Apply a seccomp filter that blocks network syscalls.
+///
+/// Linux-only. Denies `socket`, `connect`, `sendto`, `sendmsg`, `bind`,
+/// `accept`, `listen`, `recvfrom`, `recvmsg`, `socketpair`, `setsockopt`,
+/// `getsockopt`, `shutdown`, `getpeername`, `getsockname`, and `accept4`.
+/// This closes the exfiltration hole — even if the model reads a file, it
+/// can't send it anywhere. Best-effort: if the arch is unsupported, we log
+/// and continue.
+#[cfg(target_os = "linux")]
+fn apply_seccomp_network_block() {
+    use seccompiler::{BpfProgram, SeccompAction, SeccompFilter, SeccompRule};
+    use std::convert::TryInto;
+
+    let syscalls = [
+        libc::SYS_socket,
+        libc::SYS_connect,
+        libc::SYS_sendto,
+        libc::SYS_sendmsg,
+        libc::SYS_bind,
+        libc::SYS_accept,
+        libc::SYS_listen,
+        libc::SYS_recvfrom,
+        libc::SYS_recvmsg,
+        libc::SYS_socketpair,
+        libc::SYS_setsockopt,
+        libc::SYS_getsockopt,
+        libc::SYS_shutdown,
+        libc::SYS_getpeername,
+        libc::SYS_getsockname,
+        libc::SYS_accept4,
+    ];
+
+    let rules: Vec<(i64, Vec<SeccompRule>)> = syscalls.iter().map(|&s| (s, vec![])).collect();
+
+    let target_arch = match std::env::consts::ARCH.try_into() {
+        Ok(arch) => arch,
+        Err(_) => {
+            tracing::warn!("seccomp: unsupported arch, network block skipped");
+            return;
+        }
+    };
+
+    let filter: BpfProgram = match SeccompFilter::new(
+        rules.into_iter().collect(),
+        SeccompAction::Allow,
+        SeccompAction::Errno(libc::EPERM as u32),
+        target_arch,
+    ) {
+        Ok(f) => match f.try_into() {
+            Ok(bpf) => bpf,
+            Err(e) => {
+                tracing::warn!("seccomp: failed to compile filter: {e}");
+                return;
+            }
+        },
+        Err(e) => {
+            tracing::warn!("seccomp: failed to build filter: {e}");
+            return;
+        }
+    };
+
+    if let Err(e) = seccompiler::apply_filter(&filter) {
+        tracing::warn!("seccomp: failed to apply filter: {e}");
+    }
+}
+
+/// Apply all OS-level confinement to the calling process (the child).
+///
+/// Called from `pre_exec` before `exec`. Best-effort: each layer logs and
+/// continues on failure so a kernel that doesn't support a feature doesn't
+/// break the child.
+fn apply_os_confinement(workspace: &Path) {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    apply_rlimits();
+    #[cfg(target_os = "linux")]
+    apply_landlock(workspace);
+    #[cfg(target_os = "linux")]
+    apply_seccomp_network_block();
 }
 
 /// Build a platform-aware shell command.

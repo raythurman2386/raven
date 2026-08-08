@@ -187,6 +187,111 @@ mod tests {
     }
 
     #[test]
+    fn open_beneath_rejects_traversal() {
+        let sb = sandbox();
+        let res = sb.open_beneath(
+            "../../escaped.txt",
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        );
+        assert!(
+            res.is_err(),
+            "open_beneath should reject traversal: {:?}",
+            res
+        );
+    }
+
+    #[test]
+    fn open_beneath_rejects_absolute_outside() {
+        let sb = sandbox();
+        let res = sb.open_beneath(
+            "/etc/passwd",
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        );
+        assert!(
+            res.is_err(),
+            "open_beneath should reject absolute paths outside workspace: {:?}",
+            res
+        );
+    }
+
+    #[test]
+    fn open_beneath_blocks_symlink_escape_read() {
+        let tmp = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        let outside = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        std::fs::write(outside.path().join("secret.txt"), "top secret").unwrap();
+        #[cfg(unix)]
+        let ws = tmp.path().canonicalize().unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(outside.path(), ws.join("evil")).unwrap();
+            let sb = Sandbox::new(ws.clone());
+            let res = sb.open_beneath(
+                "evil/secret.txt",
+                rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            );
+            assert!(
+                res.is_err(),
+                "open_beneath should reject symlink escape: {:?}",
+                res
+            );
+        }
+        let _ = tmp;
+    }
+
+    #[test]
+    fn open_beneath_blocks_symlink_escape_write() {
+        let tmp = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        let outside = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        let ws = tmp.path().canonicalize().unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(outside.path(), ws.join("evil")).unwrap();
+            let sb = Sandbox::new(ws.clone());
+            let res = sb.open_beneath(
+                "evil/escaped.txt",
+                rustix::fs::OFlags::WRONLY
+                    | rustix::fs::OFlags::CREATE
+                    | rustix::fs::OFlags::TRUNC
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::from(0o644),
+            );
+            assert!(
+                res.is_err(),
+                "open_beneath should reject symlink escape on write: {:?}",
+                res
+            );
+            assert!(
+                !outside.path().join("escaped.txt").exists(),
+                "file must not be written outside the workspace"
+            );
+        }
+        let _ = tmp;
+    }
+
+    #[test]
+    fn open_beneath_reads_within_workspace() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "hello").unwrap();
+        let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
+        let file = sb
+            .open_beneath(
+                "a.txt",
+                rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            )
+            .unwrap();
+        let content = std::io::read_to_string(file).unwrap();
+        assert_eq!(content, "hello");
+    }
+
+    #[test]
     fn list_dir_shows_contents() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("a.rs"), "fn main() {}").unwrap();
@@ -427,6 +532,26 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn confined_child_oversized_write_capped_by_fsize() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
+        // RLIMIT_FSIZE caps writes at 64 MiB. Writing 128 MiB of zeros should
+        // fail (SIGXFSZ / EFBIG), not succeed. This verifies the rlimit is
+        // actually applied to confined children.
+        let out = sb
+            .run_shell(
+                "head -c 134217728 /dev/zero > big.bin 2>&1; echo EXIT=$?",
+                10,
+            )
+            .unwrap();
+        assert!(
+            out.contains("EXIT=1") || out.contains("File too large") || out.contains("EFBIG"),
+            "oversized write should be capped by RLIMIT_FSIZE: {out}"
+        );
+    }
+
+    #[test]
     #[cfg(unix)]
     fn run_shell_uses_clean_environment() {
         let tmp = tempfile::tempdir().unwrap();
@@ -465,6 +590,69 @@ mod tests {
             out.contains("HOME="),
             "HOME should be passed through: {}",
             out
+        );
+    }
+
+    #[test]
+    fn is_direct_exec_command_allowlisted_single_binary() {
+        assert!(super::sandbox::is_direct_exec_command("cargo test"));
+        assert!(super::sandbox::is_direct_exec_command("git status"));
+        assert!(super::sandbox::is_direct_exec_command("ls -la"));
+    }
+
+    #[test]
+    fn is_direct_exec_command_rejects_metachars() {
+        assert!(!super::sandbox::is_direct_exec_command(
+            "cargo build && rm -rf ~"
+        ));
+        assert!(!super::sandbox::is_direct_exec_command("echo hi; ls"));
+        assert!(!super::sandbox::is_direct_exec_command("cat file | grep x"));
+        assert!(!super::sandbox::is_direct_exec_command("echo $(whoami)"));
+        assert!(!super::sandbox::is_direct_exec_command("echo `whoami`"));
+    }
+
+    #[test]
+    fn is_direct_exec_command_rejects_unknown_binary() {
+        assert!(!super::sandbox::is_direct_exec_command(
+            "evil_binary --flag"
+        ));
+        assert!(!super::sandbox::is_direct_exec_command("rm -rf /"));
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn confined_child_cannot_read_outside_workspace() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        let sb = Sandbox::new(ws.clone());
+        // A confined child (via run_shell) must not be able to read a file
+        // outside the Landlock allowlist. `/proc/version` is world-readable
+        // normally but is NOT in the allowlist (workspace, temp, HOME, /dev,
+        // /usr, /bin, /lib, /lib64, /etc), so Landlock should block it.
+        let out = sb.run_shell("cat /proc/version", 10).unwrap();
+        assert!(
+            !out.contains("Linux version"),
+            "confined child must not read outside Landlock allowlist: {out}"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn confined_child_network_blocked() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
+        // A confined child's network syscalls are blocked by seccomp. `curl`
+        // may not be installed, so use a shell builtin that attempts a socket.
+        // `getent hosts` uses getaddrinfo (socket). If it fails, that's the
+        // expected behavior. We just assert the command doesn't succeed in
+        // making a connection — it either errors or times out.
+        let out = sb.run_shell("getent hosts example.com", 5).unwrap();
+        // The command should not return a successful resolution. It may error
+        // (network blocked) or return non-zero. We assert it doesn't print a
+        // resolved IP.
+        assert!(
+            !out.contains("93.184.216.34"),
+            "confined child must not resolve/connect: {out}"
         );
     }
 

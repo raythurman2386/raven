@@ -12,6 +12,7 @@ User and contributor guides for **Raven**. Start with the [root README](../READM
 | [tools.md](tools.md) | Users + Contributors | Tool contracts, parameters, sandbox rules, blocked commands |
 | [contributing.md](contributing.md) | Contributors | Build, style, how to add a tool or event |
 | [testing.md](testing.md) | Contributors | Test structure, coverage, mutation testing |
+| [security.md](security.md) | Security reviewers | Threat model, defense layers, platform caveats |
 
 ## Quick links
 
