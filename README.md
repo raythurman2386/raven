@@ -6,6 +6,16 @@ A **privacy-first** local coding-agent harness written in Rust for [Ollama](http
 
 ---
 
+## Why Raven?
+
+Most coding-agent harnesses assume you can reach the open internet: they phone home for telemetry, pull plugins from a marketplace, and expect a managed cloud auth layer. That assumption breaks in the environments where a local model is most valuable — **air-gapped and locked-down networks** where the only reachable model endpoint is a local Ollama instance.
+
+Raven is built for exactly that case. It is a **minimal harness with zero telemetry**: no usage tracking, no phone-home calls, no managed cloud auth, no MCP marketplace, no kernel sandbox. Everything runs against your local (or cloud) endpoint, and the whole thing is a single small binary you can audit end-to-end. If your network policy says the only thing your machine may talk to is Ollama, Raven is the agent loop that still works.
+
+That constraint is the design center, not an afterthought — it's why the feature set looks the way it does (see the table below) and why the out-of-scope list is explicit.
+
+---
+
 ## Features
 
 | In scope | Intentionally out of scope |
@@ -49,7 +59,7 @@ Suggested models: `qwen2.5-coder:7b`, `qwen2.5-coder:14b`, `llama3.1:8b`, `deeps
 
 ### One-liner (recommended)
 
-**Linux / macOS / Raspberry Pi:**
+**Linux / Raspberry Pi:**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/raythurman2386/raven/master/install.sh | sh
@@ -67,7 +77,7 @@ GitHub Releases, verifies the SHA-256 checksum, and installs to `~/.cargo/bin`.
 Options:
 
 ```bash
-curl -fsSL .../install.sh | sh -s -- --version 0.1.0   # pin a version
+curl -fsSL .../install.sh | sh -s -- --version 0.1.1   # pin a version
 curl -fsSL .../install.sh | sh -s -- --to /usr/local/bin  # custom install dir
 curl -fsSL .../install.sh | sh -s -- --force              # overwrite existing
 ```
