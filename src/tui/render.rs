@@ -455,7 +455,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|f| {
-                let area = f.size();
+                let area = f.area();
                 let widget = Paragraph::new(visible.clone())
                     .block(
                         Block::default()
@@ -468,8 +468,8 @@ mod tests {
             .unwrap();
         let buf = terminal.backend().buffer();
         // Content starts at x=2 (left border + padding), y=0. Read 4 cols.
-        let row0: String = (2..6).map(|x| buf.get(x, 0).symbol().to_string()).collect();
-        let row1: String = (2..6).map(|x| buf.get(x, 1).symbol().to_string()).collect();
+        let row0: String = (2..6).map(|x| buf[(x, 0)].symbol().to_string()).collect();
+        let row1: String = (2..6).map(|x| buf[(x, 1)].symbol().to_string()).collect();
         assert_eq!(row0, "bbbb", "row 0 should be 'bbbb', got {row0:?}");
         assert_eq!(row1, "cccc", "row 1 should be 'cccc', got {row1:?}");
     }
