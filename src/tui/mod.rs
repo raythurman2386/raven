@@ -487,7 +487,7 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                     }
                 }
                 Event::Mouse(m) => {
-                    let size = terminal.size().unwrap_or_default();
+                    let size: Rect = terminal.size().unwrap_or_default().into();
                     let chunks = compute_layout(size, &state);
                     let log_rect = chunks[1];
                     handle_mouse_event(&m, &mut state, size, log_rect, &store, &mut session);
@@ -772,7 +772,7 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState)
         0
     };
 
-    let chunks = compute_layout(f.size(), state);
+    let chunks = compute_layout(f.area(), state);
 
     // Top bar — product · model · context
     let top = Line::from(vec![
@@ -953,7 +953,7 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState)
     f.render_widget(input_w, chunks[4]);
 
     let (cx, cy) = input_cursor_position(&state.input, prompt, chunks[4]);
-    f.set_cursor(cx, cy);
+    f.set_cursor_position((cx, cy));
 }
 
 /// Number of wrapped lines a string occupies at the given width (char count).
