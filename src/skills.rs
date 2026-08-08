@@ -123,50 +123,50 @@ fn walk_skills(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) {
     }
 }
 
-/// Cached skill list keyed by workspace path, invalidated when skills
-/// directories change (tracked via directory mtime).
+/// Cached skill list keyed by workspace path, invalidated when the set of
+/// discoverable SKILL.md files changes (fingerprint = sorted paths + mtimes).
 #[derive(Debug, Clone)]
 struct CacheEntry {
     skills: Vec<Skill>,
-    mtime: Option<SystemTime>,
+    fingerprint: Vec<(PathBuf, Option<SystemTime>)>,
 }
 
 static DISCOVER_CACHE: LazyLock<Mutex<HashMap<PathBuf, CacheEntry>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-fn skills_dir_mtime(workspace: &Path) -> Option<SystemTime> {
-    let mut max_mtime: Option<SystemTime> = None;
-    let ws_dir = workspace.join(".raven").join("skills");
-    if let Ok(meta) = std::fs::metadata(&ws_dir) {
-        if let Ok(m) = meta.modified() {
-            max_mtime = Some(m);
-        }
+/// Sorted, mtime-stamped list of every discoverable SKILL.md (workspace + home).
+///
+/// Used as the cache key. Comparing the full set of skill files — not just the
+/// skills directory mtime — is robust to filesystems with coarse mtime
+/// granularity (e.g. some Windows setups) where creating a new skill
+/// directory within the same mtime tick would otherwise keep a stale cached
+/// list: adding a file changes the path set even when no mtime advances.
+fn skill_fingerprint(workspace: &Path) -> Vec<(PathBuf, Option<SystemTime>)> {
+    let mut files = Vec::new();
+    for p in find_skill_md(workspace) {
+        let m = std::fs::metadata(&p).and_then(|m| m.modified()).ok();
+        files.push((p, m));
     }
     if let Some(home) = dirs::home_dir() {
-        let home_dir = home.join(".raven").join("skills");
-        if let Ok(meta) = std::fs::metadata(&home_dir) {
-            if let Ok(m) = meta.modified() {
-                match max_mtime {
-                    Some(existing) if m > existing => max_mtime = Some(m),
-                    None => max_mtime = Some(m),
-                    _ => {}
-                }
-            }
+        for p in find_skill_md(&home) {
+            let m = std::fs::metadata(&p).and_then(|m| m.modified()).ok();
+            files.push((p, m));
         }
     }
-    max_mtime
+    files.sort();
+    files
 }
 
 /// Discover and parse all skills visible to `workspace`.
 ///
-/// Results are cached and invalidated only when the skills directories change.
+/// Results are cached and invalidated only when the set of skill files changes.
 pub fn discover(workspace: &Path) -> Vec<Skill> {
-    let current_mtime = skills_dir_mtime(workspace);
+    let fingerprint = skill_fingerprint(workspace);
 
     {
         let cache = DISCOVER_CACHE.lock().unwrap();
         if let Some(entry) = cache.get(workspace) {
-            if entry.mtime == current_mtime {
+            if entry.fingerprint == fingerprint {
                 return entry.skills.clone();
             }
         }
@@ -206,7 +206,7 @@ pub fn discover(workspace: &Path) -> Vec<Skill> {
         workspace.to_path_buf(),
         CacheEntry {
             skills: skills.clone(),
-            mtime: current_mtime,
+            fingerprint,
         },
     );
 
