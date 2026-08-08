@@ -2,11 +2,10 @@
 
 **Goal:** Rework every component of `raven` so it is as helpful and fast as
 Grok Build, while remaining a lean single-crate *mini* harness (not a 60-crate
-monorepo). Every item is grounded in `xai-org/grok-build` source, kept at
-`/home/ret/Work/research/grok-build`, and in the cross-agent research
-(Aider/Goose/Cline/Continue) captured in the `rust-llm-agent-harness` skill.
+monorepo). Design decisions are grounded in `xai-org/grok-build` source and in
+cross-agent research (Aider/Goose/Cline/Continue).
 
-**Guiding principles (user):**
+**Guiding principles:**
 - Zero dead code, zero `unsafe`, zero `unreachable!()`, comprehensive offline tests.
 - Clean full transitions — never leave fallback flags or conditional cruft behind.
 - Focused conventional commits (`feat:`/`fix:`/`perf:`/`chore:`), one per logical change.
@@ -14,7 +13,7 @@ monorepo). Every item is grounded in `xai-org/grok-build` source, kept at
 - `mini` means: borrow grok-build's *patterns*, not its monorepo sprawl.
 
 **Reference roots (read before each phase):**
-- grok-build: `/home/ret/Work/research/grok-build/crates/codegen/`
+- grok-build: `crates/codegen/`
   - tools: `xai-grok-tools/src/implementations/`
   - memory: `xai-grok-memory/src/`
   - agent/session: `xai-grok-agent/`, `xai-chat-state/`
@@ -33,7 +32,7 @@ web_fetch, skill_search, skill_load. Plus `exit_plan_mode` signal in plan toolse
 (`src/tools/` module: definitions.rs, dispatch.rs, git.rs, mod.rs, patch.rs, sandbox.rs)
 
 **Already production-grade (done):**
-- Linear tokenizer (`src/tokenizer.rs`) — O(n), was O(n²) perf blocker.
+- Linear token estimator (`src/tokenizer.rs`) — O(n), was O(n²) perf blocker.
 - Phase-timing telemetry (`RUST_LOG=info`: pre_http_ms / send_http_ms / stream_ms).
 - Plan mode with model-driven auto-exit + read-only plan toolset (`src/plan.rs`, `src/agent.rs`).
 - `/stop` + mid-task steering, `/model`, slash-command registry (`src/commands.rs`).

@@ -1,7 +1,7 @@
 //! Context compaction logic.
 //!
 //! Token counting is delegated to [`crate::tokenizer`], which implements a
-//! BPE-like tokenizer for accurate estimates. This module handles the
+//! fast BPE-like estimator for context management. This module handles the
 //! compaction strategy: when to compact, what to keep, and how to summarize.
 //!
 //! Also provides [`fetch_context_window`] — queries Ollama's `/api/show`

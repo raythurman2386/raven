@@ -25,7 +25,7 @@
 //! | [`memory`]    | Project memory (MEMORY.md) loading + update tool     |
 //! | [`plan`]      | Structured plan data model + parsing                |
 //! | [`session`]   | Session persistence (JSONL)                          |
-//! | [`tokenizer`] | BPE-like token counting                              |
+//! | [`tokenizer`] | BPE-like token estimation                         |
 //!
 //! See the repository `README.md` for user-facing documentation and
 //! `docs/architecture.md` for design details.

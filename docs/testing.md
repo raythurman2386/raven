@@ -17,7 +17,7 @@ cargo test
   - `src/context.rs` — token estimation, compaction (preserves system message, reduces tokens, keeps tool-call/result pairs), tool-result pruning
   - `src/tools/` — sandbox path confinement (including symlink-escape rejection), list_dir, read_file, write_file, search_replace, grep, run_shell (dangerous command blocking, API key stripping), dispatch routing, glob matching, unified diff parsing, apply_patch, document extraction
   - `src/plan.rs` — plan parsing (JSON, numbered list, bullet list, code block), plan formatting
-  - `src/tokenizer.rs` — BPE token counting behavior
+  - `src/tokenizer.rs` — token counting behavior
 - **Integration tests** (`tests/`):
   - `tests/cli_smoke.rs` — black-box tests of the compiled binary (`CARGO_BIN_EXE_raven`): `--help`/`--version` output, no-task error, and session persistence round-trip
 

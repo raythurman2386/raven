@@ -18,7 +18,7 @@ A **privacy-first** local coding-agent harness written in Rust for [Ollama](http
 | Skills (`SKILL.md` discovery + `skill_search`/`skill_load`) | Rhai workflow engine |
 | Repo symbol map (`<repo_map>` injected for large workspaces) | GUI / web frontend |
 | Parallel tool execution within a single model turn | Telemetry / usage tracking |
-| Pure-Rust BPE tokenizer for accurate token/context counting |  |
+| Pure-Rust token estimator for context-window management |  |
 | Context-window inference + automatic compaction (tool-result pruning) |  |
 | JSONL session persistence (`--resume`, `--list-sessions`) |  |
 | Cross-session project memory (`.raven/MEMORY.md`) | |
@@ -157,7 +157,7 @@ The agent maintains a workspace memory file at `.raven/MEMORY.md`. The first 25K
 
 ## Context management
 
-The agent tracks token usage with a built-in BPE tokenizer (no external vocab file needed). When the conversation approaches the context window limit, it automatically:
+The agent tracks token usage with a built-in token estimator (no external vocab file needed). When the conversation approaches the context window limit, it automatically:
 
 1. **Prunes old tool results** — soft-trims tool outputs older than 3 turns (keeps head + tail with a truncation marker)
 2. **Compacts the conversation** — summarizes the middle of the conversation, preserving the system message and the last ~40% of the context budget for recent messages
@@ -222,7 +222,7 @@ src/
   tui.rs        # ratatui TUI with status bar, streaming, scrollback, /commands
   config.rs     # Settings, config.toml loading, context window inference
   context.rs    # Compaction strategy, tool-result pruning
-  tokenizer.rs  # Pure-Rust BPE tokenizer (no external vocab)
+  tokenizer.rs  # Pure-Rust token estimator (no external vocab)
   session.rs    # JSONL session persistence, resume, list
   plan.rs       # Structured plan mode, parse_plan, format_plan
   memory.rs     # Cross-session MEMORY.md

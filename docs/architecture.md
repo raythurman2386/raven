@@ -67,7 +67,7 @@ CLI (main.rs)
 
 ## Compaction
 
-Implemented in [`context.rs`](../src/context.rs). Token counting uses a built-in BPE-like tokenizer ([`tokenizer.rs`](../src/tokenizer.rs)) for accurate estimates.
+Implemented in [`context.rs`](../src/context.rs). Token counting uses a built-in token estimator ([`tokenizer.rs`](../src/tokenizer.rs)) for fast, conservative estimates.
 
 ### When it triggers
 
