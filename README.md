@@ -162,7 +162,7 @@ The agent tracks token usage with a built-in BPE tokenizer (no external vocab fi
 1. **Prunes old tool results** — soft-trims tool outputs older than 3 turns (keeps head + tail with a truncation marker)
 2. **Compacts the conversation** — summarizes the middle of the conversation, preserving the system message and the last ~40% of the context budget for recent messages
 
-Context window sizes are fetched from the model's actual metadata via Ollama's `/api/show` endpoint. This returns the real `context_length` from the model file (e.g. `gemma4` → 131K, `qwen3.5` → 262K, `deepseek-v4` → 1M). If the API is unreachable (Ollama not running, model not found), a name-based heuristic is used as fallback:
+Context window sizes are fetched from the model's actual metadata via Ollama's `/api/show` endpoint. This returns the real `context_length` from the model file (e.g. `gemma4` → 131K, `qwen3.5` → 262K, `deepseek-v4-pro:cloud` → 512K). If the API is unreachable (Ollama not running, model not found), a name-based heuristic is used as fallback:
 
 - `gemma4`, `gemma3`, `qwen2.5`, `qwen3`, `llama3.1`, `llama3.2`, `deepseek`, `codestral`, `glm` → 128K
 - `llama3`, `codellama` → 32K
