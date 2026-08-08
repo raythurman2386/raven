@@ -22,8 +22,8 @@
 use anyhow::Result;
 use crossterm::{
     event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
-        MouseButton, MouseEvent, MouseEventKind,
+        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -121,6 +121,7 @@ struct TuiState {
     agent_state: AgentState,
     scroll: u16,
     auto_scroll: bool,
+    plan_scroll: u16,
     quit: bool,
     tick: u64,
     live_tool: Option<String>,
@@ -173,6 +174,7 @@ impl TuiState {
             agent_state: AgentState::Idle,
             scroll: 0,
             auto_scroll: true,
+            plan_scroll: 0,
             quit: false,
             tick: 0,
             live_tool: None,
@@ -239,7 +241,12 @@ impl TuiState {
 pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        EnableBracketedPaste
+    )?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -486,6 +493,16 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                         _ => {}
                     }
                 }
+                Event::Paste(text) => {
+                    // Bracketed paste: append the entire pasted block at once.
+                    // Without this, a large paste arrives as a rapid stream of
+                    // individual Char events that get dropped by the poll loop,
+                    // and any newline in the pasted text is treated as Enter
+                    // (submitting mid-paste).
+                    if !state.running || state.pending_question.is_some() {
+                        state.input.push_str(&text);
+                    }
+                }
                 Event::Mouse(m) => {
                     let size: Rect = terminal.size().unwrap_or_default().into();
                     let chunks = compute_layout(size, &state);
@@ -703,7 +720,8 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
     execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,
-        DisableMouseCapture
+        DisableMouseCapture,
+        DisableBracketedPaste
     )?;
     Ok(())
 }
@@ -840,7 +858,7 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState)
             "yes to execute · or type revisions",
             Style::default().fg(Theme::DIM),
         )));
-        let plan_widget = Paragraph::new(lines).block(
+        let plan_widget = Paragraph::new(lines).scroll((state.plan_scroll, 0)).block(
             Block::default()
                 .title(Span::styled(" plan ", Style::default().fg(Theme::PLAN)))
                 .borders(Borders::ALL)
@@ -977,6 +995,18 @@ fn wrapped_line_count(s: &str, width: usize) -> usize {
     lines
 }
 
+/// The effective content width (in chars) of the input box for a given
+/// terminal width.
+///
+/// The input box has `Borders::ALL` (2 border cols) plus a prompt glyph
+/// (e.g. `❯ `, 2 chars). Both the wrap-width computation and the cursor
+/// position must use this same value, or the cursor will land in the wrong
+/// place once the input wraps to a second line.
+fn input_content_width(term_width: u16) -> usize {
+    let avail = term_width.saturating_sub(2).max(1) as usize; // minus 2 border cols
+    avail.saturating_sub(2).max(1) // minus prompt glyph "❯ "
+}
+
 /// Compute the terminal (x, y) where the cursor should sit after the input
 /// text, accounting for the prompt prefix, wrapping width, and the input box's
 /// top-left position.
@@ -985,7 +1015,7 @@ fn input_cursor_position(
     prompt: &str,
     input_rect: ratatui::layout::Rect,
 ) -> (u16, u16) {
-    let content_width = input_rect.width.saturating_sub(2).max(1) as usize;
+    let content_width = input_content_width(input_rect.width);
     let combined = format!("{prompt}{input}");
     let mut col = 0usize;
     let mut row = 0usize;
@@ -1001,18 +1031,30 @@ fn input_cursor_position(
         }
         col += 1;
     }
+    // Clamp the cursor to the last visible row of the box so a long input
+    // doesn't push the cursor off-screen (the box stops growing at
+    // MAX_INPUT_BOX_HEIGHT, but the input text continues).
+    let max_row = input_rect.height.saturating_sub(2).max(1) as usize;
+    let row = row.min(max_row.saturating_sub(1));
     let x = input_rect.x + 1 + col as u16;
     let y = input_rect.y + 1 + row as u16;
     (x, y)
 }
 
+/// Maximum height (in rows, including borders) the input box may grow to.
+///
+/// The box grows as the input wraps so long tasks stay visible. The cap is a
+/// safety bound so a very long input doesn't consume the whole terminal; the
+/// input itself is never truncated, only the box stops growing (the cursor
+/// stays on the last visible row).
+const MAX_INPUT_BOX_HEIGHT: u16 = 12;
+
 /// Height of the input box (in rows, including borders) for a given input and
 /// terminal width. Shared by the draw path and click-hit-testing so both agree
 /// on where the status strip (the row just above the input) sits.
 fn input_box_height(input: &str, term_width: u16) -> u16 {
-    let avail = term_width.saturating_sub(4).max(1) as usize; // minus 2 border cols
-    let avail = avail.saturating_sub(2).max(1); // minus prompt glyph "❯ "
-    let lines = wrapped_line_count(input, avail).clamp(1, 6) as u16;
+    let avail = input_content_width(term_width);
+    let lines = wrapped_line_count(input, avail).clamp(1, MAX_INPUT_BOX_HEIGHT as usize) as u16;
     lines.saturating_add(2) // + top/bottom border rows
 }
 
@@ -1075,13 +1117,25 @@ fn handle_mouse_event(
 ) {
     match m.kind {
         MouseEventKind::ScrollUp => {
-            state.scroll = state.scroll.saturating_add(3);
-            state.auto_scroll = false;
+            // If the mouse is over the plan panel, scroll the plan instead of
+            // the log.
+            let chunks = compute_layout(size, state);
+            if show_plan(state) && m.row >= chunks[2].top() && m.row < chunks[2].bottom() {
+                state.plan_scroll = state.plan_scroll.saturating_add(1);
+            } else {
+                state.scroll = state.scroll.saturating_add(3);
+                state.auto_scroll = false;
+            }
         }
         MouseEventKind::ScrollDown => {
-            state.scroll = state.scroll.saturating_sub(3);
-            if state.scroll == 0 {
-                state.auto_scroll = true;
+            let chunks = compute_layout(size, state);
+            if show_plan(state) && m.row >= chunks[2].top() && m.row < chunks[2].bottom() {
+                state.plan_scroll = state.plan_scroll.saturating_sub(1);
+            } else {
+                state.scroll = state.scroll.saturating_sub(3);
+                if state.scroll == 0 {
+                    state.auto_scroll = true;
+                }
             }
         }
         MouseEventKind::Down(MouseButton::Left) => {
@@ -1473,7 +1527,32 @@ mod tests {
         let tall = "line1\nline2\nline3\nline4\nline5\nline6\nline7";
         let h = input_box_height(tall, 120);
         assert!(h >= 4, "multi-line input should grow the box, got {h}");
-        assert!(h <= 8, "box height should be capped, got {h}");
+        assert!(
+            h <= MAX_INPUT_BOX_HEIGHT + 2,
+            "box height should be capped at MAX_INPUT_BOX_HEIGHT + borders, got {h}"
+        );
+    }
+
+    #[test]
+    fn input_box_height_caps_at_max() {
+        // A very long single-line input should not grow the box past the cap.
+        let long = "x".repeat(1000);
+        let h = input_box_height(&long, 40);
+        assert_eq!(h, MAX_INPUT_BOX_HEIGHT + 2, "box should cap at max height");
+    }
+
+    #[test]
+    fn input_cursor_position_clamps_to_box_height() {
+        // A very long input that exceeds the box height should clamp the cursor
+        // to the last visible row, not push it off-screen.
+        let rect = ratatui::layout::Rect::new(0, 20, 40, MAX_INPUT_BOX_HEIGHT + 2);
+        let long = "x".repeat(1000);
+        let (_x, y) = input_cursor_position(&long, "❯ ", rect);
+        assert!(
+            y < rect.bottom(),
+            "cursor y should stay within the box, got {y} (box bottom {})",
+            rect.bottom()
+        );
     }
 
     #[test]
@@ -1743,6 +1822,7 @@ mod tests {
             agent_state: AgentState::Idle,
             scroll: 0,
             auto_scroll: true,
+            plan_scroll: 0,
             quit: false,
             tick: 0,
             live_tool: None,
