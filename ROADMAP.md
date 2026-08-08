@@ -6,7 +6,7 @@ monorepo). Design decisions are grounded in `xai-org/grok-build` source and in
 cross-agent research (Aider/Goose/Cline/Continue).
 
 **Guiding principles:**
-- Zero dead code, zero `unsafe`, zero `unreachable!()`, comprehensive offline tests.
+- Zero dead code, zero `unreachable!()`, comprehensive offline tests. `unsafe` is allowed only where the platform requires it (Linux `pre_exec`, Windows Job Object FFI), each block carrying a sound SAFETY comment.
 - Clean full transitions — never leave fallback flags or conditional cruft behind.
 - Focused conventional commits (`feat:`/`fix:`/`perf:`/`chore:`), one per logical change.
 - Every change: `cargo test` → `cargo clippy --all-targets -- -D warnings` → `cargo fmt`, then `cargo install --path . --force`.
@@ -29,7 +29,7 @@ cross-agent research (Aider/Goose/Cline/Continue).
 search_code, todo_write, memory_update, memory_search, git_status, git_diff,
 git_log, git_commit, apply_patch, run_tests, run_lint, ask_user, web_search,
 web_fetch, skill_search, skill_load. Plus `exit_plan_mode` signal in plan toolset.
-(`src/tools/` module: definitions.rs, dispatch.rs, document.rs, git.rs, mod.rs, patch.rs, sandbox.rs)
+(`src/tools/` module: definitions.rs, dispatch.rs, document.rs, git.rs, mod.rs, patch.rs, sandbox.rs, windows.rs)
 
 **Already production-grade (done):**
 - Linear token estimator (`src/tokenizer.rs`) — O(n), was O(n²) perf blocker.

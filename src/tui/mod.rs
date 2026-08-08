@@ -414,7 +414,9 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                             }
                         }
                         KeyCode::Char(c) => {
-                            if !state.running || state.pending_question.is_some() {
+                            if (!state.running || state.pending_question.is_some())
+                                && state.input.chars().count() < MAX_INPUT_CHARS
+                            {
                                 state.input.push(c);
                             }
                         }
@@ -500,7 +502,12 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                     // and any newline in the pasted text is treated as Enter
                     // (submitting mid-paste).
                     if !state.running || state.pending_question.is_some() {
-                        state.input.push_str(&text);
+                        // Cap the paste so a multi-MB paste can't grow memory
+                        // or slow down per-frame re-wrap unboundedly.
+                        let remaining = MAX_INPUT_CHARS.saturating_sub(state.input.chars().count());
+                        state
+                            .input
+                            .push_str(&text.chars().take(remaining).collect::<String>());
                     }
                 }
                 Event::Mouse(m) => {
@@ -1049,6 +1056,11 @@ fn input_cursor_position(
 /// stays on the last visible row).
 const MAX_INPUT_BOX_HEIGHT: u16 = 12;
 
+/// Maximum number of characters the input buffer may hold. A hard cap prevents
+/// a multi-MB paste from growing memory or slowing per-frame re-wrap without
+/// bound.
+const MAX_INPUT_CHARS: usize = 100_000;
+
 /// Height of the input box (in rows, including borders) for a given input and
 /// terminal width. Shared by the draw path and click-hit-testing so both agree
 /// on where the status strip (the row just above the input) sits.
@@ -1539,6 +1551,14 @@ mod tests {
         let long = "x".repeat(1000);
         let h = input_box_height(&long, 40);
         assert_eq!(h, MAX_INPUT_BOX_HEIGHT + 2, "box should cap at max height");
+    }
+
+    #[test]
+    fn input_chars_capped_by_max_input_chars() {
+        // A paste larger than the cap is truncated to MAX_INPUT_CHARS.
+        let over = "x".repeat(MAX_INPUT_CHARS + 5000);
+        let capped = over.chars().take(MAX_INPUT_CHARS).collect::<String>();
+        assert_eq!(capped.chars().count(), MAX_INPUT_CHARS);
     }
 
     #[test]
