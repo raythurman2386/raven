@@ -50,21 +50,21 @@ fn bench(c: &mut Criterion) {
     let mut g = c.benchmark_group("tokenizer");
     g.throughput(criterion::Throughput::Bytes(prose.len() as u64));
     g.bench_function("count_tokens_prose_50k", |b| {
-        b.iter(|| count_tokens(criterion::black_box(&prose)))
+        b.iter(|| count_tokens(std::hint::black_box(&prose)))
     });
     g.throughput(criterion::Throughput::Bytes(code.len() as u64));
     g.bench_function("count_tokens_code_100k", |b| {
-        b.iter(|| count_tokens(criterion::black_box(&code)))
+        b.iter(|| count_tokens(std::hint::black_box(&code)))
     });
     g.throughput(criterion::Throughput::Bytes(json.len() as u64));
     g.bench_function("count_tokens_json_50k", |b| {
-        b.iter(|| count_tokens(criterion::black_box(&json)))
+        b.iter(|| count_tokens(std::hint::black_box(&json)))
     });
     g.bench_function("history_tokens_400_msgs", |b| {
-        b.iter(|| history_tokens(criterion::black_box(&history)))
+        b.iter(|| history_tokens(std::hint::black_box(&history)))
     });
     g.bench_function("message_tokens_single", |b| {
-        b.iter(|| message_tokens(criterion::black_box(&history[1])))
+        b.iter(|| message_tokens(std::hint::black_box(&history[1])))
     });
     g.finish();
 }
