@@ -1670,6 +1670,40 @@ mod tests {
     }
 
     #[test]
+    fn write_file_dotdot_cancels_missing_intermediate_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
+        let out = sb.write_file("newdir/../f.txt", "hello").unwrap();
+        assert!(out.contains("Wrote"), "write should succeed: {out}");
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("f.txt")).unwrap(),
+            "hello"
+        );
+        assert!(
+            !tmp.path().join("newdir").exists(),
+            "intermediate dir should not be created"
+        );
+    }
+
+    #[test]
+    fn search_replace_empty_old_dotdot_cancels_missing_intermediate_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
+        let out = sb
+            .search_replace("newdir/../f.txt", "", "hello", false)
+            .unwrap();
+        assert!(out.contains("Created"), "create should succeed: {out}");
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("f.txt")).unwrap(),
+            "hello"
+        );
+        assert!(
+            !tmp.path().join("newdir").exists(),
+            "intermediate dir should not be created"
+        );
+    }
+
+    #[test]
     fn is_verification_command_rejects_non_test_commands() {
         let non_tests = [
             "cargo build",

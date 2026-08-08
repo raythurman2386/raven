@@ -413,14 +413,17 @@ impl Sandbox {
 
     /// Full file write (create/overwrite).
     pub fn write_file(&self, path: &str, content: &str) -> Result<String> {
-        // Ensure parent dirs exist (via safe_resolve for validation).
         let p = self.safe_resolve(path)?;
         if let Some(parent) = p.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        // Open via openat2 (kernel-enforced confinement, no TOCTOU race).
+        let rel = p
+            .strip_prefix(&self.workspace)
+            .unwrap_or(p.as_path())
+            .to_string_lossy()
+            .into_owned();
         let mut file = self.open_beneath(
-            path,
+            &rel,
             OpenFlags::WRONLY | OpenFlags::CREATE | OpenFlags::TRUNC | OpenFlags::CLOEXEC,
             0o644,
         )?;
@@ -456,9 +459,13 @@ impl Sandbox {
             if let Some(parent) = p.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            // Open via openat2 (kernel-enforced confinement, no TOCTOU race).
+            let rel = p
+                .strip_prefix(&self.workspace)
+                .unwrap_or(p.as_path())
+                .to_string_lossy()
+                .into_owned();
             let mut file = self.open_beneath(
-                path,
+                &rel,
                 OpenFlags::WRONLY | OpenFlags::CREATE | OpenFlags::TRUNC | OpenFlags::CLOEXEC,
                 0o644,
             )?;
