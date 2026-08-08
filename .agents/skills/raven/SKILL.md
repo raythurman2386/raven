@@ -40,7 +40,7 @@ CLI (main.rs)
        ├─ compaction (context.rs) ── estimate tokens, summarize middle
        ├─ tool dispatch (tools/) ── parallel via spawn_blocking
        └─ events (mpsc) ── TextDelta, ToolStart/End, Iteration, Compacted, Done, Error
-  └─ TUI (tui.rs)  ── ratatui event loop, drains agent events
+  └─ TUI (tui/)  ── ratatui event loop, drains agent events
   └─ run_parallel ── N independent Agent tasks on tokio tasks
 ```
 
@@ -63,14 +63,14 @@ CLI (main.rs)
 | `src/skills.rs` | `SKILL.md` discovery + `skill_search`/`skill_load` |
 | `src/tokenizer.rs` | Pure-Rust BPE token estimator (no external vocab) |
 | `src/tools/` | 22 tools + workspace sandbox (path confinement, shell filter) — split into `mod.rs`, `definitions.rs`, `dispatch.rs`, `sandbox.rs`, `document.rs`, `git.rs`, `patch.rs` |
-| `src/tui.rs` | ratatui TUI with status bar, streaming, scrollback, /commands |
+| `src/tui/` | ratatui TUI with status bar, streaming, scrollback, /commands |
 | `src/web.rs` | Web tools (`web_search`, `web_fetch`) |
 
 ## Conventions
 
 ### Rust
 
-- **Rust 2021 edition.** Target MSRV: 1.85+ (pinned in `rust-toolchain.toml`).
+- **Rust 2021 edition.** Target MSRV: 1.88+ (pinned in `rust-toolchain.toml`).
 - Keep the binary small and dependency-light. No MCP, no kernel sandbox.
 - Every public struct, enum, and fn should have a doc comment.
 - `cargo doc --no-deps` must build with no warnings.
@@ -90,7 +90,7 @@ CLI (main.rs)
 ```bash
 cargo build                    # debug build, must be warning-free
 cargo build --release          # LTO + strip
-cargo test                     # 304 tests, all offline (no Ollama needed)
+cargo test                     # 348 tests, all offline (no Ollama needed)
 cargo clippy --all-targets -- -D warnings   # must be zero warnings
 cargo fmt --all --check        # formatting check
 cargo doc --no-deps            # docs must build with no warnings
@@ -125,9 +125,7 @@ test`, `cargo clippy`, `cargo fmt`) — do not rely on the agent's simulated
    into `tools/mod.rs`, `definitions.rs`, `dispatch.rs`, `sandbox.rs`,
    `document.rs`, `git.rs`, `patch.rs`. When adding a tool, keep the existing
    structure; definitions go in `definitions.rs`, dispatch in `dispatch.rs`.
-2. **Tokenizer is a fast estimator, not exact** — it targets ±15% of real
-   tiktoken counts, biased slightly high so compaction triggers early. Don't
-   "fix" it to be exact without a real tokenizer to validate against (issue #4).
+2. **Tokenizer is a fast estimator, not exact** — it over-estimates tiktoken counts by roughly 10–35% (mean ~28%), biased slightly high so compaction triggers early. It treats non-newline whitespace as free and applies a ~12% structural-overhead factor. Don't "fix" it to be exact without a real tokenizer to validate against.
 3. **Compaction invariants** — `messages[0]` is always the system message;
    tool-call/tool-result pairs are never split. Don't break these.
 4. **Sandbox** — all file paths are relative to the workspace root and confined

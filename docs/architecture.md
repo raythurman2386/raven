@@ -11,9 +11,9 @@ CLI (main.rs)
        ├─ system prompt (SYSTEM_BASE + AGENTS.md + --rules)
        ├─ streaming loop ── POST /v1/chat/completions (Ollama)
        ├─ compaction (context.rs) ── estimate tokens, summarize middle
-       ├─ tool dispatch (tools.rs) ── parallel via spawn_blocking
+       ├─ tool dispatch (tools/) ── parallel via spawn_blocking
        └─ events (mpsc) ── TextDelta, ToolStart/End, Iteration, Compacted, Done, Error
-  └─ TUI (tui.rs)  ── ratatui event loop, drains agent events
+  └─ TUI (tui/)  ── ratatui event loop, drains agent events
   └─ run_parallel ── N independent Agent tasks on tokio tasks
 ```
 
@@ -151,7 +151,7 @@ Each `dispatch` is sync, so `spawn_blocking` moves it off the async runtime. Res
 
 ## TUI limitations
 
-The TUI (`tui.rs`) is intentionally minimal:
+The TUI (`src/tui/`) is intentionally minimal:
 
 - **Plan approval is model-driven with a fallback**: during the plan turn the model may call `exit_plan_mode`; when it does the TUI auto-executes the plan without a prompt. If the model finishes without that signal, the TUI sets `plan_pending` and waits for `yes`/`y`/`approve`/`go`/`execute`/`ok` to execute, or any other text to revise.
 - **No multi-line input**: the input box is single-line only.

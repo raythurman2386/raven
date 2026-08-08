@@ -43,7 +43,7 @@ That constraint is the design center, not an afterthought — it's why the featu
 
 ## Requirements
 
-- **Rust 1.85+** (latest stable recommended; pinned in `rust-toolchain.toml`)
+- **Rust 1.88+** (latest stable recommended; pinned in `rust-toolchain.toml`)
 - **Ollama** running locally (or a reachable OpenAI-compatible endpoint)
 - A coding-capable model, e.g.
 
@@ -239,7 +239,7 @@ The `--yolo` flag disables confirmation entirely, but the denylist still applies
 ## Testing
 
 ```bash
-cargo test                    # 304 tests, all offline
+cargo test                    # 348 tests, all offline
 cargo clippy                  # zero warnings
 cargo clippy -- -W clippy::pedantic  # stricter linting
 ```
@@ -253,10 +253,11 @@ See `docs/testing.md` for coverage and mutation testing instructions.
 ```
 src/
   main.rs       # CLI, headless runner, session management
+  lib.rs        # Library re-exports for benchmarks/integration tests
   agent.rs      # Streaming agent loop, retry, parallel sub-agents
   commands.rs   # Slash-command registry + parsing for the TUI
   tools/        # Tool modules: definitions, dispatch, document, git, patch, sandbox
-  tui.rs        # ratatui TUI with status bar, streaming, scrollback, /commands
+  tui/          # ratatui TUI (mod, render, blocks, status, selection)
   config.rs     # Settings, config.toml loading, context window inference
   context.rs    # Compaction strategy, tool-result pruning
   tokenizer.rs  # Pure-Rust token estimator (no external vocab)

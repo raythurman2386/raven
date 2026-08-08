@@ -46,9 +46,9 @@ cargo llvm-cov
 cargo llvm-cov --html    # opens HTML report in browser
 ```
 
-Target: >=80% line coverage on `config.rs` and `tools.rs`. Overall coverage
+Target: >=80% line coverage on `config.rs` and `tools/`. Overall coverage
 as high as practical without testing pure glue (main.rs argument parsing,
-tui.rs rendering).
+tui/ rendering).
 
 ## Mutation testing
 
@@ -67,7 +67,7 @@ cargo mutants --jobs 2
 To exclude noisy modules (UI glue, main entry):
 
 ```bash
-cargo mutants --exclude-file src/main.rs --exclude-file src/tui.rs --jobs 2
+cargo mutants --exclude-file src/main.rs --exclude-file src/tui/mod.rs --jobs 2
 ```
 
 Fix surviving mutants that indicate weak assertions. Don't chase 100% kill

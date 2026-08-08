@@ -20,7 +20,7 @@ cargo doc --no-deps
 
 ## Style
 
-- Rust 2021 edition. Target MSRV: 1.85+ (pinned in `rust-toolchain.toml`).
+- Rust 2021 edition. Target MSRV: 1.88+ (pinned in `rust-toolchain.toml`).
 - Keep the binary small and dependency-light. No MCP, no kernel sandbox.
 - Every public struct, enum, and fn should have a doc comment.
 - `cargo doc --no-deps` must build with no warnings.
@@ -44,13 +44,14 @@ src/
 │   ├── document.rs    # Document extraction (.docx, .pdf, .xlsx, .odt, .epub)
 │   ├── git.rs         # Git operations (status, diff, log, commit, undo)
 │   └── patch.rs       # Unified diff parsing and application
-├── tui.rs        # ratatui interactive UI
+├── tui/          # ratatui interactive UI (mod, render, blocks, status, selection)
 ├── commands.rs   # Slash-command registry and parsing
 ├── plan.rs       # Structured plan data model, parsing, step advancement
 ├── skills.rs     # SKILL.md discovery + skill_search/skill_load
 ├── session.rs    # JSONL session persistence, resume, list
 ├── memory.rs     # Project memory (MEMORY.md) loading, update, search
 ├── repomap.rs    # Lightweight repo symbol map
+├── tokenizer.rs  # Pure-Rust token estimator
 ├── web.rs        # Keyless web tools (web_fetch, web_search)
 ├── error.rs      # Typed error enums (AgentError, ToolError)
 └── runner.rs     # Shared event-draining and plan-approval flow
@@ -167,7 +168,7 @@ let _ = tx.send(AgentEvent::MyEvent { detail: "..." }).await;
 ### 3. Handle it in consumers
 
 - **Headless runner** (`main.rs`): add a match arm in the `while let Some(ev) = rx.recv().await` loop.
-- **TUI** (`tui.rs`): add a match arm in the `while let Ok(ev) = rx.try_recv()` loop.
+- **TUI** (`src/tui/`): add a match arm in the `while let Ok(ev) = rx.try_recv()` loop.
 
 ### 4. Document it
 
@@ -194,7 +195,7 @@ CommandSpec {
 
 ### 2. Handle it in the TUI dispatcher
 
-In [`src/tui.rs`](../src/tui.rs), add a match arm in `dispatch_slash_command`.
+In [`src/tui/mod.rs`](../src/tui/mod.rs), add a match arm in `dispatch_slash_command`.
 It receives the parsed command, shared UI state (`log`, `mode`,
 `session`, `quit`, ...), and `&SessionStore` — push any user-visible feedback
 to `log`.
@@ -224,7 +225,7 @@ Compaction lives in [`src/context.rs`](../src/context.rs).
 ## Running tests
 
 ```bash
-cargo test                    # 304 tests, all offline
+cargo test                    # 348 tests, all offline
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
