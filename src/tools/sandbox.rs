@@ -518,7 +518,7 @@ impl Sandbox {
                         if re.is_match(line) {
                             let rel = p.strip_prefix(&self.workspace).unwrap_or(p);
                             let snippet: String = line.trim().chars().take(220).collect();
-                            let mut r = results.lock().unwrap();
+                            let mut r = results.lock().unwrap_or_else(|e| e.into_inner());
                             r.push(format!("{}:{}: {}", rel.display(), i + 1, snippet));
                             if r.len() >= max_results {
                                 done.store(true, Ordering::Relaxed);
@@ -530,7 +530,7 @@ impl Sandbox {
             }
         });
 
-        let results = results.into_inner().unwrap();
+        let results = results.into_inner().unwrap_or_else(|e| e.into_inner());
         Ok(if results.is_empty() {
             format!("No matches (searched {} files)", searched)
         } else {
