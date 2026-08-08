@@ -137,7 +137,10 @@ main() {
     fi
 
     tmp_dir="$(mktemp -d)"
-    trap 'rm -rf "$tmp_dir"' EXIT
+    # tmp_dir is local to main(); the EXIT trap runs after main returns, so
+    # reference it with ${tmp_dir:-} to avoid an "unbound variable" error
+    # under `set -u` when the trap fires post-return.
+    trap 'rm -rf "${tmp_dir:-}"' EXIT
 
     echo "==> Downloading $download_url ..."
     if ! curl -fsSL --retry 3 --retry-delay 2 -o "$tmp_dir/$artifact" "$download_url"; then
