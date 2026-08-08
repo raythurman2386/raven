@@ -250,14 +250,17 @@ impl Sandbox {
                         end,
                         lines.len()
                     );
+                    let mut used = out.chars().count();
                     for (i, line) in lines[start..end].iter().enumerate() {
                         let truncated: String = line.chars().take(MAX_LINE_LENGTH).collect();
                         let rendered = format!("{:5}| {}\n", start + i + 1, truncated);
-                        if out.chars().count() + rendered.chars().count() > MAX_TOOL_OUTPUT {
+                        let rendered_len = rendered.chars().count();
+                        if used + rendered_len > MAX_TOOL_OUTPUT {
                             out.push_str(&format!("…[truncated at {} chars]", MAX_TOOL_OUTPUT));
                             break;
                         }
                         out.push_str(&rendered);
+                        used += rendered_len;
                     }
                     return Ok(out);
                 }
@@ -287,14 +290,17 @@ impl Sandbox {
             end,
             lines.len()
         );
+        let mut used = out.chars().count();
         for (i, line) in lines[start..end].iter().enumerate() {
             let truncated: String = line.chars().take(MAX_LINE_LENGTH).collect();
             let rendered = format!("{:5}| {}\n", start + i + 1, truncated);
-            if out.chars().count() + rendered.chars().count() > MAX_TOOL_OUTPUT {
+            let rendered_len = rendered.chars().count();
+            if used + rendered_len > MAX_TOOL_OUTPUT {
                 out.push_str(&format!("…[truncated at {} chars]", MAX_TOOL_OUTPUT));
                 break;
             }
             out.push_str(&rendered);
+            used += rendered_len;
         }
         Ok(out)
     }
