@@ -31,7 +31,7 @@ anydoc = "0.1.6"
 tempfile = "3"
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = "0.8"
 zip = "8.6"
 
 [[bench]]

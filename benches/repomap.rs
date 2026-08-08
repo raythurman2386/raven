@@ -22,7 +22,7 @@ fn bench(c: &mut Criterion) {
 
     let mut g = c.benchmark_group("repomap");
     g.bench_function("build_map_60_files", |b| {
-        b.iter(|| build_map(criterion::black_box(tmp.path())))
+        b.iter(|| build_map(std::hint::black_box(tmp.path())))
     });
     g.finish();
 }
