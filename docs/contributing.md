@@ -212,7 +212,7 @@ Compaction lives in [`src/context.rs`](../src/context.rs).
 - **Threshold**: `compact_threshold` in `Settings` (default `0.75`). Change the default in `config.rs` or via `--compact-threshold` / `RAVEN_COMPACT_THRESHOLD` / `OG_COMPACT_THRESHOLD`.
 - **Trailing budget**: hardcoded at 40% of usable context in `compact_if_needed`. Change the `0.40` factor.
 - **Summary cap**: `MAX_SUMMARY_CHARS` (4000) and `MAX_TOOL_BODY_CHARS` (200) in `build_summary_user`.
-- **Token estimate**: implemented by the pure-Rust token estimator in `src/tokenizer.rs` (`count_tokens`), with a ~4% structural overhead bias toward over-estimation so compaction triggers early rather than late.
+- **Token estimate**: implemented by the pure-Rust token estimator in `src/tokenizer.rs` (`count_tokens`). Non-newline whitespace is free (BPE glues a leading space to the following word) and a ~12% structural-overhead factor keeps the estimate biased slightly above the real count so compaction triggers early rather than late.
 
 ### Invariants to preserve
 

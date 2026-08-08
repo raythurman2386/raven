@@ -69,6 +69,8 @@ CLI (main.rs)
 
 Implemented in [`context.rs`](../src/context.rs). Token counting uses a built-in token estimator ([`tokenizer.rs`](../src/tokenizer.rs)) for fast, conservative estimates.
 
+Compaction is guaranteed to never grow the history: if the assembled compacted form (summary + kept tail) would be no smaller than the original, the original is left unchanged. This guards the degenerate case of many tiny, near-identical messages where the extractive summary's per-line prefixes can cost more than the verbatim middle they replace.
+
 ### When it triggers
 
 When `history_tokens(messages) > compact_threshold × (context_window − output_reserve)`:
