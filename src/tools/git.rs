@@ -48,7 +48,15 @@ impl Sandbox {
         if porcelain == "exit=0" || porcelain.trim().is_empty() {
             return Ok("No changes to commit (working tree clean)".into());
         }
-        let _ = self.run_git(&["add", "-A", "--", ":!.raven/", ":!data/"])?;
+        let _ = self.run_git(&[
+            "add",
+            "-A",
+            "--",
+            ":!.raven/",
+            ":!data/",
+            ":!.env",
+            ":!.env.*",
+        ])?;
         let commit_out = self.run_git(&["commit", "-m", msg])?;
         if commit_out.contains("fatal") || commit_out.contains("Error") {
             return Ok(commit_out);

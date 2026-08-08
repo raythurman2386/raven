@@ -905,6 +905,29 @@ mod tests {
     }
 
     #[test]
+    fn git_commit_excludes_env_files() {
+        let (_tmp, sb) = git_sandbox();
+        // Both a root `.env` and an env-variant like `.env.production` must be
+        // left unstaged so credentials never leak into a commit.
+        std::fs::write(sb.workspace.join(".env"), "SECRET=topsecret").unwrap();
+        std::fs::write(sb.workspace.join(".env.production"), "KEY=anothersecret").unwrap();
+        sb.write_file("src/main.rs", "fn main() {}").unwrap();
+        let out = sb.git_commit("add main.rs").unwrap();
+        assert!(!out.contains("Error"), "commit should succeed: {out}");
+        let log = sb.git_log(5).unwrap();
+        assert!(log.contains("add main.rs"), "commit in log: {log}");
+        let status = sb.git_status().unwrap();
+        assert!(
+            status.contains(".env"),
+            ".env files should remain unstaged: {status}"
+        );
+        assert!(
+            status.contains(".env.production"),
+            ".env.* files should remain unstaged: {status}"
+        );
+    }
+
+    #[test]
     fn git_commit_in_full_toolset_not_plan_toolset() {
         let full = tool_definitions();
         let full_names: Vec<String> = full
