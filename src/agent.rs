@@ -1259,8 +1259,8 @@ pub async fn run_parallel(settings: &Settings, tasks: Vec<String>) -> Result<Vec
                 match sandbox.create_worktree(&branch_name, &wt_path) {
                     Ok(()) => {
                         let mut sub_settings = s.clone();
-                        sub_settings.workspace = wt_path;
-                        (sub_settings, Some((branch_name, sandbox)))
+                        sub_settings.workspace = wt_path.clone();
+                        (sub_settings, Some((branch_name, wt_path, sandbox)))
                     }
                     Err(e) => {
                         tracing::warn!(
@@ -1315,7 +1315,7 @@ pub async fn run_parallel(settings: &Settings, tasks: Vec<String>) -> Result<Vec
     }
 
     let mut results: Vec<SubAgentReport> = Vec::with_capacity(handles.len());
-    let mut branches_to_merge: Vec<(usize, String, Sandbox)> = Vec::new();
+    let mut branches_to_merge: Vec<(usize, String, std::path::PathBuf, Sandbox)> = Vec::new();
     for (i, h) in handles {
         let (out, cleanup, elapsed) = h.await??;
         results.push(SubAgentReport {
@@ -1323,15 +1323,15 @@ pub async fn run_parallel(settings: &Settings, tasks: Vec<String>) -> Result<Vec
             text: out,
             elapsed,
         });
-        if let Some((branch_name, sandbox)) = cleanup {
-            branches_to_merge.push((i, branch_name, sandbox));
+        if let Some((branch_name, wt_path, sandbox)) = cleanup {
+            branches_to_merge.push((i, branch_name, wt_path, sandbox));
         }
     }
     results.sort_by_key(|r| r.index);
 
     if is_git {
         let mut conflicted: Vec<(usize, String)> = Vec::new();
-        for (i, branch_name, sandbox) in &branches_to_merge {
+        for (i, branch_name, _wt_path, sandbox) in &branches_to_merge {
             let _ = sandbox.merge_branch(branch_name);
             if sandbox.has_merge_conflicts().unwrap_or(false) {
                 let _ = sandbox.abort_merge();
@@ -1345,7 +1345,14 @@ pub async fn run_parallel(settings: &Settings, tasks: Vec<String>) -> Result<Vec
                 tracing::info!("merged branch {} into main", branch_name);
             }
         }
-        for (_i, branch_name, sandbox) in &branches_to_merge {
+        // Remove each worktree first so the branch is no longer referenced by
+        // a live worktree; only then can the branch be deleted. Doing this in
+        // the wrong order leaves a stale `prunable` worktree entry and an
+        // orphaned branch that `git branch -D` refuses to delete.
+        for (_i, _branch_name, wt_path, sandbox) in &branches_to_merge {
+            let _ = sandbox.remove_worktree(wt_path);
+        }
+        for (_i, branch_name, _wt_path, sandbox) in &branches_to_merge {
             let _ = sandbox.delete_branch(branch_name);
         }
         if !conflicted.is_empty() {

@@ -1024,6 +1024,38 @@ mod tests {
     }
 
     #[test]
+    fn worktree_must_be_removed_before_branch_can_be_deleted() {
+        // Regression: deleting a branch while its worktree still exists fails
+        // with "cannot delete branch used by worktree". The parallel sub-agent
+        // cleanup must remove the worktree first, then delete the branch.
+        let (_tmp, sb) = git_sandbox();
+        sb.write_file("f.txt", "base").unwrap();
+        sb.git_commit("initial").unwrap();
+
+        let wt_dir = tempfile::tempdir().unwrap();
+        let wt_path = wt_dir.path().join("sub-a");
+        sb.create_worktree("raven-sub-a", &wt_path).unwrap();
+
+        // Deleting the branch while the worktree exists must fail, leaving the
+        // branch present.
+        let _ = sb.delete_branch("raven-sub-a");
+        let branches = sb.run_git(&["branch", "--list", "raven-sub-a"]).unwrap();
+        assert!(
+            branches.contains("raven-sub-a"),
+            "branch should still exist after failed delete while worktree present, got: {branches}"
+        );
+
+        // Remove the worktree first, then the branch delete succeeds.
+        sb.remove_worktree(&wt_path).unwrap();
+        let _ = sb.delete_branch("raven-sub-a");
+        let branches_after = sb.run_git(&["branch", "--list", "raven-sub-a"]).unwrap();
+        assert!(
+            !branches_after.contains("raven-sub-a"),
+            "branch should be gone after worktree removal + delete, got: {branches_after}"
+        );
+    }
+
+    #[test]
     fn worktree_concurrent_edits_to_same_file_are_isolated() {
         let (_tmp, sb) = git_sandbox();
         let content: String = (1..=20).map(|i| format!("line{}\n", i)).collect();
