@@ -94,17 +94,31 @@ parent process, which is not seccomp-confined.
 
 ### 4. Resource limits (`setrlimit`)
 
-**What it does:** Applies `RLIMIT_CPU` (30s), `RLIMIT_AS` (1 GiB),
-`RLIMIT_FSIZE` (64 MiB), `RLIMIT_NOFILE` (1024), `RLIMIT_NPROC` (1024) to every
-subprocess.
+**What it does:** Applies `RLIMIT_CPU` (30s), `RLIMIT_FSIZE` (64 MiB), and
+`RLIMIT_NOFILE` (1024) to every subprocess.
 
-**Why:** Kills fork bombs (`RLIMIT_NPROC`), runaway memory (`RLIMIT_AS`),
-oversized writes (`RLIMIT_FSIZE`), runaway CPU (`RLIMIT_CPU`), and fd exhaustion
-(`RLIMIT_NOFILE`).
+**Why:** Caps oversized writes (`RLIMIT_FSIZE`), runaway CPU (`RLIMIT_CPU`),
+and fd exhaustion (`RLIMIT_NOFILE`).
 
 **Platforms:** Linux + macOS.
 
 **Limitation:** Best-effort — a kernel that doesn't support a limit is ignored.
+
+**Note on omitted limits:** Memory and process counts are deliberately *not*
+capped via `setrlimit`:
+- `RLIMIT_AS` (virtual address space) is omitted because runtimes like V8/Node
+  reserve large regions up front — a 1 GiB cap made Node abort at startup. It
+  bounds virtual, not resident, memory, so it is the wrong tool for limiting
+  memory use anyway.
+- `RLIMIT_NPROC` (processes/threads per user) is omitted because it is a
+  *user-global* ceiling, not a per-child one. Imposing it on a child cannot
+  isolate that child — a fork bomb would instead kill the entire user session
+  — and on a busy machine it silently breaks high-thread runtimes (Node, etc.)
+  because the ambient thread count is already near the cap.
+
+The remaining layers bound the practical damage: Landlock confines the
+filesystem, `RLIMIT_CPU`/`RLIMIT_FSIZE` stop runaway execution and writes, and
+Windows Job Objects bound committed memory separately (see §5).
 
 ### 5. Windows Job Objects (resource limits + process-tree confinement)
 
@@ -116,8 +130,9 @@ fresh Job Object configured with:
   cannot outlive the parent Raven process.
 - `JOB_OBJECT_LIMIT_ACTIVE_PROCESS` (max 256) — caps the process tree size.
 - `JOB_OBJECT_LIMIT_PROCESS_MEMORY` / `JOB_OBJECT_LIMIT_JOB_MEMORY` (1 GiB
-  each) — caps per-process and per-job memory, matching the Unix `RLIMIT_AS`
-  value.
+  each) — caps per-process and per-job committed memory. These count *resident*
+  (committed) memory, not virtual address space, so unlike the Unix `RLIMIT_AS`
+  they do not break runtimes like V8/Node that reserve large virtual regions.
 
 The child is opened with the minimal access rights (`PROCESS_SET_QUOTA |
 PROCESS_QUERY_INFORMATION | PROCESS_TERMINATE`) — deliberately *not*

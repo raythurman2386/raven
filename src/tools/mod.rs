@@ -549,6 +549,40 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
+    fn run_shell_runs_node_under_confinement() {
+        // Regression: the sandbox's RLIMIT_AS cap (virtual address space) and
+        // RLIMIT_NPROC cap (per-user thread ceiling) both made Node/V8 abort
+        // at startup (CodeRange OOM / uv_thread_create failure). Neither cap
+        // may be applied to confined children, or node tooling (npm test,
+        // tsc, etc.) cannot run. Skip gracefully when node isn't installed
+        // (e.g. minimal CI).
+        if std::process::Command::new("node")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| !s.success())
+            .unwrap_or(true)
+        {
+            eprintln!("node not available; skipping node confinement regression test");
+            return;
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
+        // `node -e ...` is direct-exec'd (no shell) and confined. It must
+        // print its version and exit 0, not abort with an OOM at startup.
+        let out = sb
+            .run_shell("node -e 'console.log(\"node-ok\")'", 10)
+            .unwrap();
+        assert!(
+            out.contains("node-ok") && out.contains("exit=0"),
+            "node should run under confinement: {out}"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
     fn run_shell_uses_clean_environment() {
         let tmp = tempfile::tempdir().unwrap();
         let sb = Sandbox::new(tmp.path().canonicalize().unwrap());

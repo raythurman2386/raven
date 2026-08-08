@@ -61,7 +61,11 @@ impl JobObject {
             | JOB_OBJECT_LIMIT_JOB_MEMORY;
         // Max 256 processes per job (kills runaway process trees).
         info.BasicLimitInformation.ActiveProcessLimit = 256;
-        // 1 GiB per process, 1 GiB per job — matches the Unix RLIMIT_AS value.
+        // Cap committed memory per process and per job. Windows Job Object
+        // memory limits count *committed* memory (the resident footprint),
+        // not virtual address space, so unlike the removed Unix RLIMIT_AS
+        // they do not break runtimes like V8/Node that reserve large virtual
+        // regions up front — only genuinely large resident usage is bounded.
         info.ProcessMemoryLimit = 1 << 30;
         info.JobMemoryLimit = 1 << 30;
 
