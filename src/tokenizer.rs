@@ -15,15 +15,21 @@
 //!
 //! | Input size   | Typical error | Direction |
 //! |-------------|--------------|-----------|
-//! | < 50 chars  | 50–200%      | over-estimate |
-//! | 50–500 chars| 50–160%      | over-estimate |
-//! | > 500 chars | 50–160%      | over-estimate |
+//! | < 50 chars  | 10–75%        | over-estimate |
+//! | 50–500 chars| 10–50%        | over-estimate |
+//! | > 500 chars | 2–35%         | over-estimate |
 //!
-//! The aspirational ±15% target is not met by the current byte-based
-//! heuristic; a real BPE merge table would be required for that level of
-//! precision. The regression tests in this module validate against known
-//! tiktoken reference counts to ensure the estimator does not silently
-//! regress in accuracy.
+//! The key insight behind the accuracy: BPE tokenizers glue a leading space to
+//! the following word (so " hello" is one token, not two), and they merge
+//! common punctuation into adjacent subwords. The old heuristic charged a full
+//! token for *every* whitespace run, which over-counted prose by ~2x. This
+//! estimator treats non-newline whitespace as free (newlines are still counted,
+//! one per line break) and applies a ~12% structural-overhead factor calibrated
+//! against tiktoken. That roughly halves the previous mean error while keeping
+//! the estimate biased slightly high. A real BPE merge table would be required
+//! to approach ±15% on adversarial inputs (long bare identifiers, dense
+//! punctuation, URLs); the regression tests validate against known tiktoken
+//! reference counts to ensure the estimator does not silently regress.
 //!
 //! ## Special-token limitation
 //!
@@ -49,9 +55,9 @@
 //! 1. **Pre-tokenize**: split text using a GPT-4-style regex that separates
 //!    contractions, words, numbers, punctuation, and whitespace.
 //! 2. **Estimate**: each word/number run ≈ `bytes / 4` tokens (min 1),
-//!    each punctuation run ≈ 1 token, each whitespace run ≈ 1 token
-//!    (compacted, matching how tokenizers treat leading spaces).
-//! 3. **Overhead**: add ~4% structural overhead, min 1.
+//!    each punctuation run ≈ 1 token, each newline ≈ 1 token. Non-newline
+//!    whitespace is free (BPE glues a leading space to the following word).
+//! 3. **Overhead**: add ~12% structural overhead, min 1.
 //!
 //! The old implementation expanded every character into a heap-allocated
 //! `String` and applied BPE merges via repeated `Vec::splice` — O(n²) with a
@@ -93,10 +99,13 @@ pub fn count_tokens(text: &str) -> usize {
     let mut total = 0usize;
     for m in pretoken_re().find_iter(text) {
         let s = m.as_str();
-        // Whitespace runs compact to ~1 token each (leading spaces attach
-        // to the following word in most tokenizers).
+        // Whitespace: non-newline whitespace (spaces, tabs) is glued onto the
+        // following word by BPE tokenizers and does not consume a token of its
+        // own. Only newlines are genuine separate tokens (one per line break).
+        // This is the single largest accuracy win over the old heuristic, which
+        // charged a full token for every whitespace run.
         if s.chars().all(|c| c.is_whitespace()) {
-            total += 1;
+            total += s.bytes().filter(|&b| b == b'\n').count();
         } else if s.is_ascii() {
             // ASCII words/numbers/punct: ~4 bytes per token, min 1.
             total += (s.len() / 4).max(1);
@@ -106,8 +115,14 @@ pub fn count_tokens(text: &str) -> usize {
         }
     }
 
-    // Add ~4% structural overhead (role markers, separators), min 1.
-    let overhead = (total as f64 * 0.04).ceil() as usize;
+    // Add ~12% structural overhead (role markers, separators, special tokens,
+    // punctuation that real tokenizers split). The 12% factor is calibrated
+    // (vs tiktoken cl100k_base) so the estimate stays slightly above the real
+    // count on code/JSON/prose — preserving the conservative over-estimate
+    // contract while roughly halving the previous ~60% mean error. A lower
+    // factor (e.g. 4%) pushes short SQL/JSON snippets to the boundary where
+    // they can under-count, which would let compaction trigger late.
+    let overhead = (total as f64 * 0.12).ceil() as usize;
     total + overhead.max(1)
 }
 
@@ -240,6 +255,26 @@ mod tests {
     }
 
     #[test]
+    fn non_newline_whitespace_is_free_but_newlines_count() {
+        // BPE glues a leading space to the following word, so "hello world"
+        // and "hello   world" should cost the same. Newlines, by contrast, are
+        // genuine separate tokens in most tokenizers.
+        let one_space = count_tokens("hello world");
+        let many_spaces = count_tokens("hello    world");
+        assert_eq!(
+            one_space, many_spaces,
+            "space padding must not add tokens: {one_space} vs {many_spaces}"
+        );
+
+        let single_line = count_tokens("a b c");
+        let newline = count_tokens("a\nb\nc");
+        assert!(
+            newline > single_line,
+            "newlines should add tokens: {single_line} vs {newline}"
+        );
+    }
+
+    #[test]
     fn url_is_reasonable() {
         let url = "https://example.com/path/to/resource";
         let tokens = count_tokens(url);
@@ -340,39 +375,39 @@ fn do_thing(x: i32) -> i32 {
             },
             Reference {
                 text: "The quick brown fox jumps over the lazy dog.",
-                tiktoken_tokens: 9,
-            },
-            Reference {
-                text: "To be, or not to be, that is the question.",
                 tiktoken_tokens: 10,
             },
             Reference {
+                text: "To be, or not to be, that is the question.",
+                tiktoken_tokens: 13,
+            },
+            Reference {
                 text: "def fibonacci(n):\n    if n <= 1:\n        return n\n    return fibonacci(n-1) + fibonacci(n-2)",
-                tiktoken_tokens: 30,
+                tiktoken_tokens: 28,
             },
             Reference {
                 text: "fn main() {\n    println!(\"Hello, world!\");\n}",
-                tiktoken_tokens: 18,
+                tiktoken_tokens: 12,
             },
             Reference {
                 text: r#"{"name": "raven", "version": "0.1.0", "edition": "2021"}"#,
-                tiktoken_tokens: 27,
+                tiktoken_tokens: 24,
             },
             Reference {
                 text: "https://github.com/user/repo/blob/main/src/lib.rs",
-                tiktoken_tokens: 17,
+                tiktoken_tokens: 12,
             },
             Reference {
                 text: "SELECT id, name, email FROM users WHERE created_at > '2024-01-01' ORDER BY name LIMIT 100;",
-                tiktoken_tokens: 30,
+                tiktoken_tokens: 27,
             },
             Reference {
                 text: "The Rust programming language helps you write faster, more reliable software. High-level ergonomics and low-level control are often at odds in programming language design; Rust challenges that conflict.",
-                tiktoken_tokens: 40,
+                tiktoken_tokens: 36,
             },
             Reference {
                 text: "import React, { useState, useEffect } from 'react';\n\nexport function App() {\n  const [count, setCount] = useState(0);\n\n  useEffect(() => {\n    document.title = `Count: ${count}`;\n  }, [count]);\n\n  return (\n    <div>\n      <p>You clicked {count} times</p>\n      <button onClick={() => setCount(count + 1)}>Click me</button>\n    </div>\n  );\n}",
-                tiktoken_tokens: 100,
+                tiktoken_tokens: 94,
             },
         ]
     }
@@ -382,14 +417,11 @@ fn do_thing(x: i32) -> i32 {
         for ref_ in reference_corpus() {
             let estimated = count_tokens(ref_.text);
             let tiktoken = ref_.tiktoken_tokens;
-            // Short texts (< 50 chars) can be up to 200% over; the estimator
-            // is deliberately conservative. Allow a small under-estimate
-            // margin (within ~15%) for short code snippets where the
-            // byte-based heuristic can be slightly low.
-            let min_expected = (tiktoken as f64 * 0.85).ceil() as usize;
+            // The estimator must never under-count: it is deliberately
+            // conservative so compaction triggers early rather than late.
             assert!(
-                estimated >= min_expected,
-                "under-estimate for {:?}: estimated={estimated}, tiktoken={tiktoken}, min_expected={min_expected}",
+                estimated >= tiktoken,
+                "under-estimate for {:?}: estimated={estimated}, tiktoken={tiktoken}",
                 &ref_.text[..ref_.text.len().min(40)]
             );
             // Upper bound: no more than 5x for very short texts, 3x for medium.
@@ -406,8 +438,8 @@ fn do_thing(x: i32) -> i32 {
     fn regression_against_tiktoken_long_prose() {
         // A ~500-char paragraph of English prose.
         let text = "The Rust programming language empowers everyone to build reliable and efficient software. Rust is blazingly fast and memory-efficient: with no runtime or garbage collector, it can power performance-critical services, run on embedded devices, and easily integrate with other languages. Reliability is at the core of Rust's design. Rust's rich type system and ownership model guarantee memory-safety and thread-safety — enabling you to eliminate many classes of bugs at compile-time. Rust also has great documentation, a friendly compiler with useful error messages, and top-notch tooling — an integrated package manager and build tool, smart multi-editor support with auto-completion and type inspections, an auto-formatter, and more.";
-        // tiktoken (cl100k_base): ~110 tokens
-        let tiktoken = 110;
+        // tiktoken (cl100k_base): ~138 tokens
+        let tiktoken = 138;
         let estimated = count_tokens(text);
         assert!(
             estimated >= tiktoken,
@@ -424,8 +456,8 @@ fn do_thing(x: i32) -> i32 {
     fn regression_against_tiktoken_long_code() {
         // A ~600-char Rust function.
         let text = "pub async fn handle_request(\n    req: HttpRequest,\n    pool: &PgPool,\n) -> Result<HttpResponse, AppError> {\n    let user_id = extract_user_id(&req)?;\n    let items = sqlx::query_as!(\n        Item,\n        \"SELECT id, name, quantity FROM items WHERE user_id = $1\",\n        user_id\n    )\n    .fetch_all(pool)\n    .await\n    .map_err(|e| AppError::Database(e.to_string()))?;\n\n    let response = ItemsResponse {\n        count: items.len(),\n        items: items.into_iter().map(ItemDto::from).collect(),\n    };\n\n    Ok(HttpResponse::Ok().json(&response))\n}";
-        // tiktoken (cl100k_base): ~130 tokens
-        let tiktoken = 130;
+        // tiktoken (cl100k_base): ~143 tokens
+        let tiktoken = 143;
         let estimated = count_tokens(text);
         assert!(
             estimated >= tiktoken,
@@ -461,8 +493,8 @@ fn do_thing(x: i32) -> i32 {
     }
   }
 }"#;
-        // tiktoken (cl100k_base): ~140 tokens
-        let tiktoken = 140;
+        // tiktoken (cl100k_base): ~195 tokens
+        let tiktoken = 195;
         let estimated = count_tokens(text);
         assert!(
             estimated >= tiktoken,
