@@ -176,7 +176,7 @@ pub enum AgentEvent {
     PlanProgress(Plan),
     /// The agent finished normally (no more tool calls).
     Done,
-    /// An error occurred (HTTP failure, stream error, max iterations).
+    /// An error occurred (HTTP failure, stream error).
     Error(String),
 }
 
@@ -914,11 +914,113 @@ impl Agent {
             // Loop continues so the model can react to tool results
         }
 
-        let _ = tx
-            .send(AgentEvent::Error(
-                AgentError::MaxIterations(self.settings.max_iterations).to_string(),
-            ))
-            .await;
+        // The iteration budget is exhausted without a final answer. Instead of
+        // failing with `AgentError::MaxIterations`, wrap up gracefully: ask the
+        // model to summarize what it has accomplished with NO further tool
+        // calls, persist that summary as an assistant turn, and emit `Done`.
+        // This keeps the conversation continuous so a later "continue"
+        // resumes from the summary rather than cold-starting the task.
+        self.finish_with_summary(&tx).await?;
+        Ok(())
+    }
+
+    /// Gracefully wrap up a turn that exhausted its iteration budget.
+    ///
+    /// Mirrors Hermes Agent's max-iteration fallback: inject a user message
+    /// asking the model to summarize progress without calling any more tools,
+    /// then make ONE toolless request. The resulting summary is pushed onto
+    /// `self.messages` as a real assistant turn and a [`AgentEvent::Done`] is
+    /// emitted, so session persistence and a subsequent "continue" see a
+    /// coherent, continuous conversation.
+    ///
+    /// Fail-open: if the summary request itself errors (or the model returns
+    /// nothing), a short canned summary is used instead — the turn always ends
+    /// cleanly and is never surfaced as an `Error` event.
+    async fn finish_with_summary(&mut self, tx: &mpsc::Sender<AgentEvent>) -> Result<()> {
+        let summary_prompt = "You've reached the maximum number of tool-calling iterations \
+            allowed for this turn. Provide a final response summarizing what you've found and \
+            accomplished so far, without calling any more tools.";
+        self.messages.push(ChatMessage {
+            role: "user".into(),
+            content: Some(summary_prompt.to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+        });
+
+        // Clamp max_tokens so the summary request fits the context window.
+        let prompt_est = history_tokens(&self.messages);
+        let margin = 64usize;
+        let remaining = self
+            .settings
+            .context_window
+            .saturating_sub(prompt_est)
+            .saturating_sub(margin);
+        let clamped_max = self.settings.max_tokens.min(remaining.max(256) as u32);
+
+        // Toolless request: no `tools`/`tool_choice`, so the model can only
+        // produce a final text answer (no tool calls to burn more iterations).
+        let body = serde_json::json!({
+            "model": self.settings.model,
+            "messages": &self.messages,
+            "temperature": self.settings.temperature,
+            "max_tokens": clamped_max,
+            "stream": !self.settings.no_stream,
+        });
+
+        let url = format!(
+            "{}/chat/completions",
+            self.settings.base_url.trim_end_matches('/')
+        );
+
+        let resp = match self.send_with_retry(&url, &body, tx).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("summary request failed after budget exhaustion: {e}");
+                return self.emit_summary(tx, None).await;
+            }
+        };
+
+        // Any tool calls parsed here are ignored — with no tools advertised the
+        // model cannot legitimately emit one; we only keep the text content.
+        let (content_buf, _tool_acc) = if self.settings.no_stream {
+            self.process_non_stream(resp, tx).await
+        } else {
+            self.process_stream(resp, tx).await
+        };
+
+        self.emit_summary(tx, (!content_buf.is_empty()).then_some(content_buf))
+            .await
+    }
+
+    /// Push a final summary assistant turn and emit `Done`.
+    ///
+    /// If `content` is `None` (empty/failed model output), a canned summary is
+    /// streamed and persisted instead, so the turn always ends with a usable
+    /// assistant message.
+    async fn emit_summary(
+        &mut self,
+        tx: &mpsc::Sender<AgentEvent>,
+        content: Option<String>,
+    ) -> Result<()> {
+        let had_content = content.is_some();
+        let text = content.unwrap_or_else(|| {
+            format!(
+                "I reached the maximum iterations ({}) but could not generate a summary.",
+                self.settings.max_iterations
+            )
+        });
+        // Stream the fallback so the user always sees a closing line, even when
+        // the model returned nothing.
+        if !had_content {
+            let _ = tx.send(AgentEvent::TextDelta(text.clone())).await;
+        }
+        self.messages.push(ChatMessage {
+            role: "assistant".into(),
+            content: Some(text),
+            tool_calls: None,
+            tool_call_id: None,
+        });
+        let _ = tx.send(AgentEvent::Done).await;
         Ok(())
     }
 
@@ -2380,6 +2482,69 @@ mod tests {
         assert_eq!(
             agent.messages[0].content, sys_before,
             "system message unchanged when not stale"
+        );
+    }
+
+    #[tokio::test]
+    async fn budget_exhaustion_emits_summary_and_done_not_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.rs"), "fn main() {}\n").unwrap();
+
+        // Every iteration the model calls a tool (never finishing on its own),
+        // so the loop exhausts `max_iterations`. The wrap-up then makes ONE
+        // toolless request whose text becomes the persisted summary.
+        let tool_round = concat!(
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"a.rs\\\"}\"}}]}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let summary_round = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Summarized progress so far.\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let (base, _h) = spawn_mock(vec![tool_round, tool_round, summary_round]).await;
+        let mut s = settings_for(tmp.path(), &base);
+        s.max_iterations = 2;
+        let mut agent = Agent::new(s).unwrap();
+        let (tx, mut rx) = mpsc::channel(256);
+        agent.run("do the thing", tx).await.unwrap();
+
+        let mut events = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            events.push(ev);
+        }
+
+        // Must end cleanly with Done, NOT an Error (the old MaxIterations path).
+        let saw_error = events.iter().any(|e| matches!(e, AgentEvent::Error(_)));
+        assert!(
+            !saw_error,
+            "budget exhaustion should not emit an Error event"
+        );
+        let saw_done = events.iter().any(|e| matches!(e, AgentEvent::Done));
+        assert!(saw_done, "budget exhaustion should emit Done");
+
+        // The summary must be persisted as a real assistant turn so a later
+        // "continue" resumes from a coherent conversation.
+        let last = agent.messages.last().expect("a final message");
+        assert_eq!(last.role, "assistant", "last message should be the summary");
+        assert!(
+            last.content
+                .as_deref()
+                .unwrap_or("")
+                .contains("Summarized progress"),
+            "last assistant message should be the summary, got {:?}",
+            last.content
+        );
+
+        // The summary user nudge is persisted too, keeping the alternation valid.
+        let second_to_last = &agent.messages[agent.messages.len() - 2];
+        assert_eq!(second_to_last.role, "user");
+        assert!(
+            second_to_last
+                .content
+                .as_deref()
+                .unwrap_or("")
+                .contains("maximum number of tool-calling iterations"),
+            "summary prompt should be injected as a user message"
         );
     }
 }

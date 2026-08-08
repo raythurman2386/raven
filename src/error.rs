@@ -96,6 +96,10 @@ pub enum AgentError {
     HttpError { status: u16, body: String },
 
     /// The agent exhausted its iteration budget without finishing.
+    ///
+    /// No longer emitted by the agent loop: a budget-exhausted turn is wrapped
+    /// up gracefully with a summary and a `Done` event instead. Retained as an
+    /// enum variant for external callers that may still construct it.
     #[error("Max iterations ({0}) reached without completion")]
     MaxIterations(usize),
 }
