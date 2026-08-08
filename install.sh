@@ -21,7 +21,7 @@ Options:
   -h, --help         Show this help message
 
 Examples:
-  curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | sh
+  curl -fsSL https://raw.githubusercontent.com/$REPO/master/install.sh | sh
   $0 --version 0.1.0
   $0 --to /usr/local/bin
 EOF

@@ -52,13 +52,13 @@ Suggested models: `qwen2.5-coder:7b`, `qwen2.5-coder:14b`, `llama3.1:8b`, `deeps
 **Linux / macOS / Raspberry Pi:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/raythurman2386/raven/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/raythurman2386/raven/master/install.sh | sh
 ```
 
 **Windows (PowerShell):**
 
 ```powershell
-irm https://raw.githubusercontent.com/raythurman2386/raven/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/raythurman2386/raven/master/install.ps1 | iex
 ```
 
 The script detects your platform, downloads the latest prebuilt binary from
