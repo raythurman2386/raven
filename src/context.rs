@@ -256,13 +256,24 @@ fn assemble_compaction(
     let system = messages[0].clone();
     let tail: Vec<ChatMessage> = messages[plan.tail_start..].to_vec();
 
-    messages.clear();
-    messages.push(system);
-    messages.push(summary_user);
-    messages.push(summary_assistant);
-    messages.extend(tail);
+    let mut compacted = Vec::with_capacity(tail.len() + 3);
+    compacted.push(system);
+    compacted.push(summary_user);
+    compacted.push(summary_assistant);
+    compacted.extend(tail);
 
-    (plan.before, history_tokens(messages))
+    let after = history_tokens(&compacted);
+    // Compaction must never grow the history. For degenerate histories — many
+    // tiny, near-identical messages where the extractive summary's per-line
+    // prefixes and newlines cost more than the verbatim middle they replace —
+    // the compacted form can be larger than the original. In that case keep the
+    // original unchanged rather than make things worse.
+    if after >= plan.before {
+        return (plan.before, plan.before);
+    }
+
+    *messages = compacted;
+    (plan.before, after)
 }
 
 /// LLM-structured compaction: summarize the middle with the model, falling
@@ -473,7 +484,9 @@ mod tests {
 
     #[test]
     fn estimate_tokens_nonzero() {
-        assert!(estimate_tokens("hello world") >= 4);
+        // "hello world" is 2 tokens in tiktoken (cl100k_base); the estimator
+        // is conservative and should never under-count it.
+        assert!(estimate_tokens("hello world") >= 2);
     }
 
     #[test]
@@ -558,9 +571,15 @@ mod tests {
     #[tokio::test]
     async fn compaction_reduces_token_count() {
         let mut msgs = vec![msg("system", "sys")];
-        for i in 0..200 {
-            msgs.push(msg("user", &format!("message number {i}")));
-            msgs.push(msg("assistant", &format!("response to message {i}")));
+        for i in 0..120 {
+            msgs.push(msg(
+                "user",
+                &format!("Refactor the auth module to add scoped permissions for user {i}. Ensure the middleware checks each route."),
+            ));
+            msgs.push(msg(
+                "assistant",
+                &format!("Added scoped permissions for user {i} in the auth middleware. Updated the route guards to enforce them."),
+            ));
         }
         let (before, after) = compact_extractive(&mut msgs, 8192, 0.1).await.unwrap();
         assert!(
@@ -572,9 +591,15 @@ mod tests {
     #[tokio::test]
     async fn compaction_produces_summary_messages() {
         let mut msgs = vec![msg("system", "sys")];
-        for i in 0..100 {
-            msgs.push(msg("user", &format!("task {i}")));
-            msgs.push(msg("assistant", &format!("did {i}")));
+        for i in 0..120 {
+            msgs.push(msg(
+                "user",
+                &format!("Add unit tests for the payment handler and cover the edge case where balance is {i}."),
+            ));
+            msgs.push(msg(
+                "assistant",
+                &format!("Wrote tests for the payment handler covering the zero-balance edge case for account {i}."),
+            ));
         }
         compact_extractive(&mut msgs, 8192, 0.1).await.unwrap();
         // After compaction: [system, summary_user, summary_assistant, ...tail]
@@ -582,6 +607,28 @@ mod tests {
         assert_eq!(msgs[1].role, "user");
         assert_eq!(msgs[2].role, "assistant");
         assert!(msgs[1].content.as_deref().unwrap().contains("[Compacted"));
+    }
+
+    #[tokio::test]
+    async fn compaction_never_grows_history() {
+        // Degenerate case: many tiny, near-identical messages where the
+        // extractive summary costs as much as (or more than) the verbatim
+        // middle it replaces. Compaction must not make the history larger.
+        let mut msgs = vec![msg("system", "sys")];
+        for i in 0..200 {
+            msgs.push(msg("user", &format!("message number {i}")));
+            msgs.push(msg("assistant", &format!("response to message {i}")));
+        }
+        let before_total = history_tokens(&msgs);
+        let result = compact_extractive(&mut msgs, 8192, 0.1).await;
+        assert!(result.is_some(), "compaction should still be attempted");
+        let (before, after) = result.unwrap();
+        assert_eq!(before, before_total);
+        // The guard must keep the original history when compaction would grow it.
+        assert!(
+            after <= before,
+            "compaction must not grow history: {after} > {before}"
+        );
     }
 
     #[tokio::test]
@@ -698,9 +745,15 @@ mod tests {
     #[tokio::test]
     async fn llm_compaction_falls_back_when_summarizer_returns_none() {
         let mut msgs = vec![msg("system", "sys")];
-        for i in 0..200 {
-            msgs.push(msg("user", &format!("message number {i}")));
-            msgs.push(msg("assistant", &format!("response to message {i}")));
+        for i in 0..120 {
+            msgs.push(msg(
+                "user",
+                &format!("Refactor the auth module to add scoped permissions for user {i}. Ensure the middleware checks each route."),
+            ));
+            msgs.push(msg(
+                "assistant",
+                &format!("Added scoped permissions for user {i} in the auth middleware. Updated the route guards to enforce them."),
+            ));
         }
         let (before, after) = compact_if_needed_llm(&mut msgs, 8192, 0.1, |_middle| {
             Box::pin(async { None }) // summarizer failed → extractive fallback
