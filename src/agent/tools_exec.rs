@@ -38,16 +38,6 @@ impl Agent {
         edited: &mut bool,
         edited_any: &mut bool,
     ) -> Result<()> {
-        // If this is a plan-proposal turn and the model signalled it is
-        // done planning via the exit_plan_mode tool, don't dispatch it as a
-        // real tool — emit PlanReady so the consumer auto-proceeds to
-        // execution (Grok Build-style model-driven transition).
-        if self.plan_only && tcs.iter().any(|tc| tc.function.name == "exit_plan_mode") {
-            self.messages.push(assistant);
-            let _ = tx.send(AgentEvent::PlanReady).await;
-            return Ok(());
-        }
-
         let mut assistant = assistant;
         assistant.tool_calls = Some(tcs.clone());
         self.messages.push(assistant);

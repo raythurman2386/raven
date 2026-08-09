@@ -59,9 +59,6 @@ pub enum AgentEvent {
     /// The turn edited files but did not call `run_tests` before finishing;
     /// the harness is re-running with a recovery reminder (enforced verify).
     VerifyRequired,
-    /// The plan-only turn produced a plan and signalled readiness to execute.
-    /// Consumers should auto-proceed to execution (model-driven, no human gate).
-    PlanReady,
     /// The model asked the user a question mid-task. The consumer must render
     /// it and send the answer back over the included oneshot channel (or drop
     /// the sender to signal "no answer / dismissed").

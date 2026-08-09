@@ -387,8 +387,7 @@ async fn headless_run(
         task.to_string()
     };
 
-    let (first_messages, assistant_text, plan_ready) =
-        runner::spawn_and_drain(agent, &prompt, plan_first).await?;
+    let (first_messages, assistant_text) = runner::spawn_and_drain(agent, &prompt).await?;
 
     if let Some(ref final_messages) = first_messages {
         runner::save_session_messages(&store, &mut session, final_messages, task)?;
@@ -398,7 +397,6 @@ async fn headless_run(
         runner::run_plan_flow(
             &settings,
             &assistant_text,
-            plan_ready,
             first_messages,
             &store,
             &mut session,

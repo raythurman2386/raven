@@ -343,25 +343,10 @@ pub fn plan_tool_definitions() -> serde_json::Value {
         "skill_search",
         "skill_load",
         "memory_search",
-        "exit_plan_mode",
     ];
 
     let all = tool_definitions();
-    let mut arr = all.as_array().cloned().unwrap_or_default();
-    arr.push(serde_json::json!({
-        "type": "function",
-        "function": {
-            "name": "exit_plan_mode",
-            "description": "Signal that the plan is complete and ready to execute. Call this with a short plan summary when your plan is finished.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "summary": { "type": "string", "description": "Short summary of the plan" }
-                },
-                "required": []
-            }
-        }
-    }));
+    let arr = all.as_array().cloned().unwrap_or_default();
     let filtered: Vec<serde_json::Value> = arr
         .into_iter()
         .filter(|tool| {

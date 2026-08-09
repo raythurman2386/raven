@@ -14,17 +14,9 @@ use crate::session::{Session, SessionStore};
 
 /// Drain agent events from the channel, printing to stdout.
 ///
-/// When `stop_on_plan_ready` is true, the function returns early on
-/// [`AgentEvent::PlanReady`] so the caller can run the plan-approval flow.
-/// Otherwise PlanReady is logged but does not interrupt the drain.
-///
-/// Returns the accumulated assistant text and whether a PlanReady was seen.
-pub async fn drain_events(
-    rx: &mut mpsc::Receiver<AgentEvent>,
-    stop_on_plan_ready: bool,
-) -> (String, bool) {
+/// Returns the accumulated assistant text.
+pub async fn drain_events(rx: &mut mpsc::Receiver<AgentEvent>) -> String {
     let mut assistant_text = String::new();
-    let mut plan_ready = false;
     while let Some(ev) = rx.recv().await {
         match ev {
             AgentEvent::TextDelta(t) => {
@@ -60,12 +52,6 @@ pub async fn drain_events(
             AgentEvent::VerifyRequired => {
                 eprintln!("[verify required: re-running to enforce run_tests]");
             }
-            AgentEvent::PlanReady => {
-                plan_ready = true;
-                if stop_on_plan_ready {
-                    break;
-                }
-            }
             AgentEvent::AskUser { question, reply } => {
                 eprintln!("\n── {question} ──");
                 let answer = read_line_if_tty()
@@ -83,39 +69,37 @@ pub async fn drain_events(
             }
         }
     }
-    (assistant_text, plan_ready)
+    assistant_text
 }
 
 /// Spawn an agent task and drain its events.
 ///
-/// Returns the final messages (if the task completed), the accumulated
-/// assistant text, and whether a PlanReady was seen.
+/// Returns the final messages (if the task completed) and the accumulated
+/// assistant text.
 pub async fn spawn_and_drain(
     mut agent: Agent,
     prompt: &str,
-    stop_on_plan_ready: bool,
-) -> Result<(Option<Vec<ChatMessage>>, String, bool)> {
+) -> Result<(Option<Vec<ChatMessage>>, String)> {
     let prompt = prompt.to_string();
     let (tx, mut rx) = mpsc::channel::<AgentEvent>(64);
     let runner = tokio::spawn(async move {
         agent.run(&prompt, tx).await?;
         Ok::<_, anyhow::Error>(agent.messages)
     });
-    let (assistant_text, plan_ready) = drain_events(&mut rx, stop_on_plan_ready).await;
+    let assistant_text = drain_events(&mut rx).await;
     let messages = runner.await.ok().and_then(|r| r.ok());
-    Ok((messages, assistant_text, plan_ready))
+    Ok((messages, assistant_text))
 }
 
 /// Run the plan-approve-revise-execute flow.
 ///
 /// This is the shared logic that was duplicated between the headless runner
 /// and the TUI's `handle_plan_response`. It parses the plan from the assistant
-/// text, prompts for approval (or auto-proceeds if `plan_ready`), handles
-/// revision, and executes the approved plan.
+/// text, prompts for approval, handles revision, and executes the approved
+/// plan. Plan mode always requires human approval before execution.
 pub async fn run_plan_flow(
     settings: &Settings,
     assistant_text: &str,
-    plan_ready: bool,
     first_messages: Option<Vec<ChatMessage>>,
     store: &SessionStore,
     session: &mut Session,
@@ -124,49 +108,44 @@ pub async fn run_plan_flow(
     let plan = plan::parse_plan(assistant_text);
     println!("\n{}", plan::format_plan(&plan));
 
-    if !plan_ready {
-        println!("── Approve? [Y]es / [n]o / [r]evise ──");
-        match resolve_approval("Approving plan")? {
-            Approval::Yes => {}
-            Approval::No => {
-                println!("Aborted.");
-                return Ok(());
+    println!("── Approve? [Y]es / [n]o / [r]evise ──");
+    match resolve_approval("Approving plan")? {
+        Approval::Yes => {}
+        Approval::No => {
+            println!("Aborted.");
+            return Ok(());
+        }
+        Approval::Revise(feedback) => {
+            let feedback_msg = format!("Revise the plan based on this feedback:\n{feedback}");
+            let agent = Agent::with_messages(
+                settings.clone(),
+                first_messages.clone().unwrap_or_default(),
+            )?
+            .plan_only();
+
+            let rev_msg = ChatMessage {
+                role: "user".into(),
+                content: Some(feedback_msg.clone()),
+                tool_calls: None,
+                tool_call_id: None,
+            };
+            store.append_message(session, &rev_msg)?;
+
+            let (rev_messages, rev_text) = spawn_and_drain(agent, &feedback_msg).await?;
+
+            if let Some(ref msgs) = rev_messages {
+                save_session_messages(store, session, msgs, task)?;
             }
-            Approval::Revise(feedback) => {
-                let feedback_msg = format!("Revise the plan based on this feedback:\n{feedback}");
-                let agent = Agent::with_messages(
-                    settings.clone(),
-                    first_messages.clone().unwrap_or_default(),
-                )?
-                .plan_only();
 
-                let rev_msg = ChatMessage {
-                    role: "user".into(),
-                    content: Some(feedback_msg.clone()),
-                    tool_calls: None,
-                    tool_call_id: None,
-                };
-                store.append_message(session, &rev_msg)?;
-
-                let (rev_messages, rev_text, rev_ready) =
-                    spawn_and_drain(agent, &feedback_msg, true).await?;
-
-                if let Some(ref msgs) = rev_messages {
-                    save_session_messages(store, session, msgs, task)?;
+            let revised = plan::parse_plan(&rev_text);
+            println!("\n{}", plan::format_plan(&revised));
+            println!("── Approve? [Y]es / [n]o ──");
+            match resolve_approval("Approving revised plan")? {
+                Approval::No | Approval::Revise(_) => {
+                    println!("Aborted.");
+                    return Ok(());
                 }
-
-                let revised = plan::parse_plan(&rev_text);
-                println!("\n{}", plan::format_plan(&revised));
-                if !rev_ready {
-                    println!("── Approve? [Y]es / [n]o ──");
-                    match resolve_approval("Approving revised plan")? {
-                        Approval::No | Approval::Revise(_) => {
-                            println!("Aborted.");
-                            return Ok(());
-                        }
-                        Approval::Yes => {}
-                    }
-                }
+                Approval::Yes => {}
             }
         }
     }
@@ -181,7 +160,7 @@ pub async fn run_plan_flow(
     store.append_message(session, &exec_msg)?;
 
     let agent = Agent::with_messages(settings.clone(), exec_messages)?.with_plan(plan);
-    let (final_messages, _, _) = spawn_and_drain(agent, plan::EXECUTE_PROMPT, false).await?;
+    let (final_messages, _) = spawn_and_drain(agent, plan::EXECUTE_PROMPT).await?;
     if let Some(ref msgs) = final_messages {
         save_session_messages(store, session, msgs, "Plan execution")?;
     }
