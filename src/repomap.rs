@@ -347,25 +347,45 @@ pub fn build_map(workspace: &Path) -> Option<String> {
     Some(render(&symbols))
 }
 
-/// Render symbols grouped by relative path, capped at `MAX_MAP_CHARS`.
-/// Hard-stops cleanly: never cuts a line in half.
+/// Select symbols by score under budget, then group by path, then render
+/// each file exactly once. Hard-stops cleanly: never cuts a line in half.
 fn render(symbols: &[Symbol]) -> String {
-    let mut out = String::from("<repo_map>\n");
-    let mut current_file: Option<&str> = None;
+    let mut selected: Vec<&Symbol> = Vec::new();
+    let mut seen: HashMap<&str, ()> = HashMap::new();
+    let mut chars = "<repo_map>\n".chars().count();
+
     for s in symbols {
-        if current_file != Some(s.path.as_str()) {
-            let header = format!("{}\n", s.path);
-            if out.chars().count() + header.chars().count() > MAX_MAP_CHARS {
-                break;
-            }
-            out.push_str(&header);
-            current_file = Some(s.path.as_str());
-        }
+        let header_chars = if seen.contains_key(s.path.as_str()) {
+            0
+        } else {
+            s.path.chars().count() + 1
+        };
         let line = format!("  {} [{}]\n", s.name, s.kind);
-        if out.chars().count() + line.chars().count() > MAX_MAP_CHARS {
+        if chars + header_chars + line.chars().count() > MAX_MAP_CHARS {
             break;
         }
-        out.push_str(&line);
+        chars += header_chars + line.chars().count();
+        seen.insert(s.path.as_str(), ());
+        selected.push(s);
+    }
+
+    let mut groups: Vec<(&str, Vec<&&Symbol>)> = Vec::new();
+    let mut group_idx: HashMap<&str, usize> = HashMap::new();
+    for s in &selected {
+        if let Some(&idx) = group_idx.get(s.path.as_str()) {
+            groups[idx].1.push(s);
+        } else {
+            group_idx.insert(s.path.as_str(), groups.len());
+            groups.push((s.path.as_str(), vec![s]));
+        }
+    }
+
+    let mut out = String::from("<repo_map>\n");
+    for (path, syms) in &groups {
+        out.push_str(&format!("{}\n", path));
+        for s in syms {
+            out.push_str(&format!("  {} [{}]\n", s.name, s.kind));
+        }
     }
     out.push_str("</repo_map>");
     out
@@ -808,6 +828,39 @@ mod tests {
         }
         assert!(should_build(tmp.path()));
         assert!(build_map(tmp.path()).is_some());
+    }
+
+    #[test]
+    fn each_file_header_appears_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_rs(
+            tmp.path(),
+            "src/a.rs",
+            "pub fn a1() {}\npub fn a2() {}\npub fn a3() {}\n",
+        );
+        write_rs(
+            tmp.path(),
+            "src/b.rs",
+            "pub fn b1() {}\npub fn b2() {}\npub fn b3() {}\n",
+        );
+        for f in 0..15 {
+            write_rs(tmp.path(), &format!("src/mod/f{f}.rs"), "pub fn f() {}\n");
+        }
+        let map = build_map(tmp.path()).expect("map should build");
+        let mut header_counts: HashMap<&str, usize> = HashMap::new();
+        for line in map.lines() {
+            if line.starts_with("  ") || line == "<repo_map>" || line == "</repo_map>" {
+                continue;
+            }
+            *header_counts.entry(line).or_insert(0) += 1;
+        }
+        for (path, count) in &header_counts {
+            assert_eq!(
+                *count, 1,
+                "path header '{}' appears {} times, expected exactly once",
+                path, count
+            );
+        }
     }
 
     #[test]
