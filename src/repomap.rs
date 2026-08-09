@@ -270,6 +270,9 @@ fn count_source_files(workspace: &Path) -> usize {
                 .map(|e| SOURCE_EXTS.contains(&e))
                 .unwrap_or(false)
         {
+            if entry.metadata().map(|m| m.len()).unwrap_or(0) > MAX_FILE_BYTES {
+                continue;
+            }
             n += 1;
         }
     }
@@ -302,11 +305,11 @@ pub fn build_map(workspace: &Path) -> Option<String> {
         if !SOURCE_EXTS.contains(&ext) {
             continue;
         }
-        source_files += 1;
         // Skip likely-generated files (minified bundles, lockfiles, etc.).
         if entry.metadata().map(|m| m.len()).unwrap_or(0) > MAX_FILE_BYTES {
             continue;
         }
+        source_files += 1;
         let Ok(content) = std::fs::read_to_string(path) else {
             continue;
         };
@@ -740,6 +743,18 @@ mod tests {
         std::fs::write(&big, "pub fn big() {}\n".repeat(100_000)).unwrap();
         let map = build_map(tmp.path()).expect("map should build");
         assert!(!map.contains("big"), "oversized file should be skipped");
+    }
+
+    #[test]
+    fn all_oversized_files_returns_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        for f in 0..20 {
+            let path = tmp.path().join(format!("f{f}.rs"));
+            let body = "pub fn f() {}\n".repeat(100_000);
+            std::fs::write(&path, body).unwrap();
+        }
+        assert!(!should_build(tmp.path()));
+        assert!(build_map(tmp.path()).is_none());
     }
 
     #[test]
