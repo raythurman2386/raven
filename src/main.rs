@@ -240,7 +240,10 @@ async fn main() -> Result<()> {
         no_stream: cli.no_stream || cfg.no_stream.unwrap_or(false),
         verify: !cli.no_verify && cfg.verify.unwrap_or(true),
         confirm_shell: !cli.yolo,
-        theme: cli.theme.or(cfg.theme).unwrap_or_else(|| "ravenwood".to_string()),
+        theme: cli
+            .theme
+            .or(cfg.theme)
+            .unwrap_or_else(|| "ravenwood".to_string()),
     };
 
     if let Some(tasks) = cli.parallel {

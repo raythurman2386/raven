@@ -1541,9 +1541,7 @@ async fn dispatch_slash_command(
                 state.push_system(format!("theme → {}", theme_name(t)));
                 state.log_dirty = true;
             } else {
-                state.push_system(format!(
-                    "unknown theme: {name}  (try /theme to list)"
-                ));
+                state.push_system(format!("unknown theme: {name}  (try /theme to list)"));
                 state.log_dirty = true;
             }
         }
@@ -2153,8 +2151,14 @@ mod tests {
                 _ => None,
             })
             .unwrap_or_default();
-        assert!(listed.contains("nord"), "list should mention nord: {listed}");
-        assert!(listed.contains("ravenwood"), "list should mention ravenwood: {listed}");
+        assert!(
+            listed.contains("nord"),
+            "list should mention nord: {listed}"
+        );
+        assert!(
+            listed.contains("ravenwood"),
+            "list should mention ravenwood: {listed}"
+        );
 
         // /theme nord switches the active theme.
         let pc = commands::parse("/theme nord").unwrap();
@@ -2184,6 +2188,10 @@ mod tests {
         .await
         .unwrap();
         assert!(handled);
-        assert_eq!(state.theme, Theme::NORD, "unknown theme must not change theme");
+        assert_eq!(
+            state.theme,
+            Theme::NORD,
+            "unknown theme must not change theme"
+        );
     }
 }

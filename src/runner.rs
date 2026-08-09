@@ -117,11 +117,9 @@ pub async fn run_plan_flow(
         }
         Approval::Revise(feedback) => {
             let feedback_msg = format!("Revise the plan based on this feedback:\n{feedback}");
-            let agent = Agent::with_messages(
-                settings.clone(),
-                first_messages.clone().unwrap_or_default(),
-            )?
-            .plan_only();
+            let agent =
+                Agent::with_messages(settings.clone(), first_messages.clone().unwrap_or_default())?
+                    .plan_only();
 
             let rev_msg = ChatMessage {
                 role: "user".into(),

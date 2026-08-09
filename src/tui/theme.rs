@@ -49,15 +49,15 @@ impl Theme {
     /// The default Ravenwood emerald-forest palette (warm beige foreground,
     /// olive-tinged backgrounds, green hero accent, pastel brights).
     pub const RAVENWOOD: Theme = Theme {
-        fg: Color::Rgb(0xE8, 0xD5, 0xB7), // warm beige
-        dim: Color::Rgb(0x85, 0x92, 0x89), // grey1
-        accent: Color::Rgb(0x22, 0xD3, 0xEE), // blue
-        user: Color::Rgb(0x4A, 0xDE, 0x80), // green — hero
-        tool: Color::Rgb(0xE6, 0x98, 0x75), // orange
-        system: Color::Rgb(0x7F, 0x89, 0x7D), // grey0
-        error: Color::Rgb(0xE6, 0x7E, 0x80), // red
-        plan: Color::Rgb(0xF4, 0x72, 0xB6), // purple
-        border: Color::Rgb(0x4A, 0x5A, 0x4D), // bg4
+        fg: Color::Rgb(0xE8, 0xD5, 0xB7),        // warm beige
+        dim: Color::Rgb(0x85, 0x92, 0x89),       // grey1
+        accent: Color::Rgb(0x22, 0xD3, 0xEE),    // blue
+        user: Color::Rgb(0x4A, 0xDE, 0x80),      // green — hero
+        tool: Color::Rgb(0xE6, 0x98, 0x75),      // orange
+        system: Color::Rgb(0x7F, 0x89, 0x7D),    // grey0
+        error: Color::Rgb(0xE6, 0x7E, 0x80),     // red
+        plan: Color::Rgb(0xF4, 0x72, 0xB6),      // purple
+        border: Color::Rgb(0x4A, 0x5A, 0x4D),    // bg4
         status_bg: Color::Rgb(0x1F, 0x24, 0x1F), // bg1
         select_bg: Color::Rgb(0x3A, 0x4F, 0x3D), // bg visual selection
         tool_rgb: (0xE6, 0x98, 0x75),
@@ -66,15 +66,15 @@ impl Theme {
 
     /// Nord — the arctic, north-bluish palette.
     pub const NORD: Theme = Theme {
-        fg: Color::Rgb(0xD8, 0xDE, 0xE9), // nord4
-        dim: Color::Rgb(0x4C, 0x56, 0x6A), // nord3
-        accent: Color::Rgb(0x88, 0xC0, 0xD0), // nord8
-        user: Color::Rgb(0xA3, 0xBE, 0x8C), // nord14
-        tool: Color::Rgb(0xD0, 0x87, 0x70), // nord12
-        system: Color::Rgb(0x61, 0x6E, 0x88), // nord3-ish
-        error: Color::Rgb(0xBF, 0x61, 0x6A), // nord11
-        plan: Color::Rgb(0xB4, 0x8E, 0xAD), // nord15
-        border: Color::Rgb(0x3B, 0x42, 0x52), // nord1
+        fg: Color::Rgb(0xD8, 0xDE, 0xE9),        // nord4
+        dim: Color::Rgb(0x4C, 0x56, 0x6A),       // nord3
+        accent: Color::Rgb(0x88, 0xC0, 0xD0),    // nord8
+        user: Color::Rgb(0xA3, 0xBE, 0x8C),      // nord14
+        tool: Color::Rgb(0xD0, 0x87, 0x70),      // nord12
+        system: Color::Rgb(0x61, 0x6E, 0x88),    // nord3-ish
+        error: Color::Rgb(0xBF, 0x61, 0x6A),     // nord11
+        plan: Color::Rgb(0xB4, 0x8E, 0xAD),      // nord15
+        border: Color::Rgb(0x3B, 0x42, 0x52),    // nord1
         status_bg: Color::Rgb(0x2E, 0x34, 0x40), // nord0
         select_bg: Color::Rgb(0x43, 0x4C, 0x5E), // nord2
         tool_rgb: (0xD0, 0x87, 0x70),
@@ -100,15 +100,15 @@ impl Theme {
 
     /// Solarized Dark — the low-contrast, warm/cool balanced palette.
     pub const SOLARIZED_DARK: Theme = Theme {
-        fg: Color::Rgb(0x93, 0xA1, 0xA1), // base0
-        dim: Color::Rgb(0x58, 0x6E, 0x75), // base01
-        accent: Color::Rgb(0x26, 0x8B, 0xD2), // blue
-        user: Color::Rgb(0x85, 0x99, 0x00), // green
-        tool: Color::Rgb(0xCB, 0x4B, 0x16), // orange
-        system: Color::Rgb(0x65, 0x7B, 0x83), // base00
-        error: Color::Rgb(0xDC, 0x32, 0x2F), // red
-        plan: Color::Rgb(0xD3, 0x36, 0x82), // magenta
-        border: Color::Rgb(0x07, 0x36, 0x42), // base02
+        fg: Color::Rgb(0x93, 0xA1, 0xA1),        // base0
+        dim: Color::Rgb(0x58, 0x6E, 0x75),       // base01
+        accent: Color::Rgb(0x26, 0x8B, 0xD2),    // blue
+        user: Color::Rgb(0x85, 0x99, 0x00),      // green
+        tool: Color::Rgb(0xCB, 0x4B, 0x16),      // orange
+        system: Color::Rgb(0x65, 0x7B, 0x83),    // base00
+        error: Color::Rgb(0xDC, 0x32, 0x2F),     // red
+        plan: Color::Rgb(0xD3, 0x36, 0x82),      // magenta
+        border: Color::Rgb(0x07, 0x36, 0x42),    // base02
         status_bg: Color::Rgb(0x00, 0x2B, 0x36), // base03
         select_bg: Color::Rgb(0x07, 0x36, 0x42), // base02
         tool_rgb: (0xCB, 0x4B, 0x16),
@@ -149,7 +149,10 @@ mod tests {
         assert_eq!(Theme::by_name("nord"), Some(Theme::NORD));
         assert_eq!(Theme::by_name("NORD"), Some(Theme::NORD));
         assert_eq!(Theme::by_name("Dracula"), Some(Theme::DRACULA));
-        assert_eq!(Theme::by_name("solarized-dark"), Some(Theme::SOLARIZED_DARK));
+        assert_eq!(
+            Theme::by_name("solarized-dark"),
+            Some(Theme::SOLARIZED_DARK)
+        );
     }
 
     #[test]
@@ -166,7 +169,10 @@ mod tests {
                 assert_ne!(a, b, "duplicate theme name {a}");
             }
         }
-        assert!(names.contains(&"ravenwood"), "default theme must be registered");
+        assert!(
+            names.contains(&"ravenwood"),
+            "default theme must be registered"
+        );
     }
 
     #[test]

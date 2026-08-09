@@ -33,9 +33,7 @@ pub fn render_blocks(blocks: &[BlockKind], tick: u64, theme: Theme) -> (Vec<Line
             BlockKind::User(u) => {
                 lines.push(Line::from(Span::styled(
                     "You",
-                    Style::default()
-                        .fg(theme.user)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme.user).add_modifier(Modifier::BOLD),
                 )));
                 for part in u.text().lines() {
                     lines.push(Line::from(vec![
@@ -111,9 +109,7 @@ fn tool_style(t: &ToolBlock, tick: u64, is_last_active: bool, theme: Theme) -> S
     const GLIMMER_TICKS: u64 = 50; // ~1s at 60ms/frame
     if t.active {
         if is_last_active {
-            return Style::default()
-                .fg(theme.tool)
-                .add_modifier(Modifier::BOLD);
+            return Style::default().fg(theme.tool).add_modifier(Modifier::BOLD);
         }
         // Running but not the newest — keep it quiet so the UI doesn't
         // spin a spinner on every parallel tool call at once.
