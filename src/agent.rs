@@ -219,6 +219,14 @@ pub struct Agent {
     /// Holds a repeated-failure reminder to surface on the *next* request when
     /// the model has made 3+ identical failing tool calls in a row.
     pending_repeated_failure: Option<String>,
+    /// Number of consecutive blank model turns (no content, no tool calls)
+    /// handled this run. Capped: after this many, the turn falls through to
+    /// `emit_summary` so it always ends visibly.
+    blank_attempts: u32,
+    /// Holds a blank-response reminder to surface on the *next* request when
+    /// the model returned nothing (no content, no tool calls). Follows the
+    /// same ephemeral pattern as `pending_lint`.
+    pending_blank: Option<String>,
     /// Optional plan being executed; step statuses are updated as the agent
     /// progresses through tool calls.
     plan: Option<Plan>,
@@ -249,6 +257,8 @@ impl Agent {
             consecutive_failure_key: None,
             consecutive_failure_count: 0,
             pending_repeated_failure: None,
+            blank_attempts: 0,
+            pending_blank: None,
             plan: None,
             current_step: 0,
             client: reqwest::Client::builder()
@@ -325,6 +335,7 @@ impl Agent {
         // iter 1 still gates a finish in iter 2 unless run_tests was called.
         self.verified = false;
         self.verify_attempts = 0;
+        self.blank_attempts = 0;
         let mut edited_any = false;
 
         // Rebuild the repo map in the system message if files were edited
@@ -364,6 +375,9 @@ impl Agent {
             }
             if let Some(f) = self.pending_repeated_failure.take() {
                 reminders.push(f);
+            }
+            if let Some(b) = self.pending_blank.take() {
+                reminders.push(b);
             }
 
             // Compaction: if estimated history tokens exceed the soft limit,
@@ -496,6 +510,10 @@ impl Agent {
                 tool_acc.len()
             );
 
+            // Blank-response stall detection: computed before `content_buf` is
+            // moved into the assistant message below.
+            let content_blank = content_buf.trim().is_empty();
+
             // Build assistant message
             let mut assistant = ChatMessage {
                 role: "assistant".into(),
@@ -509,6 +527,21 @@ impl Agent {
             };
 
             if tool_acc.is_empty() {
+                // Blank-response stall: the model returned no tool calls AND no
+                // non-whitespace content. Treat this as a stall, not a finish —
+                // inject an ephemeral reminder and re-run (capped), so a blank
+                // generation can't silently drop the deliverable (issue #110).
+                const MAX_BLANK_ATTEMPTS: u32 = 3;
+                if content_blank && self.blank_attempts < MAX_BLANK_ATTEMPTS {
+                    self.blank_attempts += 1;
+                    self.pending_blank = Some(
+                        "You returned no content and no tool calls this turn. \
+                         Produce the requested deliverable or a summary of your findings \
+                         now — do not end with an empty reply."
+                            .to_string(),
+                    );
+                    continue;
+                }
                 // Enforced verification: if the turn edited files and verify is on and
                 // the model hasn't called run_tests, don't finish — inject a recovery
                 // reminder and re-run (capped at 3 attempts).
@@ -528,6 +561,12 @@ impl Agent {
                     );
                     let _ = tx.send(AgentEvent::VerifyRequired).await;
                     continue;
+                }
+                // Blank cap exhausted: still nothing to show. Fall through to
+                // emit_summary so the turn ends with a visible canned line
+                // rather than an empty assistant message.
+                if content_blank {
+                    return self.emit_summary(&tx, None).await;
                 }
                 self.messages.push(assistant);
                 if let Some(ref mut plan) = self.plan {
@@ -2546,5 +2585,37 @@ mod tests {
                 .contains("maximum number of tool-calling iterations"),
             "summary prompt should be injected as a user message"
         );
+    }
+
+    #[tokio::test]
+    async fn blank_response_stalls_then_recovers_not_done() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Round 1-2: blank responses (only [DONE], no content delta).
+        let blank = "data: [DONE]\n\n";
+        // Round 3: a real text answer after the nudges.
+        let final_round = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Here is the report.\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let (base, _h) = spawn_mock(vec![blank, blank, final_round]).await;
+        let mut agent = Agent::new(settings_for(tmp.path(), &base)).unwrap();
+        let (tx, mut rx) = mpsc::channel(256);
+        agent.run("write the report", tx).await.unwrap();
+        let mut events = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            events.push(ev);
+        }
+        // The blank turns did NOT immediately finish with an empty Done.
+        // Instead the model was nudged and re-ran, eventually producing text.
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::TextDelta(s) if s == "Here is the report.")));
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::Done)));
+        // The persisted final assistant message carries the real content, not empty.
+        let last = agent.messages.last().unwrap();
+        assert_eq!(last.role, "assistant");
+        assert_eq!(last.content.as_deref(), Some("Here is the report."));
+        // blank_attempts was incremented past zero, proving the stall was handled.
+        assert!(agent.blank_attempts > 0);
     }
 }
