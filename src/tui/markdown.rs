@@ -28,8 +28,8 @@ struct InlineStyle {
 }
 
 impl InlineStyle {
-    fn to_style(self) -> Style {
-        let mut s = Style::default().fg(Theme::FG);
+    fn to_style(self, theme: Theme) -> Style {
+        let mut s = Style::default().fg(theme.fg);
         if self.bold {
             s = s.add_modifier(Modifier::BOLD);
         }
@@ -40,7 +40,7 @@ impl InlineStyle {
             s = s.add_modifier(Modifier::CROSSED_OUT);
         }
         if self.code {
-            s = s.fg(Theme::TOOL);
+            s = s.fg(theme.tool);
         }
         s
     }
@@ -62,10 +62,12 @@ struct Renderer {
     in_quote: bool,
     /// Destination URL of the link currently being rendered (if any).
     link_url: Option<String>,
+    /// The active color theme.
+    theme: Theme,
 }
 
 impl Renderer {
-    fn new() -> Self {
+    fn new(theme: Theme) -> Self {
         Self {
             lines: Vec::new(),
             cur: Vec::new(),
@@ -74,6 +76,7 @@ impl Renderer {
             list_counters: Vec::new(),
             in_quote: false,
             link_url: None,
+            theme,
         }
     }
 
@@ -92,7 +95,7 @@ impl Renderer {
         if s.is_empty() {
             return;
         }
-        let style = self.inline.to_style();
+        let style = self.inline.to_style(self.theme);
         self.cur.push(Span::styled(s.to_string(), style));
     }
 
@@ -108,7 +111,7 @@ impl Renderer {
     fn quote_prefix(&mut self) {
         if self.in_quote {
             self.cur
-                .push(Span::styled("│ ", Style::default().fg(Theme::DIM)));
+                .push(Span::styled("│ ", Style::default().fg(self.theme.dim)));
         }
     }
 
@@ -117,17 +120,17 @@ impl Renderer {
         self.flush();
         self.lines.push(Line::from(Span::styled(
             "┌─ code",
-            Style::default().fg(Theme::DIM),
+            Style::default().fg(self.theme.dim),
         )));
         for line in code.lines() {
             self.lines.push(Line::from(Span::styled(
                 format!("│ {line}"),
-                Style::default().fg(Theme::TOOL),
+                Style::default().fg(self.theme.tool),
             )));
         }
         self.lines.push(Line::from(Span::styled(
             "└─".to_string(),
-            Style::default().fg(Theme::DIM),
+            Style::default().fg(self.theme.dim),
         )));
         self.lines.push(Line::from(""));
     }
@@ -137,7 +140,7 @@ impl Renderer {
         self.flush();
         self.lines.push(Line::from(Span::styled(
             "─".repeat(40),
-            Style::default().fg(Theme::DIM),
+            Style::default().fg(self.theme.dim),
         )));
         self.lines.push(Line::from(""));
     }
@@ -149,8 +152,8 @@ impl Renderer {
 /// streaming tail renderer. It re-parses the whole (possibly partial) text
 /// each call — cheap for typical assistant responses, and safe because
 /// `pulldown-cmark` degrades unclosed tokens to literal text.
-pub fn render_markdown(text: &str) -> Vec<Line<'static>> {
-    let mut r = Renderer::new();
+pub fn render_markdown(text: &str, theme: Theme) -> Vec<Line<'static>> {
+    let mut r = Renderer::new(theme);
     let mut opts = Options::empty();
     opts.insert(Options::ENABLE_TABLES);
     opts.insert(Options::ENABLE_STRIKETHROUGH);
@@ -178,7 +181,7 @@ pub fn render_markdown(text: &str) -> Vec<Line<'static>> {
             Event::Rule => r.rule(),
             Event::Html(t) => {
                 // Render raw HTML as dim text so it's visible but quiet.
-                r.styled(&t, Style::default().fg(Theme::DIM));
+                r.styled(&t, Style::default().fg(r.theme.dim));
             }
             _ => {}
         }
@@ -202,7 +205,7 @@ impl Renderer {
                     _ => "· ",
                 };
                 self.cur
-                    .push(Span::styled(marker, Style::default().fg(Theme::ACCENT)));
+                    .push(Span::styled(marker, Style::default().fg(self.theme.accent)));
                 self.inline.bold = true;
             }
             Tag::BlockQuote(_) => {
@@ -236,7 +239,7 @@ impl Renderer {
                 };
                 self.cur.push(Span::styled(
                     format!("{indent}{marker}"),
-                    Style::default().fg(Theme::ACCENT),
+                    Style::default().fg(self.theme.accent),
                 ));
             }
             Tag::Emphasis => self.inline.italic = true,
@@ -245,7 +248,7 @@ impl Renderer {
             Tag::Link { dest_url, .. } => {
                 // Render the link text, then append the URL dimmed.
                 self.cur
-                    .push(Span::styled("[", Style::default().fg(Theme::ACCENT)));
+                    .push(Span::styled("[", Style::default().fg(self.theme.accent)));
                 self.inline.bold = false;
                 self.link_url = Some(dest_url.to_string());
             }
@@ -253,7 +256,7 @@ impl Renderer {
                 // Images render as a dim `[img: url]` affordance.
                 self.styled(
                     &format!("[img: {dest_url}]"),
-                    Style::default().fg(Theme::DIM),
+                    Style::default().fg(self.theme.dim),
                 );
             }
             Tag::Table(_) => {}
@@ -265,7 +268,7 @@ impl Renderer {
             Tag::TableCell if !self.cur.is_empty() => {
                 // Separator between cells (except the first).
                 self.cur
-                    .push(Span::styled(" │ ", Style::default().fg(Theme::DIM)));
+                    .push(Span::styled(" │ ", Style::default().fg(self.theme.dim)));
             }
             _ => {}
         }
@@ -306,7 +309,7 @@ impl Renderer {
                 if let Some(url) = self.link_url.take() {
                     self.cur.push(Span::styled(
                         format!("]({url})"),
-                        Style::default().fg(Theme::DIM),
+                        Style::default().fg(self.theme.dim),
                     ));
                 }
             }
@@ -328,15 +331,19 @@ mod tests {
         lines.iter().map(|l| l.to_string()).collect()
     }
 
+    fn render(text: &str) -> Vec<Line<'static>> {
+        render_markdown(text, Theme::RAVENWOOD)
+    }
+
     #[test]
     fn renders_plain_text() {
-        let lines = render_markdown("hello world");
+        let lines = render("hello world");
         assert_eq!(plain(&lines), vec!["hello world"]);
     }
 
     #[test]
     fn renders_heading_bold() {
-        let lines = render_markdown("# Title");
+        let lines = render("# Title");
         let first = &lines[0];
         assert!(first.to_string().contains("Title"));
         assert!(first
@@ -347,7 +354,7 @@ mod tests {
 
     #[test]
     fn renders_bold_and_italic() {
-        let lines = render_markdown("**bold** and *italic*");
+        let lines = render("**bold** and *italic*");
         let line = &lines[0];
         let bold = line
             .spans
@@ -365,19 +372,19 @@ mod tests {
 
     #[test]
     fn renders_inline_code() {
-        let lines = render_markdown("run `cargo test` now");
+        let lines = render("run `cargo test` now");
         let line = &lines[0];
         let code = line
             .spans
             .iter()
             .find(|s| s.content.as_ref() == "cargo test")
             .expect("code span");
-        assert_eq!(code.style.fg, Some(Theme::TOOL));
+        assert_eq!(code.style.fg, Some(Theme::RAVENWOOD.tool));
     }
 
     #[test]
     fn renders_code_block_bordered() {
-        let lines = render_markdown("```rust\nfn main() {}\n```");
+        let lines = render("```rust\nfn main() {}\n```");
         let text = plain(&lines);
         assert!(text.iter().any(|l| l.contains("┌─")));
         assert!(text.iter().any(|l| l.contains("fn main() {}")));
@@ -386,7 +393,7 @@ mod tests {
 
     #[test]
     fn renders_unordered_list() {
-        let lines = render_markdown("- one\n- two");
+        let lines = render("- one\n- two");
         let text = plain(&lines);
         assert!(text.iter().any(|l| l.contains("• one")));
         assert!(text.iter().any(|l| l.contains("• two")));
@@ -394,7 +401,7 @@ mod tests {
 
     #[test]
     fn renders_ordered_list() {
-        let lines = render_markdown("1. first\n2. second");
+        let lines = render("1. first\n2. second");
         let text = plain(&lines);
         assert!(text.iter().any(|l| l.contains("1. first")));
         assert!(text.iter().any(|l| l.contains("2. second")));
@@ -402,7 +409,7 @@ mod tests {
 
     #[test]
     fn renders_blockquote_gutter() {
-        let lines = render_markdown("> quoted text");
+        let lines = render("> quoted text");
         let text = plain(&lines);
         assert!(text
             .iter()
@@ -411,7 +418,7 @@ mod tests {
 
     #[test]
     fn renders_link_with_url() {
-        let lines = render_markdown("[docs](https://example.com)");
+        let lines = render("[docs](https://example.com)");
         let text = plain(&lines);
         assert!(text
             .iter()
@@ -420,7 +427,7 @@ mod tests {
 
     #[test]
     fn renders_table() {
-        let lines = render_markdown("| a | b |\n|---|---|\n| 1 | 2 |");
+        let lines = render("| a | b |\n|---|---|\n| 1 | 2 |");
         let text = plain(&lines);
         assert!(text.iter().any(|l| l.contains("a") && l.contains("b")));
         assert!(text.iter().any(|l| l.contains("1") && l.contains("2")));
@@ -429,14 +436,14 @@ mod tests {
     #[test]
     fn unclosed_emphasis_degrades_to_plain() {
         // A half-typed `**bold` (streaming) must not crash or emit garbage.
-        let lines = render_markdown("this is **unclosed");
+        let lines = render("this is **unclosed");
         let text = plain(&lines);
         assert!(text.iter().any(|l| l.contains("unclosed")));
     }
 
     #[test]
     fn empty_input_renders_empty() {
-        let lines = render_markdown("");
+        let lines = render("");
         assert!(lines.is_empty() || lines.iter().all(|l| l.to_string().is_empty()));
     }
 }

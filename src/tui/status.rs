@@ -24,13 +24,13 @@ pub fn fmt_tokens(n: u64) -> String {
 }
 
 /// Color for the context-usage readout based on how full the window is.
-pub fn usage_color(pct: f64) -> Color {
+pub fn usage_color(pct: f64, theme: Theme) -> Color {
     if pct >= 85.0 {
-        Theme::ERROR
+        theme.error
     } else if pct >= 65.0 {
-        Theme::TOOL
+        theme.tool
     } else {
-        Theme::ACCENT
+        theme.accent
     }
 }
 
@@ -50,14 +50,14 @@ pub fn waiting_diamond(tick: u64) -> &'static str {
 }
 
 /// The agent state label + color shown in the status strip.
-pub fn state_label(state: &AgentState, status: &str) -> (&'static str, Color) {
+pub fn state_label(state: &AgentState, status: &str, theme: Theme) -> (&'static str, Color) {
     match state {
-        AgentState::Planning => ("planning", Theme::PLAN),
-        AgentState::AwaitingApproval => ("awaiting approval", Theme::PLAN),
-        AgentState::Executing => ("executing", Theme::ACCENT),
-        _ if status.starts_with("tool:") => ("tool", Theme::TOOL),
-        _ if status.starts_with("thinking") => ("thinking", Theme::DIM),
-        _ if status.starts_with("awaiting answer") => ("awaiting answer", Theme::PLAN),
-        _ => ("ready", Theme::USER),
+        AgentState::Planning => ("planning", theme.plan),
+        AgentState::AwaitingApproval => ("awaiting approval", theme.plan),
+        AgentState::Executing => ("executing", theme.accent),
+        _ if status.starts_with("tool:") => ("tool", theme.tool),
+        _ if status.starts_with("thinking") => ("thinking", theme.dim),
+        _ if status.starts_with("awaiting answer") => ("awaiting answer", theme.plan),
+        _ => ("ready", theme.user),
     }
 }

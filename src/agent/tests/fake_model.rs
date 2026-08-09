@@ -31,6 +31,7 @@ fn settings_for(workspace: &std::path::Path) -> Settings {
         no_stream: false,
         verify: false,
         confirm_shell: false,
+        theme: "ravenwood".into(),
     }
 }
 

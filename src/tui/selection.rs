@@ -107,6 +107,7 @@ pub fn selection_text(lines: &[Line<'static>], sel: Selection) -> String {
 pub fn apply_selection_highlight(
     lines: Vec<Line<'static>>,
     sel: Option<Selection>,
+    theme: Theme,
 ) -> Vec<Line<'static>> {
     let Some(sel) = sel else {
         return lines;
@@ -154,7 +155,7 @@ pub fn apply_selection_highlight(
                     if !before.is_empty() {
                         out.push(Span::styled(before, span.style));
                     }
-                    out.push(Span::styled(mid, span.style.bg(Theme::SELECT_BG)));
+                    out.push(Span::styled(mid, span.style.bg(theme.select_bg)));
                     if !after.is_empty() {
                         out.push(Span::styled(after, span.style));
                     }

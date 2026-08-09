@@ -100,6 +100,10 @@ pub struct Settings {
     /// When true, every `run_shell` command is confirmed with the user first
     /// (via the same ask_user channel). Off with `--yolo`.
     pub confirm_shell: bool,
+    /// The active color theme name (e.g. `ravenwood`, `nord`). Resolved to a
+    /// [`crate::tui::Theme`] at TUI startup; unknown names fall back to the
+    /// default.
+    pub theme: String,
 }
 
 impl Settings {
@@ -239,6 +243,8 @@ pub struct ConfigFile {
     pub no_stream: Option<bool>,
     /// Enforce the agent runs tests after editing files before finishing.
     pub verify: Option<bool>,
+    /// Color theme name (e.g. `ravenwood`, `nord`).
+    pub theme: Option<String>,
 }
 
 /// Load config from workspace `.raven/config.toml` then `~/.raven/config.toml`.
@@ -267,6 +273,7 @@ pub fn load_config_file(workspace: &std::path::Path) -> ConfigFile {
         temperature: ws.temperature.or(global.temperature),
         no_stream: ws.no_stream.or(global.no_stream),
         verify: ws.verify.or(global.verify),
+        theme: ws.theme.or(global.theme),
     }
 }
 
@@ -487,5 +494,15 @@ max_iterations = 10
         }
         assert!(cfg.model.is_none());
         assert!(cfg.host.is_none());
+    }
+
+    #[test]
+    fn config_file_parses_theme() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg_dir = tmp.path().join(".raven");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        std::fs::write(cfg_dir.join("config.toml"), "theme = \"nord\"\n").unwrap();
+        let cfg = load_config_file(tmp.path());
+        assert_eq!(cfg.theme.as_deref(), Some("nord"));
     }
 }

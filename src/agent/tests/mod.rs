@@ -187,6 +187,7 @@ fn settings_for(workspace: &std::path::Path, base_url: &str) -> crate::config::S
         no_stream: false,
         verify: false,
         confirm_shell: false,
+        theme: "ravenwood".into(),
     }
 }
 

@@ -82,6 +82,12 @@ pub fn commands() -> Vec<CommandSpec> {
             summary: "Undo the last commit, keeping changes in the working tree",
             arg_help: None,
         },
+        CommandSpec {
+            name: "theme",
+            aliases: &["t"],
+            summary: "Switch the color theme: /theme <name> (or /theme to list)",
+            arg_help: Some("[name]"),
+        },
     ]
 }
 
@@ -219,6 +225,14 @@ mod tests {
         assert_eq!(parse("/undo").unwrap().name, "undo");
         assert_eq!(parse("/u").unwrap().name, "undo");
         assert!(help_text().contains("/undo"), "help should list /undo");
+    }
+
+    #[test]
+    fn theme_command_registered() {
+        assert_eq!(parse("/theme").unwrap().name, "theme");
+        assert_eq!(parse("/t").unwrap().name, "theme");
+        assert_eq!(parse("/theme nord").unwrap().args, "nord");
+        assert!(help_text().contains("/theme"), "help should list /theme");
     }
 
     #[test]

@@ -21,7 +21,7 @@ use super::Theme;
 /// `tick` drives the tool-call "glimmer": an active tool renders bright orange
 /// with a spinner; a recently-finished tool fades toward dim over ~50 ticks
 /// (~1s at 60ms/frame); an old tool stays dim.
-pub fn render_blocks(blocks: &[BlockKind], tick: u64) -> (Vec<Line<'static>>, usize) {
+pub fn render_blocks(blocks: &[BlockKind], tick: u64, theme: Theme) -> (Vec<Line<'static>>, usize) {
     let mut lines = Vec::with_capacity(blocks.len().saturating_mul(2));
     let mut last_assistant_start: Option<usize> = None;
     // The last active tool (if any) is the one that glimmers with a spinner.
@@ -34,13 +34,13 @@ pub fn render_blocks(blocks: &[BlockKind], tick: u64) -> (Vec<Line<'static>>, us
                 lines.push(Line::from(Span::styled(
                     "You",
                     Style::default()
-                        .fg(Theme::USER)
+                        .fg(theme.user)
                         .add_modifier(Modifier::BOLD),
                 )));
                 for part in u.text().lines() {
                     lines.push(Line::from(vec![
                         Span::styled("  ", Style::default()),
-                        Span::styled(part.to_string(), Style::default().fg(Theme::FG)),
+                        Span::styled(part.to_string(), Style::default().fg(theme.fg)),
                     ]));
                 }
                 lines.push(Line::from(""));
@@ -51,14 +51,14 @@ pub fn render_blocks(blocks: &[BlockKind], tick: u64) -> (Vec<Line<'static>>, us
                 lines.push(Line::from(Span::styled(
                     "Raven",
                     Style::default()
-                        .fg(Theme::ACCENT)
+                        .fg(theme.accent)
                         .add_modifier(Modifier::BOLD),
                 )));
-                lines.extend(markdown::render_markdown(a.text()));
+                lines.extend(markdown::render_markdown(a.text(), theme));
             }
             BlockKind::Tool(t) => {
                 let is_last_active = last_active_tool == Some(i);
-                let style = tool_style(t, tick, is_last_active);
+                let style = tool_style(t, tick, is_last_active, theme);
                 let prefix = if is_last_active {
                     format!("{} ", spinner_frame(tick))
                 } else {
@@ -76,7 +76,7 @@ pub fn render_blocks(blocks: &[BlockKind], tick: u64) -> (Vec<Line<'static>>, us
                 } else {
                     lines.push(Line::from(Span::styled(
                         s.text().to_string(),
-                        Style::default().fg(Theme::SYSTEM),
+                        Style::default().fg(theme.system),
                     )));
                 }
                 last_assistant_start = None;
@@ -85,7 +85,7 @@ pub fn render_blocks(blocks: &[BlockKind], tick: u64) -> (Vec<Line<'static>>, us
                 lines.push(Line::from(Span::styled(
                     format!("✗ {}", e.text()),
                     Style::default()
-                        .fg(Theme::ERROR)
+                        .fg(theme.error)
                         .add_modifier(Modifier::BOLD),
                 )));
                 last_assistant_start = None;
@@ -107,17 +107,17 @@ pub fn render_blocks(blocks: &[BlockKind], tick: u64) -> (Vec<Line<'static>>, us
 ///   dimmed, no spinner, so many concurrent tools don't all glow at once.
 /// - finished within the last `GLIMMER_TICKS` → interpolate toward dim.
 /// - otherwise → dimmed.
-fn tool_style(t: &ToolBlock, tick: u64, is_last_active: bool) -> Style {
+fn tool_style(t: &ToolBlock, tick: u64, is_last_active: bool, theme: Theme) -> Style {
     const GLIMMER_TICKS: u64 = 50; // ~1s at 60ms/frame
     if t.active {
         if is_last_active {
             return Style::default()
-                .fg(Theme::TOOL)
+                .fg(theme.tool)
                 .add_modifier(Modifier::BOLD);
         }
         // Running but not the newest — keep it quiet so the UI doesn't
         // spin a spinner on every parallel tool call at once.
-        return Style::default().fg(Theme::DIM);
+        return Style::default().fg(theme.dim);
     }
     match t.end_tick {
         Some(end) => {
@@ -126,28 +126,28 @@ fn tool_style(t: &ToolBlock, tick: u64, is_last_active: bool) -> Style {
                 // Fade from TOOL toward DIM as the glimmer ages.
                 let t = age as f32 / GLIMMER_TICKS as f32;
                 let mix = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t) as u8;
-                let (r1, g1, b1) = (Theme::tool_r(), Theme::tool_g(), Theme::tool_b());
-                let (r2, g2, b2) = (Theme::dim_r(), Theme::dim_g(), Theme::dim_b());
+                let (r1, g1, b1) = theme.tool_rgb;
+                let (r2, g2, b2) = theme.dim_rgb;
                 Style::default().fg(Color::Rgb(mix(r1, r2), mix(g1, g2), mix(b1, b2)))
             } else {
-                Style::default().fg(Theme::DIM)
+                Style::default().fg(theme.dim)
             }
         }
-        None => Style::default().fg(Theme::DIM),
+        None => Style::default().fg(theme.dim),
     }
 }
 
 /// Render just one assistant text block into display lines (for streaming),
 /// including the "Raven" tag so the streaming patch matches `render_blocks`.
-pub fn render_assistant_lines(text: &str) -> Vec<Line<'static>> {
+pub fn render_assistant_lines(text: &str, theme: Theme) -> Vec<Line<'static>> {
     let mut lines = Vec::with_capacity(text.lines().count().saturating_add(1));
     lines.push(Line::from(Span::styled(
         "Raven",
         Style::default()
-            .fg(Theme::ACCENT)
+            .fg(theme.accent)
             .add_modifier(Modifier::BOLD),
     )));
-    lines.extend(markdown::render_markdown(text));
+    lines.extend(markdown::render_markdown(text, theme));
     lines
 }
 
@@ -456,7 +456,7 @@ mod tests {
     #[test]
     fn render_blocks_adds_raven_tag() {
         let blocks = vec![BlockKind::Assistant(AssistantBlock::new("hi".to_string()))];
-        let (lines, _tail) = render_blocks(&blocks, 0);
+        let (lines, _tail) = render_blocks(&blocks, 0, Theme::RAVENWOOD);
         let first = lines[0].to_string();
         assert!(
             first.contains("Raven"),
@@ -468,7 +468,7 @@ mod tests {
     fn render_assistant_lines_includes_raven_tag() {
         // The streaming patch must match `render_blocks` (tag + text) so the
         // "Raven" tag doesn't flicker out mid-stream.
-        let lines = render_assistant_lines("hello\n\nworld");
+        let lines = render_assistant_lines("hello\n\nworld", Theme::RAVENWOOD);
         assert_eq!(lines.len(), 3, "tag + 2 paragraph lines");
         assert!(lines[0].to_string().contains("Raven"));
         assert_eq!(lines[1].to_string(), "hello");
@@ -480,7 +480,7 @@ mod tests {
         let mut tb = ToolBlock::new("⇢ read_file(x)".to_string());
         tb.active = true;
         let blocks = vec![BlockKind::Tool(tb)];
-        let (lines, _tail) = render_blocks(&blocks, 0);
+        let (lines, _tail) = render_blocks(&blocks, 0, Theme::RAVENWOOD);
         let text = lines[0].to_string();
         assert!(
             text.contains("⇢ read_file(x)"),
@@ -502,7 +502,7 @@ mod tests {
         let mut tb2 = ToolBlock::new("→ search_code(b)".to_string());
         tb2.active = true;
         let blocks = vec![BlockKind::Tool(tb1), BlockKind::Tool(tb2)];
-        let (lines, _tail) = render_blocks(&blocks, 0);
+        let (lines, _tail) = render_blocks(&blocks, 0, Theme::RAVENWOOD);
 
         assert_eq!(lines.len(), 2, "both tool lines should render");
         let rendered = lines.iter().map(|l| l.to_string()).collect::<Vec<_>>();
@@ -535,7 +535,7 @@ mod tests {
         tb.active = false;
         tb.end_tick = Some(0);
         let blocks = vec![BlockKind::Tool(tb)];
-        let (lines, _tail) = render_blocks(&blocks, 10);
+        let (lines, _tail) = render_blocks(&blocks, 10, Theme::RAVENWOOD);
         let style = lines[0].spans[0].style;
         assert!(
             !style.add_modifier.contains(Modifier::BOLD),
@@ -547,7 +547,7 @@ mod tests {
         tb2.active = false;
         tb2.end_tick = Some(0);
         let blocks2 = vec![BlockKind::Tool(tb2)];
-        let (lines2, _tail) = render_blocks(&blocks2, 1000);
-        assert_eq!(lines2[0].spans[0].style.fg, Some(Theme::DIM));
+        let (lines2, _tail) = render_blocks(&blocks2, 1000, Theme::RAVENWOOD);
+        assert_eq!(lines2[0].spans[0].style.fg, Some(Theme::RAVENWOOD.dim));
     }
 }

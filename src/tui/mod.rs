@@ -51,6 +51,9 @@ mod markdown;
 mod render;
 mod selection;
 mod status;
+mod theme;
+
+pub use theme::Theme;
 
 use blocks::{AssistantBlock, BlockKind, ErrorBlock, SystemBlock, ToolBlock, UserBlock};
 use render::{message_to_block, prewrap_visible, render_assistant_lines, render_blocks};
@@ -59,47 +62,6 @@ use selection::{
     Selection,
 };
 use status::{fmt_tokens, spinner_frame, state_label, usage_color, waiting_diamond};
-
-// ── Theme (Ravenwood emerald-forest) ─────────────────────────────────────
-//
-// Dark-medium Ravenwood palette (see the ravenwood-theme skill). Warm beige
-// foreground, olive-tinged backgrounds, green hero accent, pastel brights.
-
-struct Theme;
-impl Theme {
-    const FG: Color = Color::Rgb(0xE8, 0xD5, 0xB7); // fg — warm beige
-    const DIM: Color = Color::Rgb(0x85, 0x92, 0x89); // grey1
-    const ACCENT: Color = Color::Rgb(0x22, 0xD3, 0xEE); // blue
-    const USER: Color = Color::Rgb(0x4A, 0xDE, 0x80); // green — hero
-    const TOOL: Color = Color::Rgb(0xE6, 0x98, 0x75); // orange
-    const SYSTEM: Color = Color::Rgb(0x7F, 0x89, 0x7D); // grey0
-    const ERROR: Color = Color::Rgb(0xE6, 0x7E, 0x80); // red
-    const PLAN: Color = Color::Rgb(0xF4, 0x72, 0xB6); // purple
-    const BORDER: Color = Color::Rgb(0x4A, 0x5A, 0x4D); // bg4
-    const STATUS_BG: Color = Color::Rgb(0x1F, 0x24, 0x1F); // bg1
-    const SELECT_BG: Color = Color::Rgb(0x3A, 0x4F, 0x3D); // bg visual selection
-
-    /// Red channel of the tool (orange) accent, for glimmer interpolation.
-    const fn tool_r() -> u8 {
-        0xE6
-    }
-    const fn tool_g() -> u8 {
-        0x98
-    }
-    const fn tool_b() -> u8 {
-        0x75
-    }
-    /// Red channel of the dim (grey1) color, for glimmer interpolation.
-    const fn dim_r() -> u8 {
-        0x85
-    }
-    const fn dim_g() -> u8 {
-        0x92
-    }
-    const fn dim_b() -> u8 {
-        0x89
-    }
-}
 
 // ── TUI state ────────────────────────────────────────────────────────────
 
@@ -134,6 +96,7 @@ struct TuiState {
     selection: Option<Selection>,
     last_click: Option<(u64, DisplayPos)>,
     copy_status: Option<(u64, String)>,
+    theme: Theme,
 }
 
 impl TuiState {
@@ -187,6 +150,7 @@ impl TuiState {
             selection: None,
             last_click: None,
             copy_status: None,
+            theme: Theme::by_name(&settings.theme).unwrap_or_else(Theme::default_theme),
         }
     }
 
@@ -308,7 +272,7 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
         let dirty = state.log_dirty || state.stream_patch || state.messages_dirty;
 
         if state.log_dirty {
-            let (rendered, tail) = render_blocks(&state.blocks, state.tick);
+            let (rendered, tail) = render_blocks(&state.blocks, state.tick, state.theme);
             state.cached_log_lines = rendered;
             state.last_assistant_lines = tail;
             state.log_dirty = false;
@@ -323,7 +287,7 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                     _ => None,
                 })
                 .unwrap_or("");
-            let new_tail = render_assistant_lines(tail_text);
+            let new_tail = render_assistant_lines(tail_text, state.theme);
             let new_tail_len = new_tail.len();
             state.cached_log_lines.truncate(
                 state
@@ -786,12 +750,13 @@ fn compute_layout(area: Rect, state: &TuiState) -> Vec<Rect> {
 }
 
 fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState) {
+    let theme = state.theme;
     let pct = if settings.context_window > 0 {
         (state.cached_est_tokens as f64 / settings.context_window as f64) * 100.0
     } else {
         0.0
     };
-    let (state_txt, state_color) = state_label(&state.agent_state, &state.status);
+    let (state_txt, state_color) = state_label(&state.agent_state, &state.status, state.theme);
 
     let show_plan = show_plan(state);
     let plan_h = if show_plan {
@@ -808,15 +773,15 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState)
             format!(" {app_name} "),
             Style::default()
                 .fg(Color::Black)
-                .bg(Theme::ACCENT)
+                .bg(theme.accent)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
         Span::styled(
             settings.model.clone(),
-            Style::default().fg(Theme::FG).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("  ·  ", Style::default().fg(Theme::DIM)),
+        Span::styled("  ·  ", Style::default().fg(theme.dim)),
         Span::styled(
             format!(
                 "{}/{} ({:.0}%)",
@@ -824,9 +789,9 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState)
                 fmt_tokens(settings.context_window as u64),
                 pct
             ),
-            Style::default().fg(usage_color(pct)),
+            Style::default().fg(usage_color(pct, theme)),
         ),
-        Span::styled("  ·  ", Style::default().fg(Theme::DIM)),
+        Span::styled("  ·  ", Style::default().fg(theme.dim)),
     ]);
     f.render_widget(Paragraph::new(top), chunks[0]);
 
@@ -846,11 +811,11 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState)
     );
 
     // Apply selection highlight to the visible display lines.
-    let display_lines = apply_selection_highlight(display_lines, state.selection);
+    let display_lines = apply_selection_highlight(display_lines, state.selection, theme);
 
     let log_block = Block::default()
         .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
-        .border_style(Style::default().fg(Theme::BORDER))
+        .border_style(Style::default().fg(theme.border))
         .padding(Padding::horizontal(1));
     let log_widget = Paragraph::new(display_lines)
         .block(log_block)
@@ -862,17 +827,17 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState)
         let mut lines: Vec<Line> = state
             .plan_preview
             .iter()
-            .map(|l| Line::from(Span::styled(l.clone(), Style::default().fg(Theme::PLAN))))
+            .map(|l| Line::from(Span::styled(l.clone(), Style::default().fg(theme.plan))))
             .collect();
         lines.push(Line::from(Span::styled(
             "yes to execute · or type revisions",
-            Style::default().fg(Theme::DIM),
+            Style::default().fg(theme.dim),
         )));
         let plan_widget = Paragraph::new(lines).scroll((state.plan_scroll, 0)).block(
             Block::default()
-                .title(Span::styled(" plan ", Style::default().fg(Theme::PLAN)))
+                .title(Span::styled(" plan ", Style::default().fg(theme.plan)))
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Theme::PLAN)),
+                .border_style(Style::default().fg(theme.plan)),
         );
         f.render_widget(plan_widget, chunks[2]);
     }
@@ -887,7 +852,7 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState)
         ),
         Span::styled(
             format!(" {}", settings.workspace.display()),
-            Style::default().fg(Theme::DIM),
+            Style::default().fg(theme.dim),
         ),
     ];
     // Plan step progress: "N/M steps" while a plan is active.
@@ -896,27 +861,27 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState)
         if total > 0 {
             status_line.push(Span::styled(
                 format!("  {done}/{total} steps"),
-                Style::default().fg(Theme::PLAN),
+                Style::default().fg(theme.plan),
             ));
         }
     }
     if let Some(tool) = &state.live_tool {
         status_line.push(Span::styled(
             format!(" {} {}", spinner_frame(state.tick), tool),
-            Style::default().fg(Theme::TOOL),
+            Style::default().fg(theme.tool),
         ));
     }
     if state.pending_question_text.is_some() {
         status_line.push(Span::styled(
             format!(" {}", waiting_diamond(state.tick)),
-            Style::default().fg(Theme::PLAN),
+            Style::default().fg(theme.plan),
         ));
     }
     if let Some((start_tick, msg)) = &state.copy_status {
         if state.tick.wrapping_sub(*start_tick) < 50 {
             status_line.push(Span::styled(
                 format!("  {msg}"),
-                Style::default().fg(Theme::ACCENT),
+                Style::default().fg(theme.accent),
             ));
         }
     }
@@ -930,11 +895,11 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState)
             status_line.push(Span::raw(" ".repeat(pad as usize)));
         }
         status_line.push(Span::raw(" "));
-        status_line.push(stop_span());
+        status_line.push(stop_span(theme));
     }
 
     f.render_widget(
-        Paragraph::new(Line::from(status_line)).style(Style::default().bg(Theme::STATUS_BG)),
+        Paragraph::new(Line::from(status_line)).style(Style::default().bg(theme.status_bg)),
         chunks[3],
     );
 
@@ -959,24 +924,24 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState)
             Style::default()
                 .fg(
                     if state.pending_question_text.is_some() || state.plan_pending {
-                        Theme::PLAN
+                        theme.plan
                     } else {
-                        Theme::ACCENT
+                        theme.accent
                     },
                 )
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(state.input.to_string(), Style::default().fg(Theme::FG)),
+        Span::styled(state.input.to_string(), Style::default().fg(theme.fg)),
     ]);
     let input_w = Paragraph::new(input_line).wrap(Wrap { trim: false }).block(
         Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(if state.plan_pending {
-                Theme::PLAN
+                theme.plan
             } else {
-                Theme::BORDER
+                theme.border
             }))
-            .title(Span::styled(title, Style::default().fg(Theme::DIM))),
+            .title(Span::styled(title, Style::default().fg(theme.dim))),
     );
     f.render_widget(input_w, chunks[4]);
 
@@ -1078,11 +1043,11 @@ const STOP_BTN: &str = "[stop]";
 
 /// Build a `Span` for the `[stop]` button in the status strip (right-aligned).
 /// The caller right-aligns it against the status row's width.
-fn stop_span() -> Span<'static> {
+fn stop_span(theme: Theme) -> Span<'static> {
     Span::styled(
         STOP_BTN.to_string(),
         Style::default()
-            .fg(Theme::ERROR)
+            .fg(theme.error)
             .add_modifier(Modifier::BOLD),
     )
 }
@@ -1339,6 +1304,15 @@ fn handle_plan_response(
     Ok(())
 }
 
+/// The canonical name of a theme, for display in `/theme` output.
+fn theme_name(theme: Theme) -> &'static str {
+    Theme::all()
+        .iter()
+        .find(|(_, t)| *t == theme)
+        .map(|(n, _)| *n)
+        .unwrap_or("?")
+}
+
 /// Dispatch a parsed slash command, mutating TUI state as needed.
 ///
 /// Returns `Ok(true)` if the command was handled (the input should not be
@@ -1459,6 +1433,29 @@ async fn dispatch_slash_command(
             }
             state.log_dirty = true;
         }
+        "theme" => {
+            let name = pc.args.trim();
+            if name.is_empty() {
+                // List available themes.
+                let names: Vec<&str> = Theme::all().iter().map(|(n, _)| *n).collect();
+                state.push_system(format!(
+                    "themes: {}  (current: {})  ·  /theme <name>",
+                    names.join(", "),
+                    theme_name(state.theme)
+                ));
+                state.log_dirty = true;
+            } else if let Some(t) = Theme::by_name(name) {
+                state.theme = t;
+                // Force a full re-render so the whole scrollback recolors.
+                state.push_system(format!("theme → {}", theme_name(t)));
+                state.log_dirty = true;
+            } else {
+                state.push_system(format!(
+                    "unknown theme: {name}  (try /theme to list)"
+                ));
+                state.log_dirty = true;
+            }
+        }
         _ => {
             state.push_system(format!("Unknown command: /{}  (try /help)", pc.name));
             state.log_dirty = true;
@@ -1551,7 +1548,7 @@ mod tests {
 
     #[test]
     fn state_label_awaiting_answer() {
-        let (txt, _color) = state_label(&AgentState::Idle, "awaiting answer");
+        let (txt, _color) = state_label(&AgentState::Idle, "awaiting answer", Theme::RAVENWOOD);
         assert_eq!(txt, "awaiting answer");
     }
 
@@ -1759,7 +1756,7 @@ mod tests {
             DisplayPos { row: 0, col: 0 },
             DisplayPos { row: 0, col: 5 },
         ));
-        let out = apply_selection_highlight(lines, sel);
+        let out = apply_selection_highlight(lines, sel, Theme::RAVENWOOD);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].spans.len(), 2);
         assert_eq!(out[0].spans[0].content, "hello");
@@ -1769,7 +1766,7 @@ mod tests {
     #[test]
     fn apply_selection_highlight_none_unchanged() {
         let lines = mk_lines(&["hello", "world"]);
-        let out = apply_selection_highlight(lines, None);
+        let out = apply_selection_highlight(lines, None, Theme::RAVENWOOD);
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].spans.len(), 1);
         assert_eq!(out[0].spans[0].content, "hello");
@@ -1782,7 +1779,7 @@ mod tests {
             DisplayPos { row: 0, col: 1 },
             DisplayPos { row: 2, col: 2 },
         ));
-        let out = apply_selection_highlight(lines, sel);
+        let out = apply_selection_highlight(lines, sel, Theme::RAVENWOOD);
         assert_eq!(out[0].spans.len(), 2);
         assert_eq!(out[0].spans[0].content, "a");
         assert_eq!(out[0].spans[1].content, "bc");
@@ -1806,17 +1803,17 @@ mod tests {
             DisplayPos { row: 0, col: 1 },
             DisplayPos { row: 0, col: 3 },
         ));
-        let out = apply_selection_highlight(vec![line], sel);
+        let out = apply_selection_highlight(vec![line], sel, Theme::RAVENWOOD);
         assert_eq!(out[0].spans.len(), 4);
         assert_eq!(out[0].spans[0].content, "a");
         assert_eq!(out[0].spans[0].style.fg, Some(Color::Red));
         assert_eq!(out[0].spans[0].style.bg, None);
         assert_eq!(out[0].spans[1].content, "b");
         assert_eq!(out[0].spans[1].style.fg, Some(Color::Red));
-        assert_eq!(out[0].spans[1].style.bg, Some(Theme::SELECT_BG));
+        assert_eq!(out[0].spans[1].style.bg, Some(Theme::RAVENWOOD.select_bg));
         assert_eq!(out[0].spans[2].content, "c");
         assert_eq!(out[0].spans[2].style.fg, Some(Color::Blue));
-        assert_eq!(out[0].spans[2].style.bg, Some(Theme::SELECT_BG));
+        assert_eq!(out[0].spans[2].style.bg, Some(Theme::RAVENWOOD.select_bg));
         assert_eq!(out[0].spans[3].content, "d");
         assert_eq!(out[0].spans[3].style.fg, Some(Color::Blue));
         assert_eq!(out[0].spans[3].style.bg, None);
@@ -1880,6 +1877,7 @@ mod tests {
             selection: None,
             last_click: None,
             copy_status: None,
+            theme: Theme::RAVENWOOD,
         }
     }
 
@@ -1954,6 +1952,7 @@ mod tests {
             no_stream: false,
             verify: false,
             confirm_shell: false,
+            theme: "ravenwood".into(),
         }
     }
 
@@ -2016,5 +2015,69 @@ mod tests {
         } else {
             panic!("block 2 should be a SystemBlock");
         }
+    }
+
+    #[tokio::test]
+    async fn theme_command_switches_theme_and_lists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = SessionStore::for_workspace(tmp.path()).unwrap();
+        let mut session = store.create("gemma4:latest").unwrap();
+        let mut settings = test_settings(tmp.path());
+        let mut state = dummy_state();
+        let mut compact_at = 128_000 - 128_000 / 8;
+
+        // /theme with no args lists available themes.
+        let pc = commands::parse("/theme").unwrap();
+        let handled = dispatch_slash_command(
+            &mut state,
+            &pc,
+            &mut settings,
+            &store,
+            &mut session,
+            &mut compact_at,
+        )
+        .await
+        .unwrap();
+        assert!(handled);
+        let listed = state
+            .blocks
+            .iter()
+            .find_map(|b| match b {
+                BlockKind::System(s) => Some(s.text().to_string()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        assert!(listed.contains("nord"), "list should mention nord: {listed}");
+        assert!(listed.contains("ravenwood"), "list should mention ravenwood: {listed}");
+
+        // /theme nord switches the active theme.
+        let pc = commands::parse("/theme nord").unwrap();
+        let handled = dispatch_slash_command(
+            &mut state,
+            &pc,
+            &mut settings,
+            &store,
+            &mut session,
+            &mut compact_at,
+        )
+        .await
+        .unwrap();
+        assert!(handled);
+        assert_eq!(state.theme, Theme::NORD);
+
+        // /theme unknown reports an error and leaves the theme unchanged.
+        let pc = commands::parse("/theme nope").unwrap();
+        let handled = dispatch_slash_command(
+            &mut state,
+            &pc,
+            &mut settings,
+            &store,
+            &mut session,
+            &mut compact_at,
+        )
+        .await
+        .unwrap();
+        assert!(handled);
+        assert_eq!(state.theme, Theme::NORD, "unknown theme must not change theme");
     }
 }
