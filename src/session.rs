@@ -195,6 +195,14 @@ impl SessionStore {
         Ok(())
     }
 
+    /// Update the session's model name and persist the summary, so a model
+    /// switched mid-session via `/model` is reflected on resume.
+    pub fn update_model(&self, session: &mut Session, model: &str) -> Result<()> {
+        session.summary.model = model.to_string();
+        session.summary.updated_at = now_iso();
+        self.write_summary(&session.summary)
+    }
+
     // ── Internal helpers ──────────────────────────────────────────────
 
     fn session_dir(&self, id: &str) -> PathBuf {
@@ -661,6 +669,24 @@ mod tests {
         // surfacing a hard error for the whole list.
         let metas = store.list().unwrap();
         assert!(metas.is_empty());
+    }
+
+    #[test]
+    fn update_model_persists_new_model_and_timestamp() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = SessionStore::for_workspace(tmp.path()).unwrap();
+        let mut session = store.create("test-model").unwrap();
+
+        store
+            .update_model(&mut session, "deepseek-v4-pro:cloud")
+            .unwrap();
+
+        // In-memory summary reflects the new model.
+        assert_eq!(session.summary.model, "deepseek-v4-pro:cloud");
+
+        // Reloading from disk reflects the new model too.
+        let loaded = store.load(&session.summary.id).unwrap();
+        assert_eq!(loaded.summary.model, "deepseek-v4-pro:cloud");
     }
 
     #[test]

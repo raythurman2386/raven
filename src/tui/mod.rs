@@ -250,7 +250,7 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let compact_at = ((settings.context_window - settings.context_window / 8) as f32
+    let mut compact_at = ((settings.context_window - settings.context_window / 8) as f32
         * settings.compact_threshold) as usize;
 
     let app_name = "raven";
@@ -443,7 +443,9 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                                     &mut settings,
                                     &store,
                                     &mut session,
-                                )?;
+                                    &mut compact_at,
+                                )
+                                .await?;
                                 continue;
                             }
 
@@ -1341,12 +1343,13 @@ fn handle_plan_response(
 /// Returns `Ok(true)` if the command was handled (the input should not be
 /// treated as a task or plan response). All user-visible feedback is pushed
 /// to the log.
-fn dispatch_slash_command(
+async fn dispatch_slash_command(
     state: &mut TuiState,
     pc: &commands::ParsedCommand,
     settings: &mut Settings,
     store: &SessionStore,
     session: &mut crate::session::Session,
+    compact_at: &mut usize,
 ) -> Result<bool> {
     match pc.name.as_str() {
         "help" => {
@@ -1411,13 +1414,35 @@ fn dispatch_slash_command(
                 state.log_dirty = true;
             } else {
                 settings.model = name.to_string();
-                settings.context_window = crate::context::infer_context_window(&settings.model);
+                // Match startup behaviour: prefer the live Ollama `/api/show`
+                // value, falling back to the name heuristic when unreachable.
+                settings.context_window =
+                    crate::context::fetch_context_window(&settings.base_url, &settings.model).await;
                 settings.max_tokens = Settings::derived_max_tokens(settings.context_window);
+                *compact_at = ((settings.context_window - settings.context_window / 8) as f32
+                    * settings.compact_threshold) as usize;
+
+                // Persist the new model on the session so a resume shows it.
+                let _ = store.update_model(session, &settings.model);
+
+                // Refresh the static header blocks (model + context/compact).
+                if let Some(BlockKind::System(b)) = state.blocks.get_mut(0) {
+                    b.set_text(format!(
+                        "raven · {} · {}",
+                        settings.model, settings.base_url
+                    ));
+                }
+                if let Some(BlockKind::System(b)) = state.blocks.get_mut(2) {
+                    b.set_text(format!(
+                        "context {} · compact ~{}",
+                        fmt_tokens(settings.context_window as u64),
+                        fmt_tokens(*compact_at as u64),
+                    ));
+                }
+
                 state.push_system(format!(
                     "model → {} · context {} · max_tokens {}",
-                    settings.model,
-                    crate::context::infer_context_window(&settings.model),
-                    settings.max_tokens
+                    settings.model, settings.context_window, settings.max_tokens
                 ));
                 state.log_dirty = true;
             }
@@ -1909,5 +1934,86 @@ mod tests {
         let (done, total) = plan_step_progress(&plan);
         assert_eq!(done, 2);
         assert_eq!(total, 4);
+    }
+
+    fn test_settings(workspace: &std::path::Path) -> Settings {
+        Settings {
+            model: "gemma4:latest".into(),
+            base_url: "http://localhost:11434/v1".into(),
+            api_key: None,
+            workspace: workspace.to_path_buf(),
+            max_iterations: 5,
+            mode: Mode::Agent,
+            yolo: true,
+            temperature: 0.0,
+            max_tokens: 4096,
+            rules: None,
+            context_window: 128_000,
+            compact_threshold: 0.75,
+            no_stream: false,
+            verify: false,
+            confirm_shell: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn model_switch_updates_settings_compact_and_header_blocks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = SessionStore::for_workspace(tmp.path()).unwrap();
+        let mut session = store.create("gemma4:latest").unwrap();
+        let mut settings = test_settings(tmp.path());
+        let mut state = dummy_state();
+        // Seed the header blocks the way TuiState::new does.
+        state.blocks = vec![
+            BlockKind::System(SystemBlock::new(format!(
+                "raven · {} · {}",
+                settings.model, settings.base_url
+            ))),
+            BlockKind::System(SystemBlock::new(format!(
+                "workspace {}",
+                settings.workspace.display()
+            ))),
+            BlockKind::System(SystemBlock::new(format!(
+                "context {} · compact ~{}",
+                fmt_tokens(settings.context_window as u64),
+                fmt_tokens(128_000 - 128_000 / 8),
+            ))),
+        ];
+        let mut compact_at = 128_000 - 128_000 / 8;
+
+        let pc = commands::parse("/model deepseek-v4-pro:cloud").unwrap();
+        let handled = dispatch_slash_command(
+            &mut state,
+            &pc,
+            &mut settings,
+            &store,
+            &mut session,
+            &mut compact_at,
+        )
+        .await
+        .unwrap();
+
+        assert!(handled);
+        assert_eq!(settings.model, "deepseek-v4-pro:cloud");
+        // deepseek-v4-pro:cloud → 524_288 (name heuristic; API unreachable in test).
+        assert_eq!(settings.context_window, 524_288);
+        assert_eq!(settings.max_tokens, Settings::derived_max_tokens(524_288));
+        // compact_at recomputed from the new window (window - reserve) * threshold.
+        let expected_compact =
+            ((524_288 - 524_288 / 8) as f32 * settings.compact_threshold) as usize;
+        assert_eq!(compact_at, expected_compact);
+        // Session model persisted.
+        assert_eq!(session.summary.model, "deepseek-v4-pro:cloud");
+        // Header blocks refreshed.
+        if let BlockKind::System(b) = &state.blocks[0] {
+            assert!(b.text().contains("deepseek-v4-pro:cloud"));
+        } else {
+            panic!("block 0 should be a SystemBlock");
+        }
+        if let BlockKind::System(b) = &state.blocks[2] {
+            assert!(b.text().contains("524K"), "context block: {}", b.text());
+        } else {
+            panic!("block 2 should be a SystemBlock");
+        }
     }
 }

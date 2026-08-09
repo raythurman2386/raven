@@ -92,6 +92,12 @@ impl SystemBlock {
     pub fn text(&self) -> &str {
         &self.text
     }
+
+    /// Replace the block's text in place (used to refresh header readouts
+    /// such as the model name and context/compact figures on `/model`).
+    pub fn set_text(&mut self, text: String) {
+        self.text = text;
+    }
 }
 
 /// An error message (bold red).
