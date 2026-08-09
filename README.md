@@ -77,7 +77,7 @@ GitHub Releases, verifies the SHA-256 checksum, and installs to `~/.cargo/bin`.
 Options:
 
 ```bash
-curl -fsSL .../install.sh | sh -s -- --version 0.1.3   # pin a version
+curl -fsSL .../install.sh | sh -s -- --version 0.1.4   # pin a version
 curl -fsSL .../install.sh | sh -s -- --to /usr/local/bin  # custom install dir
 curl -fsSL .../install.sh | sh -s -- --force              # overwrite existing
 ```
@@ -239,7 +239,7 @@ The `--yolo` flag disables confirmation entirely, but the denylist still applies
 ## Testing
 
 ```bash
-cargo test                    # 362 tests, all offline
+cargo test                    # 361 tests, all offline
 cargo clippy                  # zero warnings
 cargo clippy -- -W clippy::pedantic  # stricter linting
 ```

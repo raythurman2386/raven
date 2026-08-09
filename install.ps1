@@ -24,7 +24,7 @@ Options:
 
 Examples:
   irm https://raw.githubusercontent.com/$REPO/master/install.ps1 | iex
-  .\install.ps1 -Version 0.1.3
+  .\install.ps1 -Version 0.1.4
   .\install.ps1 -To C:\tools
 "@
     exit 0
