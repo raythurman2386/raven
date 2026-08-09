@@ -20,12 +20,37 @@ use crate::plan::Plan;
 use crate::tools::{tool_definitions, Sandbox};
 
 use super::loop_control::{compute_reminders, summarize_request};
+#[cfg(test)]
+use super::stream::{process_non_stream_json, process_stream_text};
 use super::types::{AgentEvent, ChatMessage, FunctionCall, ToolCall};
 
 static TOOL_DEFS: OnceLock<serde_json::Value> = OnceLock::new();
 
+/// Test-only completion source: a closure that returns the raw completion
+/// body (SSE text, or JSON when `no_stream`) for a given outgoing request
+/// body. Used to drive the agent loop offline without HTTP.
+#[cfg(test)]
+pub(crate) type CompletionSource = Box<dyn FnMut(&Value) -> String + Send + Sync + 'static>;
+
 fn cached_tool_definitions() -> &'static serde_json::Value {
     TOOL_DEFS.get_or_init(tool_definitions)
+}
+
+/// Clamp `max_tokens` so `prompt_tokens + max_tokens + margin <= context_window`.
+///
+/// Pure helper (no I/O) so the clamp math is unit-testable offline. A floor of
+/// 256 tokens is always reserved so the model can still produce a reply even
+/// when the context is nearly full.
+pub(crate) fn clamp_max_tokens(
+    max_tokens: u32,
+    prompt_tokens: usize,
+    context_window: usize,
+    margin: usize,
+) -> u32 {
+    let remaining = context_window
+        .saturating_sub(prompt_tokens)
+        .saturating_sub(margin);
+    max_tokens.min(remaining.max(256) as u32)
 }
 
 const SYSTEM_BASE: &str = r#"You are an efficient coding agent. You help with software engineering tasks in the user's workspace.
@@ -147,6 +172,13 @@ pub struct Agent {
     pub(crate) plan: Option<Plan>,
     /// Index into `plan.steps` of the step currently being executed.
     pub(crate) current_step: usize,
+    /// Test-only completion source. When set, `run()` bypasses HTTP entirely
+    /// and pulls each completion body from this closure instead, so the agent
+    /// loop can be driven offline with scripted responses. The closure
+    /// receives the outgoing request body (so tests can inspect the messages
+    /// sent) and returns the raw SSE body string (or JSON when `no_stream`).
+    #[cfg(test)]
+    pub(crate) completion_source: Option<CompletionSource>,
 }
 
 impl Agent {
@@ -176,6 +208,8 @@ impl Agent {
             pending_blank: None,
             plan: None,
             current_step: 0,
+            #[cfg(test)]
+            completion_source: None,
             client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(300))
                 .build()
@@ -214,6 +248,16 @@ impl Agent {
             }
         }
         Ok(agent)
+    }
+
+    /// Test-only: install a scripted completion source so `run()` drives the
+    /// loop offline without HTTP. The closure receives the outgoing request
+    /// body and returns the raw completion body (SSE text, or JSON when
+    /// `no_stream`).
+    #[cfg(test)]
+    pub(crate) fn with_completion_source(mut self, source: CompletionSource) -> Self {
+        self.completion_source = Some(source);
+        self
     }
 
     /// The tool definitions to advertise in the next request.
@@ -396,11 +440,44 @@ impl Agent {
 
             // Send with retry for transient failures
             let t_send = std::time::Instant::now();
-            let resp = match self.send_with_retry(&url, &body, &tx).await {
-                Ok(r) => r,
-                Err(e) => {
-                    let _ = tx.send(AgentEvent::Error(e.to_string())).await;
-                    return Ok(());
+            #[cfg(test)]
+            let (content_buf, tool_acc) = if let Some(source) = self.completion_source.as_mut() {
+                // Offline fake-model path: pull the scripted completion body
+                // and parse it directly, bypassing HTTP entirely.
+                let raw = source(&body);
+                if self.settings.no_stream {
+                    let v: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+                    process_non_stream_json(&v, &tx).await
+                } else {
+                    process_stream_text(&raw, &tx).await
+                }
+            } else {
+                let resp = match self.send_with_retry(&url, &body, &tx).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let _ = tx.send(AgentEvent::Error(e.to_string())).await;
+                        return Ok(());
+                    }
+                };
+                if self.settings.no_stream {
+                    self.process_non_stream(resp, &tx).await
+                } else {
+                    self.process_stream(resp, &tx).await
+                }
+            };
+            #[cfg(not(test))]
+            let (content_buf, tool_acc) = {
+                let resp = match self.send_with_retry(&url, &body, &tx).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let _ = tx.send(AgentEvent::Error(e.to_string())).await;
+                        return Ok(());
+                    }
+                };
+                if self.settings.no_stream {
+                    self.process_non_stream(resp, &tx).await
+                } else {
+                    self.process_stream(resp, &tx).await
                 }
             };
             tracing::info!(
@@ -412,11 +489,6 @@ impl Agent {
 
             // Process the response (streaming or non-streaming)
             let t_stream = std::time::Instant::now();
-            let (content_buf, tool_acc) = if self.settings.no_stream {
-                self.process_non_stream(resp, &tx).await
-            } else {
-                self.process_stream(resp, &tx).await
-            };
             tracing::info!(
                 "iter={} stream_ms={} content_chars={} tool_calls={}",
                 iter + 1,

@@ -111,12 +111,12 @@ impl Agent {
         // Clamp max_tokens so the summary request fits the context window.
         let prompt_est = history_tokens(&self.messages);
         let margin = 64usize;
-        let remaining = self
-            .settings
-            .context_window
-            .saturating_sub(prompt_est)
-            .saturating_sub(margin);
-        let clamped_max = self.settings.max_tokens.min(remaining.max(256) as u32);
+        let clamped_max = super::core::clamp_max_tokens(
+            self.settings.max_tokens,
+            prompt_est,
+            self.settings.context_window,
+            margin,
+        );
 
         // Toolless request: no `tools`/`tool_choice`, so the model can only
         // produce a final text answer (no tool calls to burn more iterations).

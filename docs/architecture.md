@@ -7,7 +7,7 @@ Design overview for **Raven**. See the [project layout](../README.md#project-lay
 ```
 CLI (main.rs)
   └─ Settings (config.rs) ── context window inference, defaults
-  └─ Agent (agent.rs)
+  └─ Agent (agent/)
        ├─ system prompt (SYSTEM_BASE + AGENTS.md + --rules)
        ├─ streaming loop ── POST /v1/chat/completions (Ollama)
        ├─ compaction (context.rs) ── estimate tokens, summarize middle
@@ -28,7 +28,7 @@ CLI (main.rs)
    - **Accumulate tool calls**: tool-call deltas arrive incrementally; they are accumulated by index into `(id, name, arguments)`.
    - **No tool calls**: append the assistant message, emit `Done`, return.
    - **Tool calls**: append the assistant message, execute all tools in parallel via `tokio::task::spawn_blocking`, append each result as a `tool`-role message, loop back.
-4. **Events**: progress flows through an `mpsc` channel as [`AgentEvent`](../src/agent.rs) variants. The headless runner and TUI consume these.
+4. **Events**: progress flows through an `mpsc` channel as [`AgentEvent`](../src/agent/types.rs) variants. The headless runner and TUI consume these.
 
 ---
 

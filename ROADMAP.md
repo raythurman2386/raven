@@ -34,7 +34,7 @@ web_fetch, skill_search, skill_load. Plus `exit_plan_mode` signal in plan toolse
 **Already production-grade (done):**
 - Linear token estimator (`src/tokenizer.rs`) — O(n), was O(n²) perf blocker.
 - Phase-timing telemetry (`RUST_LOG=info`: pre_http_ms / send_http_ms / stream_ms).
-- Plan mode with model-driven auto-exit + read-only plan toolset (`src/plan.rs`, `src/agent.rs`).
+- Plan mode with model-driven auto-exit + read-only plan toolset (`src/plan.rs`, `src/agent/`).
 - `/stop` + mid-task steering, `/model`, slash-command registry (`src/commands.rs`).
 - TUI: streaming tail-patch, ravenwood theme, wrapped multi-line input, markdown rendering (`src/tui/`).
 - Session persistence (atomic, `messages.jsonl` + `summary.json`), sub-agent `run_parallel`.

@@ -12,7 +12,7 @@ cargo test
 
 - **Unit tests** (`#[cfg(test)] mod tests` in each source file):
   - `src/config.rs` — context window inference, max_tokens derivation, AGENTS.md loading, config.toml parsing
-  - `src/agent.rs` — ephemeral reminder computation (loop-breaker, iteration nudge); **mock-server integration tests** for the full `Agent::run` loop (streaming text, tool-call dispatch, 5xx retry, non-streaming JSON, model-not-found fails-fast) against a fake `/chat/completions` endpoint
+  - `src/agent/` — ephemeral reminder computation (loop-breaker, iteration nudge); **mock-server integration tests** for the full `Agent::run` loop (streaming text, tool-call dispatch, 5xx retry, non-streaming JSON, model-not-found fails-fast) against a fake `/chat/completions` endpoint; **offline fake-model tests** (`src/agent/tests/fake_model.rs`) that drive the loop via a scripted `CompletionSource` with no HTTP (finish, blank-stall recovery + cap, tool round-trip, same-file serial edits, max_tokens clamp)
   - `src/commands.rs` — slash-command parsing, alias resolution, registry uniqueness, help rendering
   - `src/context.rs` — token estimation, compaction (preserves system message, reduces tokens, keeps tool-call/result pairs), tool-result pruning
   - `src/tools/` — sandbox path confinement (including symlink-escape rejection and `openat2`/`open_beneath` traversal rejection), list_dir, read_file, write_file, search_replace, grep, run_shell (dangerous command blocking, API key stripping, direct-exec classification, confined-child behavior incl. Landlock/network-block/RLIMIT_FSIZE), worktree isolation between branches, dispatch routing, glob matching, unified diff parsing, apply_patch, document extraction

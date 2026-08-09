@@ -243,7 +243,7 @@ The `--yolo` flag disables confirmation entirely, but the denylist still applies
 ## Testing
 
 ```bash
-cargo test                    # 377 tests, all offline
+cargo test                    # 392 tests, all offline
 cargo clippy                  # zero warnings
 cargo clippy -- -W clippy::pedantic  # stricter linting
 ```
@@ -258,7 +258,7 @@ See `docs/testing.md` for coverage and mutation testing instructions.
 src/
   main.rs       # CLI, headless runner, session management
   lib.rs        # Library re-exports for benchmarks/integration tests
-  agent.rs      # Streaming agent loop, retry, parallel sub-agents
+  agent/         # Streaming agent loop (core, stream, tools_exec, loop_control, parallel, types)
   commands.rs   # Slash-command registry + parsing for the TUI
   tools/        # Tool modules: definitions, dispatch, document, git, patch, sandbox
   tui/          # ratatui TUI (mod, render, markdown, blocks, status, selection)

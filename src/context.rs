@@ -556,6 +556,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn golden_below_threshold_history_unchanged() {
+        // Golden: when under the soft limit, compaction must leave the history
+        // byte-for-byte identical (no pruning, no summary, no reordering).
+        let mut msgs = vec![
+            msg("system", "sys"),
+            msg("user", "hello"),
+            msg("assistant", "hi there"),
+            msg("user", "how are you"),
+            msg("assistant", "fine, thanks"),
+        ];
+        let before = serde_json::to_string(&msgs).unwrap();
+        let result = compact_extractive(&mut msgs, 128_000, 0.75).await;
+        assert!(result.is_none(), "no compaction below threshold");
+        let after = serde_json::to_string(&msgs).unwrap();
+        assert_eq!(after, before, "history must be unchanged below threshold");
+    }
+
+    #[tokio::test]
+    async fn golden_tool_pair_not_split_at_tail_boundary() {
+        // Golden: the tail boundary must never split an assistant tool-call
+        // message from its following tool-result message. Construct a history
+        // where the naive trailing-budget boundary would land between a tool
+        // call and its result, and assert the kept tail keeps them together.
+        let mut msgs = vec![msg("system", "sys")];
+        // Fill with enough content to force a tail boundary deep in the middle.
+        for i in 0..60 {
+            msgs.push(msg(
+                "user",
+                &format!("user message number {i} with some padding"),
+            ));
+            msgs.push(msg(
+                "assistant",
+                &format!("assistant response number {i} with padding"),
+            ));
+        }
+        // A tool call + result pair near the end.
+        msgs.push(msg_with_tools(
+            "assistant",
+            "",
+            vec![tool_call("call_99", "read_file", r#"{"path":"x.rs"}"#)],
+        ));
+        msgs.push(tool_msg("call_99", "file contents"));
+
+        compact_extractive(&mut msgs, 8192, 0.1).await.unwrap();
+
+        // Walk the compacted history: every tool result must be immediately
+        // preceded by its assistant tool_calls sibling.
+        for (i, m) in msgs.iter().enumerate() {
+            if m.role == "tool" {
+                assert!(
+                    i > 0,
+                    "tool result at index {i} must have a preceding assistant call"
+                );
+                let prev = &msgs[i - 1];
+                assert_eq!(
+                    prev.role, "assistant",
+                    "tool result at {i} must follow an assistant message"
+                );
+                assert!(
+                    prev.tool_calls.is_some(),
+                    "tool result at {i} must follow an assistant with tool_calls"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn compaction_preserves_system_message() {
         let mut msgs = vec![msg("system", "important system prompt")];
         for i in 0..100 {

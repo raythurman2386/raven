@@ -6,6 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Offline fake-model agent-loop tests** — a `#[cfg(test)]`-only
+  `CompletionSource` seam on `Agent` lets `run()` be driven with scripted
+  completions and no HTTP. New tests cover finish-on-content, blank-stall
+  recovery + cap, tool round-trip, same-file serial edits, and the
+  `max_tokens` clamp (`src/agent/tests/fake_model.rs`).
+- **Compaction golden tests** — explicit assertions that history is unchanged
+  below the threshold and that tool-call/result pairs are never split at the
+  tail boundary (`src/context.rs`).
+
 ## [0.1.6] - 2026-08-09
 
 ### Added

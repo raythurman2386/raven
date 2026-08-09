@@ -34,7 +34,7 @@ src/
 ├── main.rs       # CLI entry, headless runner
 ├── lib.rs        # Library crate re-exports
 ├── config.rs     # Settings, defaults, context-window inference, AGENTS.md loader
-├── agent.rs      # Streaming loop, AgentEvent, parallel sub-agents
+├── agent/       # Streaming loop (core, stream, tools_exec, loop_control, parallel, types)
 ├── context.rs    # Token estimation, compaction
 ├── tools/
 │   ├── mod.rs        # Tool module root, glob matcher, todo state
@@ -147,7 +147,7 @@ cargo doc --no-deps
 
 ## Adding an event
 
-Events are defined in [`src/agent.rs`](../src/agent.rs) as the `AgentEvent` enum.
+Events are defined in [`src/agent/types.rs`](../src/agent/types.rs) as the `AgentEvent` enum.
 
 ### 1. Add the variant
 
@@ -225,7 +225,7 @@ Compaction lives in [`src/context.rs`](../src/context.rs).
 ## Running tests
 
 ```bash
-cargo test                    # 377 tests, all offline
+cargo test                    # 392 tests, all offline
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```

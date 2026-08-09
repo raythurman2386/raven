@@ -3,6 +3,8 @@
 //! These exercise the streaming loop, tool dispatch, stall/verify recovery,
 //! compaction, and parallel sub-agents against a mock HTTP server.
 
+mod fake_model;
+
 use super::core::Agent;
 use super::loop_control::compute_reminders;
 use super::stream::args_to_string;
