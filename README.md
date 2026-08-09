@@ -244,7 +244,7 @@ The `--yolo` flag disables confirmation entirely, but the denylist still applies
 ## Testing
 
 ```bash
-cargo test                    # 409 tests, all offline
+cargo test                    # 414 tests, all offline
 cargo clippy                  # zero warnings
 cargo clippy -- -W clippy::pedantic  # stricter linting
 ```

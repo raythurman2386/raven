@@ -39,6 +39,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   for borders, making the viewport 1 row too short. The last content row was
   never rendered and mouse selection/scroll couldn't reach it. Both now
   subtract 1.
+- **Cursor out of position when input wraps** — `input_cursor_position` wrapped
+  the prompt+input at `input_content_width` (which subtracts the prompt), but
+  ratatui wraps the whole line at the content area width (borders only). Once
+  input wrapped to a second line, the cursor landed 2 columns off. It now wraps
+  at the content area width.
+- **Copy-on-highlight broken when scrolled** — the mouse selection was stored
+  in full-log row space (`pos.row + offset`), but `apply_selection_highlight`
+  and `selection_text` read the visible window. When the log was scrolled, the
+  highlight landed on the wrong rows and copy returned empty. The selection is
+  now stored in visible-window coordinates, matching what's rendered. This
+  became noticeable after the markdown upgrade made assistant blocks taller
+  (more scrolling).
 
 ## [0.1.7] - 2026-08-09
 
