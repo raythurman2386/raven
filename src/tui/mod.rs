@@ -1067,7 +1067,13 @@ fn input_cursor_position(
     cursor: usize,
     input_rect: ratatui::layout::Rect,
 ) -> (u16, u16) {
-    let content_width = input_content_width(input_rect.width);
+    // The input line is `prompt + input`, rendered in a Paragraph with
+    // Borders::ALL. Ratatui wraps the whole line at the content area width
+    // (rect.width - 2 for the two border columns). The prompt is part of the
+    // wrapped line, NOT a separate column reservation, so the wrap width here
+    // must be rect.width - 2 — not input_content_width (which also subtracts
+    // the prompt and would put the cursor 2 columns off once input wraps).
+    let content_width = input_rect.width.saturating_sub(2).max(1) as usize;
     // Walk the combined prompt+input up to the cursor byte offset.
     let mut col = 0usize;
     let mut row = 0usize;
@@ -1719,6 +1725,19 @@ mod tests {
         let rect = ratatui::layout::Rect::new(0, 20, 10, 5);
         let (_x, y) = input_cursor_position("abcdefghijkl", "❯ ", 12, rect);
         assert!(y > 21, "cursor should wrap to next row for long input");
+    }
+
+    #[test]
+    fn input_cursor_position_wraps_at_content_width_not_prompt_width() {
+        // Regression: the cursor must wrap at the Paragraph content width
+        // (rect.width - 2 for borders), NOT at input_content_width (which also
+        // subtracts the prompt). With rect width 10, content width is 8, so
+        // "❯ " + 6 input chars fill row 0 and the 7th input char starts row 1.
+        // A cursor at byte 7 (after "abcdefg") must be on row 1, col 1.
+        let rect = ratatui::layout::Rect::new(0, 20, 10, 5);
+        let (x, y) = input_cursor_position("abcdefghijkl", "❯ ", 7, rect);
+        assert_eq!(y, 22, "cursor should be on the second row, got y={y}");
+        assert_eq!(x, 2, "cursor should be at col 1 inside the box, got x={x}");
     }
 
     #[test]
