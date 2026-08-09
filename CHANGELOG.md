@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-08-09
+
 ### Added
 
 - **Extendable theme system with `/theme` slash command** — the TUI's hardcoded
@@ -51,6 +53,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   now stored in visible-window coordinates, matching what's rendered. This
   became noticeable after the markdown upgrade made assistant blocks taller
   (more scrolling).
+- **Right arrow couldn't reach the end of the line** — the Right-arrow handler
+  used `char_indices().nth(1)`, which returns `None` when only one char remains
+  after the cursor, so the cursor could never advance past the last character
+  to the true end. This also meant Backspace (which deletes the char before the
+  cursor) could never delete the final letter. The cursor now advances by the
+  next char's byte length and reaches `input.len()`.
 
 ## [0.1.7] - 2026-08-09
 
@@ -224,7 +232,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Ratatui 0.30, crossterm 0.29.
 
-[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.1.8...HEAD
+[0.1.8]: https://github.com/raythurman2386/raven/compare/v0.1.7...v0.1.8
+[0.1.7]: https://github.com/raythurman2386/raven/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/raythurman2386/raven/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/raythurman2386/raven/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/raythurman2386/raven/compare/v0.1.3...v0.1.4
