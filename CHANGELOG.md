@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Markdown rendering in the TUI** — assistant output now renders as styled
+  markdown (headings, bold/italic/strikethrough, inline code, fenced code
+  blocks, ordered/unordered lists, blockquotes, links, tables) via a new
+  `src/tui/markdown.rs` module built on `pulldown-cmark`. The renderer
+  re-parses the accumulated text on each stream delta and degrades unclosed
+  tokens to literal text, so streaming never flashes raw markdown.
+- **Tool calls shown in the TUI** — every tool call now renders as a live
+  line (previously only the newest was shown); only the newest active call
+  still glimmers with a spinner. The tool's output is not dumped to the log —
+  the call line alone is shown, matching Hermes' lean tool-call display.
+
 ## [0.1.5] - 2026-08-09
 
 ### Fixed

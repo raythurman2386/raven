@@ -140,6 +140,10 @@ raven --tui    # force TUI even with a task
 | `Shift+Tab` | Cycle mode: plan → agent → chat |
 | `Ctrl+C` / `Esc` | Quit |
 
+Assistant responses render as markdown — headings, bold/italic, code blocks,
+lists, tables, and links are styled in the terminal. Tool calls show a live
+spinner while running, then settle to a dim line once finished.
+
 ### Slash commands
 
 Raven uses slash commands (Grok Build-style) to drive the TUI. They work

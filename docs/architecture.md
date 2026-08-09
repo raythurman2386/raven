@@ -163,4 +163,12 @@ The TUI (`src/tui/`) is intentionally minimal:
 - **Plan approval is model-driven with a fallback**: during the plan turn the model may call `exit_plan_mode`; when it does the TUI auto-executes the plan without a prompt. If the model finishes without that signal, the TUI sets `plan_pending` and waits for `yes`/`y`/`approve`/`go`/`execute`/`ok` to execute, or any other text to revise.
 - **No multi-line input**: the input box is single-line only.
 
+Assistant output is rendered as markdown (`src/tui/markdown.rs`, via
+`pulldown-cmark`): headings, bold/italic/strikethrough, inline code, fenced
+code blocks, ordered/unordered lists, blockquotes, links, and tables. The
+renderer re-parses the accumulated text on each stream delta and degrades
+unclosed tokens (e.g. a half-typed `**bold`) to literal text, so streaming
+never flashes raw markdown. Tool calls render as a live line with a spinner
+while active, then settle to a dim line once finished.
+
 Conversation history **is** carried across turns via `session_messages` (in-memory) and persisted to `.raven/sessions/`. Scrollback is supported with `↑`/`↓`/`PgUp`/`PgDn` and mouse wheel.

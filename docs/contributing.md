@@ -44,7 +44,7 @@ src/
 │   ├── document.rs    # Document extraction (.docx, .pdf, .xlsx, .odt, .epub)
 │   ├── git.rs         # Git operations (status, diff, log, commit, undo)
 │   └── patch.rs       # Unified diff parsing and application
-├── tui/          # ratatui interactive UI (mod, render, blocks, status, selection)
+├── tui/          # ratatui interactive UI (mod, render, markdown, blocks, status, selection)
 ├── commands.rs   # Slash-command registry and parsing
 ├── plan.rs       # Structured plan data model, parsing, step advancement
 ├── skills.rs     # SKILL.md discovery + skill_search/skill_load
@@ -225,7 +225,7 @@ Compaction lives in [`src/context.rs`](../src/context.rs).
 ## Running tests
 
 ```bash
-cargo test                    # 363 tests, all offline
+cargo test                    # 377 tests, all offline
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```

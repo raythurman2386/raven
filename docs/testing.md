@@ -18,6 +18,7 @@ cargo test
   - `src/tools/` — sandbox path confinement (including symlink-escape rejection and `openat2`/`open_beneath` traversal rejection), list_dir, read_file, write_file, search_replace, grep, run_shell (dangerous command blocking, API key stripping, direct-exec classification, confined-child behavior incl. Landlock/network-block/RLIMIT_FSIZE), worktree isolation between branches, dispatch routing, glob matching, unified diff parsing, apply_patch, document extraction
   - `src/plan.rs` — plan parsing (JSON, numbered list, bullet list, code block), plan formatting
   - `src/tokenizer.rs` — token counting behavior
+  - `src/tui/render.rs` + `src/tui/markdown.rs` — markdown rendering (headings, bold/italic, inline code, fenced code blocks, ordered/unordered lists, blockquotes, links, tables, unclosed-token degradation), scrollback pre-wrapping, tool-call glimmer/fade
 - **Integration tests** (`tests/`):
   - `tests/cli_smoke.rs` — black-box tests of the compiled binary (`CARGO_BIN_EXE_raven`): `--help`/`--version` output, no-task error, and session persistence round-trip
 
@@ -79,8 +80,10 @@ rate on logging-only or display-only code.
   server and are not exercised in CI. The HTTP/streaming loop *is* covered by
   mock-server integration tests (see above); live behavior is tested manually
   via `--headless` mode.
-- **TUI rendering** — ratatui/crossterm integration is not unit-tested. The TUI
-  is exercised manually.
+- **TUI rendering** — the markdown renderer and scrollback pre-wrapping logic
+  *are* unit-tested (see `src/tui/render.rs` + `src/tui/markdown.rs`), but the
+  ratatui/crossterm event loop and interactive layout are not; those are
+  exercised manually.
 - **Network retries against a real host** — the retry-with-backoff logic is
   covered against the mock (a scripted 503), and the connection-refused path by
   pointing at an unreachable host.

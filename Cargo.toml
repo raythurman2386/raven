@@ -27,6 +27,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 crossterm = "0.29"
 ratatui = "0.30"
+pulldown-cmark = "0.13.4"
 anydoc = "0.1.6"
 tempfile = "3"
 rustix = { version = "1.1.4", features = ["fs", "process"] }

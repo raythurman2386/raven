@@ -39,6 +39,7 @@ That constraint is the design center, not an afterthought — it's why the featu
 | Typed errors with retry + exponential backoff | |
 | Non-streaming fallback (`--no-stream`) | |
 | Simple ratatui TUI + headless CLI | |
+| Markdown rendering in the TUI (headings, code blocks, lists, tables, links via `pulldown-cmark`) | |
 | `AGENTS.md` / `CLAUDE.md` auto-load + `--rules` session overrides | |
 | Local by default; optional Bearer auth for Ollama Cloud | |
 
@@ -242,7 +243,7 @@ The `--yolo` flag disables confirmation entirely, but the denylist still applies
 ## Testing
 
 ```bash
-cargo test                    # 363 tests, all offline
+cargo test                    # 377 tests, all offline
 cargo clippy                  # zero warnings
 cargo clippy -- -W clippy::pedantic  # stricter linting
 ```
@@ -260,7 +261,7 @@ src/
   agent.rs      # Streaming agent loop, retry, parallel sub-agents
   commands.rs   # Slash-command registry + parsing for the TUI
   tools/        # Tool modules: definitions, dispatch, document, git, patch, sandbox
-  tui/          # ratatui TUI (mod, render, blocks, status, selection)
+  tui/          # ratatui TUI (mod, render, markdown, blocks, status, selection)
   config.rs     # Settings, config.toml loading, context window inference
   context.rs    # Compaction strategy, tool-result pruning
   tokenizer.rs  # Pure-Rust token estimator (no external vocab)

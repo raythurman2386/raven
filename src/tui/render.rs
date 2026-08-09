@@ -13,6 +13,9 @@ use super::blocks::{AssistantBlock, BlockKind, SystemBlock, ToolBlock, UserBlock
 use super::status::spinner_frame;
 use super::Theme;
 
+#[path = "markdown.rs"]
+mod markdown;
+
 /// Render every block into display lines, returning the count of trailing
 /// lines owned by the *last* assistant block (0 if the log ends on any other
 /// kind). Mirrors `render_log_lines` but operates on the block model.
@@ -23,11 +26,6 @@ use super::Theme;
 pub fn render_blocks(blocks: &[BlockKind], tick: u64) -> (Vec<Line<'static>>, usize) {
     let mut lines = Vec::with_capacity(blocks.len().saturating_mul(2));
     let mut last_assistant_start: Option<usize> = None;
-    // Only the most recent tool call is rendered as a live line. Every earlier
-    // tool block is skipped (no line emitted), so a burst of parallel tool
-    // calls doesn't accumulate a wall of lines that rebuilds the log every
-    // frame — the whole point is to keep per-frame rendering cheap.
-    let last_tool = blocks.iter().rposition(|b| matches!(b, BlockKind::Tool(_)));
     // The last active tool (if any) is the one that glimmers with a spinner.
     let last_active_tool = blocks
         .iter()
@@ -58,21 +56,9 @@ pub fn render_blocks(blocks: &[BlockKind], tick: u64) -> (Vec<Line<'static>>, us
                         .fg(Theme::ACCENT)
                         .add_modifier(Modifier::BOLD),
                 )));
-                for part in a.text().lines() {
-                    lines.push(Line::from(Span::styled(
-                        part.to_string(),
-                        Style::default().fg(Theme::FG),
-                    )));
-                }
+                lines.extend(markdown::render_markdown(a.text()));
             }
             BlockKind::Tool(t) => {
-                // Skip all but the newest tool line.
-                if last_tool != Some(i) {
-                    // Still break any open assistant tail so a tool between
-                    // two assistants doesn't inflate the trailing count.
-                    last_assistant_start = None;
-                    continue;
-                }
                 let is_last_active = last_active_tool == Some(i);
                 let style = tool_style(t, tick, is_last_active);
                 let prefix = if is_last_active {
@@ -163,12 +149,7 @@ pub fn render_assistant_lines(text: &str) -> Vec<Line<'static>> {
             .fg(Theme::ACCENT)
             .add_modifier(Modifier::BOLD),
     )));
-    for part in text.lines() {
-        lines.push(Line::from(Span::styled(
-            part.to_string(),
-            Style::default().fg(Theme::FG),
-        )));
-    }
+    lines.extend(markdown::render_markdown(text));
     lines
 }
 
@@ -489,8 +470,8 @@ mod tests {
     fn render_assistant_lines_includes_raven_tag() {
         // The streaming patch must match `render_blocks` (tag + text) so the
         // "Raven" tag doesn't flicker out mid-stream.
-        let lines = render_assistant_lines("hello\nworld");
-        assert_eq!(lines.len(), 3, "tag + 2 text lines");
+        let lines = render_assistant_lines("hello\n\nworld");
+        assert_eq!(lines.len(), 3, "tag + 2 paragraph lines");
         assert!(lines[0].to_string().contains("Raven"));
         assert_eq!(lines[1].to_string(), "hello");
         assert_eq!(lines[2].to_string(), "world");
@@ -515,11 +496,9 @@ mod tests {
     }
 
     #[test]
-    fn render_blocks_only_last_tool_rendered() {
-        // Two parallel tools: only the newest is rendered as a live line.
-        // The earlier one is suppressed entirely — it must not appear in the
-        // output lines, so a burst of parallel calls can't build a wall of
-        // tool lines that slows per-frame rendering.
+    fn render_blocks_renders_all_tools() {
+        // Two parallel tools: both render as live lines so the user can see
+        // every tool the agent ran. Only the newest active tool glimmers.
         let mut tb1 = ToolBlock::new("→ read_file(a)".to_string());
         tb1.active = true;
         let mut tb2 = ToolBlock::new("→ search_code(b)".to_string());
@@ -527,26 +506,26 @@ mod tests {
         let blocks = vec![BlockKind::Tool(tb1), BlockKind::Tool(tb2)];
         let (lines, _tail) = render_blocks(&blocks, 0);
 
-        assert_eq!(lines.len(), 1, "only the newest tool line should render");
-        let rendered = lines[0].to_string();
+        assert_eq!(lines.len(), 2, "both tool lines should render");
+        let rendered = lines.iter().map(|l| l.to_string()).collect::<Vec<_>>();
         assert!(
-            rendered.contains("search_code(b)"),
+            rendered.iter().any(|l| l.contains("search_code(b)")),
             "newest tool should render, got {rendered:?}"
         );
         assert!(
-            !rendered.contains("read_file(a)"),
-            "earlier tool should be suppressed, got {rendered:?}"
+            rendered.iter().any(|l| l.contains("read_file(a)")),
+            "earlier tool should render too, got {rendered:?}"
         );
         // Newest active tool glimmers (bold + spinner prefix).
         assert!(
-            lines[0].spans[0]
+            lines[1].spans[0]
                 .style
                 .add_modifier
                 .contains(Modifier::BOLD),
             "newest active tool should be bold, got {rendered:?}"
         );
         assert!(
-            rendered.starts_with('⠋'),
+            rendered[1].starts_with('⠋'),
             "newest active tool should carry a spinner prefix, got {rendered:?}"
         );
     }
