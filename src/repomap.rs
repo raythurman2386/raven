@@ -160,15 +160,20 @@ fn patterns_for(ext: &str) -> &'static [Pattern] {
                     Pattern::new(r"^\s*class\s+([A-Za-z_][a-zA-Z0-9_]*)\s*[:(]", "class", false),
                 ],
             );
-            // JS/TS
+            // JS/TS — export patterns first so they match before non-export
             m.insert(
                 "js",
                 vec![
-                    Pattern::new(r"^\s*(?:export\s+)?(?:async\s+)?function\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\(", "fn", false),
-                    Pattern::new(r"^\s*(?:export\s+)?const\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*=\s*[\(\[a-zA-Z_$0-9]", "const", false),
-                    Pattern::new(r"^\s*(?:export\s+)?class\s+([A-Za-z_$][a-zA-Z0-9_$]*)", "class", false),
-                    Pattern::new(r"^\s*(?:export\s+)?interface\s+([A-Za-z_$][a-zA-Z0-9_$]*)", "interface", false),
-                    Pattern::new(r"^\s*(?:export\s+)?type\s+([A-Za-z_$][a-zA-Z0-9_$]*)\s*=", "type", false),
+                    Pattern::new(r"^\s*export\s+(?:async\s+)?function\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\(", "fn", true),
+                    Pattern::new(r"^\s*(?:async\s+)?function\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\(", "fn", false),
+                    Pattern::new(r"^\s*export\s+const\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*=\s*[\(\[a-zA-Z_$0-9]", "const", true),
+                    Pattern::new(r"^\s*const\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*=\s*[\(\[a-zA-Z_$0-9]", "const", false),
+                    Pattern::new(r"^\s*export\s+class\s+([A-Za-z_$][a-zA-Z0-9_$]*)", "class", true),
+                    Pattern::new(r"^\s*class\s+([A-Za-z_$][a-zA-Z0-9_$]*)", "class", false),
+                    Pattern::new(r"^\s*export\s+interface\s+([A-Za-z_$][a-zA-Z0-9_$]*)", "interface", true),
+                    Pattern::new(r"^\s*interface\s+([A-Za-z_$][a-zA-Z0-9_$]*)", "interface", false),
+                    Pattern::new(r"^\s*export\s+type\s+([A-Za-z_$][a-zA-Z0-9_$]*)\s*=", "type", true),
+                    Pattern::new(r"^\s*type\s+([A-Za-z_$][a-zA-Z0-9_$]*)\s*=", "type", false),
                 ],
             );
             // Go
@@ -442,7 +447,7 @@ fn extract_symbols(content: &str, ext: &str, path: &Path, symbols: &mut Vec<Symb
         for pat in patterns {
             if let Some(caps) = pat.re.captures(line) {
                 if let Some(m) = caps.get(1) {
-                    let public = pat.public || line.contains("export ");
+                    let public = pat.public;
                     symbols.push(Symbol {
                         name: m.as_str().to_string(),
                         path: rel.clone(),
@@ -542,6 +547,48 @@ mod tests {
         assert!(names.contains(&"greet".to_string()));
         assert!(names.contains(&"PI".to_string()));
         assert!(names.contains(&"Shape".to_string()));
+    }
+
+    #[test]
+    fn js_export_scores_higher_than_non_export_on_same_path() {
+        let mut syms = Vec::new();
+        extract_symbols(
+            "export function greet(name) {}\nfunction helper() {}\n",
+            "ts",
+            std::path::Path::new("src/module.ts"),
+            &mut syms,
+        );
+        let rel = std::path::Path::new("src/module.ts");
+        for s in &mut syms {
+            s.score = score_symbol(&s.name, s.kind, s.public, rel);
+        }
+        let greet = syms.iter().find(|s| s.name == "greet").unwrap();
+        let helper = syms.iter().find(|s| s.name == "helper").unwrap();
+        assert!(greet.public, "exported function should be public");
+        assert!(!helper.public, "non-exported function should not be public");
+        assert!(
+            greet.score > helper.score,
+            "exported symbol (score {}) should outrank non-exported (score {}) on same path",
+            greet.score,
+            helper.score
+        );
+    }
+
+    #[test]
+    fn js_export_not_fooled_by_midline_export() {
+        let mut syms = Vec::new();
+        extract_symbols(
+            "const x = someExport(foo);\nfunction real() {}\n",
+            "js",
+            std::path::Path::new("x.js"),
+            &mut syms,
+        );
+        let x_sym = syms.iter().find(|s| s.name == "x");
+        assert!(x_sym.is_some(), "const x should be extracted");
+        assert!(
+            !x_sym.unwrap().public,
+            "midline 'export' should not mark as public"
+        );
     }
 
     #[test]
