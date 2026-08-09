@@ -22,7 +22,7 @@ Options:
 
 Examples:
   curl -fsSL https://raw.githubusercontent.com/$REPO/master/install.sh | sh
-  $0 --version 0.1.4
+  $0 --version 0.1.5
   $0 --to /usr/local/bin
 EOF
     exit 0

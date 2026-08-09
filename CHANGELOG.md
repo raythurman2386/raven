@@ -6,6 +6,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-08-09
+
+### Fixed
+
+- **Blank model turn treated as a clean finish** — when the model returned a
+  turn with no tool calls AND empty/whitespace-only content, raven treated it
+  as a legitimate finish: it pushed an empty assistant message, emitted `Done`,
+  and returned, silently dropping the deliverable (the research-report session
+  that exposed this did all its work then ended with no report). A blank turn
+  is now treated as a STALL: raven injects an ephemeral nudge and re-runs the
+  loop, capped at 3 attempts, then falls through to `emit_summary` so the turn
+  always ends with a visible line. Mirrors the existing verify / repeated-
+  failure loop-breaker plumbing. (`#110`)
+- **Parallel same-file edits silently lost** — multiple file-mutating tool
+  calls (`write_file`/`search_replace`/`apply_patch`) against the same file in
+  one turn were dispatched in parallel on the blocking pool. Because
+  `search_replace` is an unlocked read-modify-write, two concurrent same-file
+  edits both read the original content, so the last writer won and the earlier
+  edit was lost while each call still returned success. File-mutating tools are
+  now dispatched serially in call order via a shared `record_tool_result`
+  helper; read-only and other tools stay parallel. (`#111`)
+
 ## [0.1.4] - 2026-08-09
 
 ### Fixed
@@ -101,7 +123,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Ratatui 0.30, crossterm 0.29.
 
-[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/raythurman2386/raven/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/raythurman2386/raven/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/raythurman2386/raven/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/raythurman2386/raven/compare/v0.1.1...v0.1.2
