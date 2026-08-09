@@ -54,6 +54,7 @@ Layered TOML config, loaded from the workspace first (higher priority), then the
 | `temperature` | `0.2` | Sampling temperature |
 | `no_stream` | `false` | Disable streaming (single request per turn) |
 | `verify` | `true` | Enforce verification gate (agent must run tests after edits) |
+| `theme` | `ravenwood` | TUI color theme: `ravenwood`, `nord`, `dracula`, `solarized-dark` |
 
 ```toml
 # .raven/config.toml  (workspace)  or  ~/.raven/config.toml  (global)
@@ -66,6 +67,7 @@ mode = "plan"
 temperature = 0.2
 no_stream = false
 verify = true
+theme = "ravenwood"
 ```
 
 CLI flags still win over config file values; env vars take precedence over the config file but lose to explicit CLI flags.

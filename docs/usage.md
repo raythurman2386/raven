@@ -156,6 +156,7 @@ host. Type one and press `Enter`; `/help` lists everything.
 | `/new` | `/n` | Save the current session and start a fresh one |
 | `/clear` | `/c` | Clear the on-screen log (history preserved) |
 | `/model <name>` | `/m` | Switch the model for subsequent turns |
+| `/theme [name]` | `/t` | List themes, or switch the active color theme |
 | `/stop` | `/s` | Interrupt the running task |
 | `/quit` | `/q`, `/exit` | Quit Raven |
 

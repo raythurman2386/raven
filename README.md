@@ -171,6 +171,7 @@ max_iterations = 30
 mode = "plan"
 temperature = 0.2
 no_stream = false
+theme = "ravenwood"
 ```
 
 ### Environment variables
@@ -243,7 +244,7 @@ The `--yolo` flag disables confirmation entirely, but the denylist still applies
 ## Testing
 
 ```bash
-cargo test                    # 392 tests, all offline
+cargo test                    # 399 tests, all offline
 cargo clippy                  # zero warnings
 cargo clippy -- -W clippy::pedantic  # stricter linting
 ```

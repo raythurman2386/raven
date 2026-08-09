@@ -6,6 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Extendable theme system with `/theme` slash command** — the TUI's hardcoded
+  `Theme` unit-struct is now a `Copy` data struct with a registry of built-in
+  presets (`ravenwood`, `nord`, `dracula`, `solarized-dark`). The active theme
+  is threaded through every render path (log, markdown, status strip, plan
+  panel, selection highlight) and can be switched mid-session with
+  `/theme <name>` (or `/theme` to list), which recolors the whole scrollback
+  instantly. The theme is also configurable via `theme` in `config.toml` and a
+  `--theme` CLI flag (precedence: CLI > config > default `ravenwood`).
+
 ## [0.1.7] - 2026-08-09
 
 ### Added
