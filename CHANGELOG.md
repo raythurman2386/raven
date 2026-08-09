@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-08-09
+
 ### Added
 
 - **Offline fake-model agent-loop tests** — a `#[cfg(test)]`-only
@@ -16,6 +18,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Compaction golden tests** — explicit assertions that history is unchanged
   below the threshold and that tool-call/result pairs are never split at the
   tail boundary (`src/context.rs`).
+
+### Changed
+
+- **Model-oriented repo map** — the flat, lexically-sorted symbol dump is
+  replaced with a scored, grouped map that spends the char budget on
+  entrypoints and public types. Symbols are ranked (entrypoint/public/type
+  bonuses, test-path penalties), rendered grouped by workspace-relative path,
+  and capped at 3500 chars. The map now builds when `source_files >= 15` OR
+  `symbols >= 80` (was 50 files), skips `.next`/`coverage`/`vendor`/`Pods`/
+  `.turbo` and files over 256 KiB, and uses a single `WalkDir` pass with
+  regexes compiled once.
+
+### Refactored
+
+- **`src/agent.rs` split into internal submodules** — the 2687-line monolith
+  is now `src/agent/` (`core`, `stream`, `tools_exec`, `loop_control`,
+  `parallel`, `types`) with no public API change. `run()` is a thin
+  orchestrator delegating to `handle_no_tool_calls` and `execute_tool_calls`.
 
 ## [0.1.6] - 2026-08-09
 
