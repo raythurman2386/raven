@@ -875,29 +875,33 @@ pub(crate) fn is_direct_exec_command(command: &str) -> bool {
 
 /// Apply resource limits (RLIMIT_*) to the calling process.
 ///
-/// Linux + macOS. Kills fork bombs (RLIMIT_NPROC), runaway memory
-/// (RLIMIT_AS), oversized writes (RLIMIT_FSIZE), runaway CPU (RLIMIT_CPU),
-/// and fd exhaustion (RLIMIT_NOFILE). Best-effort: failures are ignored so a
-/// kernel that doesn't support a limit doesn't break the child.
+/// Linux + macOS. Caps oversized writes (RLIMIT_FSIZE), runaway CPU
+/// (RLIMIT_CPU), and fd exhaustion (RLIMIT_NOFILE). Best-effort: failures are
+/// ignored so a kernel that doesn't support a limit doesn't break the child.
+///
+/// Deliberately omitted:
+/// - `RLIMIT_AS` (virtual address space): V8/Node reserve large regions up
+///   front, so a cap aborts them at startup. It bounds virtual, not resident,
+///   memory — the wrong tool.
+/// - `RLIMIT_NPROC` (processes/threads per user): it is a *user-global*
+///   ceiling, not a per-child one. Imposing it on a child can't isolate that
+///   child; a fork bomb would instead kill the whole user session, and on a
+///   busy machine it silently breaks any high-thread runtime (Node, etc.)
+///   because the ambient thread count is already near the cap.
+///
+/// Landlock confines the filesystem and RLIMIT_CPU/RLIMIT_FSIZE bound runaway
+/// execution, so neither omission opens a hole.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn apply_rlimits() {
     use rustix::process::{setrlimit, Resource, Rlimit};
-    // 30s CPU, 1 GiB address space, 64 MiB max file write, 1024 fds,
-    // 1024 procs (high enough for real build tools, low enough to stop
-    // runaway fork bombs).
+    // 30s CPU, 64 MiB max file write, 1024 fds (high enough for real build
+    // tools, low enough to stop runaway file writes and fd leaks).
     let limits = [
         (
             Resource::Cpu,
             Rlimit {
                 current: Some(30),
                 maximum: Some(30),
-            },
-        ),
-        (
-            Resource::As,
-            Rlimit {
-                current: Some(1 << 30),
-                maximum: Some(1 << 30),
             },
         ),
         (
@@ -909,13 +913,6 @@ fn apply_rlimits() {
         ),
         (
             Resource::Nofile,
-            Rlimit {
-                current: Some(1024),
-                maximum: Some(1024),
-            },
-        ),
-        (
-            Resource::Nproc,
             Rlimit {
                 current: Some(1024),
                 maximum: Some(1024),

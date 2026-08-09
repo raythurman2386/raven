@@ -27,8 +27,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Linux sandbox hardening** — subprocesses are now confined with `openat2`
   (`RESOLVE_BENEATH | NO_MAGICLINKS`), Landlock (workspace + temp + HOME + /dev),
-  seccomp (network syscall block), and `setrlimit` (CPU / address space / file
-  size / file descriptors / processes).
+  seccomp (network syscall block), and `setrlimit` (CPU / file size / file
+  descriptors).
 - **Direct exec** — allowlisted single-binary commands with no shell
   metacharacters are executed directly (no `sh -c`), removing the shell
   injection surface for the common case.
