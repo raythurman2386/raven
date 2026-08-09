@@ -1226,10 +1226,16 @@ fn handle_mouse_event(
             }
 
             // Otherwise begin a log selection.
-            let (display, offset) = current_display(state, log_rect);
+            let (display, _offset) = current_display(state, log_rect);
             if let Some(pos) = mouse_to_display_pos(m, log_rect) {
+                // `pos` is already in visible-window coordinates (relative to
+                // the log viewport). The selection is stored in the same space
+                // that `apply_selection_highlight` and `selection_text` read
+                // (the visible window), so do NOT add the scroll offset here —
+                // doing so would put the highlight/copy on the wrong rows once
+                // the log is scrolled.
                 let display_pos = DisplayPos {
-                    row: pos.row + offset as usize,
+                    row: pos.row,
                     col: pos.col,
                 };
                 // Double-click → word select.
@@ -1254,10 +1260,11 @@ fn handle_mouse_event(
             }
         }
         MouseEventKind::Drag(MouseButton::Left) => {
-            let (display, offset) = current_display(state, log_rect);
+            let (display, _offset) = current_display(state, log_rect);
             if let Some(pos) = mouse_to_display_pos(m, log_rect) {
+                // Same visible-window coordinate space as the Down handler.
                 let display_pos = DisplayPos {
-                    row: pos.row + offset as usize,
+                    row: pos.row,
                     col: pos.col,
                 };
                 if let Some(sel) = state.selection.as_mut() {
