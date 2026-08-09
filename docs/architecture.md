@@ -102,7 +102,12 @@ Implemented in [`src/tools/`](../src/tools/). See [tools.md](tools.md) for the f
 
 ### Path confinement
 
-All file tools resolve paths relative to the workspace root via `Sandbox::safe_resolve`, which applies two defenses:
+All file tools confine paths to the workspace root. On Linux, file opens go
+through `openat2` with `RESOLVE_BENEATH | NO_MAGICLINKS`, which makes the
+kernel refuse any path escaping the workspace — atomically, with no TOCTOU
+race (see [security.md §1](security.md)). On non-Linux platforms, and for the
+workspace-relative path computation that feeds `open_beneath`, paths are
+resolved via `Sandbox::safe_resolve`, which applies two defenses:
 
 1. **Lexical normalization** — `.` and `..` components are resolved in-memory, and the result must still start with the workspace root. This rejects `../` traversal for both existing and non-existent targets.
 2. **Symlink escape defense** — the nearest existing ancestor of the requested path is canonicalized (resolving symlinks) and must still lie inside the canonicalized workspace root. This blocks `workspace/link -> /etc` from being read or written through (including writes whose parent directory is a symlink pointing outside the workspace). The remaining non-existent suffix is re-appended to the canonical anchor to form the target.
@@ -114,12 +119,14 @@ All file tools resolve paths relative to the workspace root via `Sandbox::safe_r
 - Forces `cwd` to the workspace.
 - Strips secret env vars (`RAVEN_API_KEY`, `OLLAMA_API_KEY`, `OPENAI_API_KEY`, `XAI_API_KEY`, `ANTHROPIC_API_KEY`, `AWS_SECRET_ACCESS_KEY`).
 - Blocks destructive command patterns (see [tools.md#blocked-commands](tools.md#blocked-commands)).
+- Runs allowlisted, metacharacter-free commands via **direct exec** (`Command::new(bin).args(...)`, no `sh -c`) — see [security.md §6](security.md).
 - Enforces a timeout (default 60s, overridable per call).
 - Caps output at 12 000 chars.
+- Every confined subprocess additionally runs under OS-level confinement: **Landlock** (filesystem) + **seccomp** (network-block) + **rlimits** (CPU/file-size/fds) on Linux; rlimits on macOS; **Job Object** (process-tree + committed-memory) on Windows. See [security.md](security.md) for the full defense layers.
 
 ### Honest limits
 
-The sandbox is a **guardrail, not hard isolation**. It does not use containers, namespaces, or kernel sandboxing. A determined model could escape it. For untrusted models, run inside a container or VM.
+The sandbox confines the agent's subprocesses at the OS level (Landlock, seccomp, rlimits, Job Objects) and confines file-path resolution with `openat2`/`safe_resolve`. It does **not** use containers or VMs. These layers are best-effort on some platforms and each has documented caveats (see [security.md](security.md)); defense-in-depth is the point. For the strongest isolation, run Raven inside a container or VM.
 
 ---
 

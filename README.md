@@ -1,6 +1,6 @@
 # Raven
 
-A **privacy-first** local coding-agent harness written in Rust for [Ollama](https://ollama.com) and any OpenAI-compatible endpoint. It distills the useful core of agent-harness ideas into a single binary that runs entirely against a local (or cloud) endpoint — no managed cloud auth, no MCP marketplace, no kernel sandbox. Ideal for locked-down or air-gapped work environments where Ollama is the only reachable model endpoint.
+A **privacy-first** local coding-agent harness written in Rust for [Ollama](https://ollama.com) and any OpenAI-compatible endpoint. It distills the useful core of agent-harness ideas into a single binary that runs entirely against a local (or cloud) endpoint — no managed cloud auth, no MCP marketplace, no telemetry. Ideal for locked-down or air-gapped work environments where Ollama is the only reachable model endpoint.
 
 > **Inspiration:** Inspired by the agent-harness ideas in xAI's [Grok Build](https://github.com/xai-org/grok-build); not affiliated. Raven keeps only the pieces that remain useful when the only model endpoint you can reach is local Ollama, so you get a real agent loop with tools, plan mode, compaction, and parallel sub-agents — in one small, auditable binary.
 
@@ -10,7 +10,7 @@ A **privacy-first** local coding-agent harness written in Rust for [Ollama](http
 
 Most coding-agent harnesses assume you can reach the open internet: they phone home for telemetry, pull plugins from a marketplace, and expect a managed cloud auth layer. That assumption breaks in the environments where a local model is most valuable — **air-gapped and locked-down networks** where the only reachable model endpoint is a local Ollama instance.
 
-Raven is built for exactly that case. It is a **minimal harness with zero telemetry**: no usage tracking, no phone-home calls, no managed cloud auth, no MCP marketplace, no kernel sandbox. Everything runs against your local (or cloud) endpoint, and the whole thing is a single small binary you can audit end-to-end. If your network policy says the only thing your machine may talk to is Ollama, Raven is the agent loop that still works.
+Raven is built for exactly that case. It is a **minimal harness with zero telemetry**: no usage tracking, no phone-home calls, no managed cloud auth, no MCP marketplace. Everything runs against your local (or cloud) endpoint, and the whole thing is a single small binary you can audit end-to-end. If your network policy says the only thing your machine may talk to is Ollama, Raven is the agent loop that still works.
 
 That constraint is the design center, not an afterthought — it's why the feature set looks the way it does (see the table below) and why the out-of-scope list is explicit.
 
@@ -23,11 +23,14 @@ That constraint is the design center, not an afterthought — it's why the featu
 | Streaming agent loop (OpenAI-compatible `/v1/chat/completions`) | MCP server marketplace |
 | 22 tools: `list_dir`, `read_file`, `search_replace`, `write_file`, `grep`, `run_shell`, `search_code`, `todo_write`, `memory_update`, `memory_search`, `git_status`, `git_diff`, `git_log`, `git_commit`, `apply_patch`, `run_tests`, `run_lint`, `ask_user`, `web_search`, `web_fetch`, `skill_search`, `skill_load` | Remote config sync |
 | Document extraction: `read_file` converts `.docx`, `.pdf`, `.xlsx`, `.odt`, `.epub`, `.pptx`, `.csv`, `.rtf`, `.ods`, `.odp`, `.doc`, `.xls`, `.ppt` and more to Markdown (via the `anydoc` engine) | Multi-model routing |
-| Workspace sandbox (path confinement + dangerous-command filter) | OS-level kernel sandbox (Landlock/seccomp) |
-| Structured plan mode (parse → approve → revise → execute) | Worktree isolation |
-| Skills (`SKILL.md` discovery + `skill_search`/`skill_load`) | Rhai workflow engine |
-| Repo symbol map (`<repo_map>` injected for large workspaces) | GUI / web frontend |
-| Parallel tool execution within a single model turn | Telemetry / usage tracking |
+| Workspace sandbox (path confinement + dangerous-command filter) | Rhai workflow engine |
+| OS-level subprocess confinement (Landlock, seccomp network block, rlimits) | GUI / web frontend |
+| Git worktree isolation (isolated branches per task) | Container/VM isolation |
+| Windows Job Object confinement (process-tree + memory limits) | Telemetry / usage tracking |
+| Structured plan mode (parse → approve → revise → execute) |  |
+| Skills (`SKILL.md` discovery + `skill_search`/`skill_load`) |  |
+| Repo symbol map (`<repo_map>` injected for large workspaces) |  |
+| Parallel tool execution within a single model turn |  |
 | Pure-Rust token estimator for context-window management |  |
 | Context-window inference + automatic compaction (tool-result pruning) |  |
 | JSONL session persistence (`--resume`, `--list-sessions`) |  |
@@ -230,9 +233,9 @@ The `run_shell` tool uses two complementary filters, neither of which is a secur
 
 1. **Denylist** — a regex that blocks obviously destructive patterns (recursive root deletes, fork bombs, `curl | sh`, etc.). This is a **best-effort guard**, not a security boundary. A denylist is inherently incomplete — it can always be bypassed (e.g. `rm -rf ~` is not blocked even though `rm -rf /` is).
 
-2. **Allowlist** — a regex that matches known-safe development commands (`cargo`, `git`, `npm`, `ls`, `grep`, etc.). When `confirm_shell` is enabled (the default, non-`--yolo` path), commands matching the allowlist run without a confirmation prompt. Anything outside the allowlist requires explicit user approval.
+2. **Allowlist** — a regex that matches known-safe development commands (`cargo`, `git`, `npm`, `ls`, `grep`, etc.). When `confirm_shell` is enabled (the default, non-`--yolo` path), commands matching the allowlist run without a confirmation prompt. Anything outside the allowlist requires explicit user approval. Commands whose first token is allowlisted and contain no shell metacharacters run via **direct exec** (no `sh -c`), removing the shell-injection surface for the common case.
 
-The `--yolo` flag disables confirmation entirely, but the denylist still applies as a last-resort filter. Neither mechanism replaces OS-level sandboxing (Landlock/seccomp), which is intentionally out of scope.
+The `--yolo` flag disables confirmation entirely, but the denylist still applies as a last-resort filter. In addition to these filters, confined subprocesses run under OS-level sandboxing: **Landlock** (filesystem confinement) and **seccomp** (network-block) on Linux, plus **resource limits** (CPU / file size / fds) on Linux + macOS, and **Job Object** confinement on Windows. See [`docs/security.md`](docs/security.md) for the full threat model.
 
 ---
 

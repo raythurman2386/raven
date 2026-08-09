@@ -71,7 +71,7 @@ CLI (main.rs)
 ### Rust
 
 - **Rust 2021 edition.** Target MSRV: 1.88+ (pinned in `rust-toolchain.toml`).
-- Keep the binary small and dependency-light. No MCP, no kernel sandbox.
+- Keep the binary small and dependency-light. No MCP, no telemetry.
 - Every public struct, enum, and fn should have a doc comment.
 - `cargo doc --no-deps` must build with no warnings.
 - `cargo build` must build with no warnings.
