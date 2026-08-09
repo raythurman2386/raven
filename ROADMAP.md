@@ -23,7 +23,7 @@ cross-agent research (Aider/Goose/Cline/Continue).
 
 ---
 
-## Current State (audited 2026-08-06)
+## Current State (audited 2026-08-09)
 
 **Tools (22):** list_dir, read_file, search_replace, write_file, grep, run_shell,
 search_code, todo_write, memory_update, memory_search, git_status, git_diff,
@@ -36,7 +36,7 @@ web_fetch, skill_search, skill_load. Plus `exit_plan_mode` signal in plan toolse
 - Phase-timing telemetry (`RUST_LOG=info`: pre_http_ms / send_http_ms / stream_ms).
 - Plan mode with model-driven auto-exit + read-only plan toolset (`src/plan.rs`, `src/agent.rs`).
 - `/stop` + mid-task steering, `/model`, slash-command registry (`src/commands.rs`).
-- TUI: streaming tail-patch, ravenwood theme, wrapped multi-line input (`src/tui/`).
+- TUI: streaming tail-patch, ravenwood theme, wrapped multi-line input, markdown rendering (`src/tui/`).
 - Session persistence (atomic, `messages.jsonl` + `summary.json`), sub-agent `run_parallel`.
 - Compaction: tool-result pruning + truncated-excerpt summary.
 

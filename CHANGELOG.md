@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-08-09
+
 ### Added
 
 - **Markdown rendering in the TUI** — assistant output now renders as styled
@@ -18,6 +20,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   line (previously only the newest was shown); only the newest active call
   still glimmers with a spinner. The tool's output is not dumped to the log —
   the call line alone is shown, matching Hermes' lean tool-call display.
+
+### Fixed
+
+- **`/model` left model-derived values stale** — the handler only updated
+  `settings.model`, `context_window` (via the name heuristic), and
+  `max_tokens`. It now fetches the live Ollama `/api/show` context window
+  (falling back to the heuristic when unreachable), recomputes the
+  `compact_at` threshold, refreshes the two static header blocks in place, and
+  persists the new model to the session so a resume shows it.
 
 ## [0.1.5] - 2026-08-09
 
@@ -136,7 +147,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Ratatui 0.30, crossterm 0.29.
 
-[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/raythurman2386/raven/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/raythurman2386/raven/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/raythurman2386/raven/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/raythurman2386/raven/compare/v0.1.2...v0.1.3
