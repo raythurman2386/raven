@@ -817,10 +817,30 @@ impl Agent {
                     }
                 }
 
-                handles.push(tokio::task::spawn_blocking(move || {
-                    let result = dispatch(&sandbox, &name, &args);
-                    (id, name, result, cache_key)
-                }));
+                if matches!(
+                    name.as_str(),
+                    "write_file" | "search_replace" | "apply_patch"
+                ) {
+                    // Serialize file-mutating tools: dispatch, await, and record
+                    // the result inline so two edits to the same file apply in
+                    // call order instead of racing (issue #111).
+                    let dispatch_name = name.clone();
+                    let dispatch_result: Result<String, ToolError> =
+                        tokio::task::spawn_blocking(move || {
+                            dispatch(&sandbox, &dispatch_name, &args)
+                        })
+                        .await
+                        .unwrap_or_else(|e| {
+                            Err(ToolError::Other(format!("Tool error: join failed: {e}")))
+                        });
+                    self.record_tool_result(&tx, id, name, cache_key, dispatch_result)
+                        .await;
+                } else {
+                    handles.push(tokio::task::spawn_blocking(move || {
+                        let result = dispatch(&sandbox, &name, &args);
+                        (id, name, result, cache_key)
+                    }));
+                }
             }
 
             for h in handles {
@@ -828,98 +848,12 @@ impl Agent {
                     (
                         String::new(),
                         "unknown".into(),
-                        Err(ToolError::Other(format!("Tool error: join failed: {}", e))),
+                        Err(ToolError::Other(format!("Tool error: join failed: {e}"))),
                         String::new(),
                     )
                 });
-                let result = match dispatch_result {
-                    Ok(s) => {
-                        if s.starts_with("Error:") || s.starts_with("Tool error:") {
-                            let failure_key = (name.clone(), cache_key.clone());
-                            if self.consecutive_failure_key.as_ref() == Some(&failure_key) {
-                                self.consecutive_failure_count += 1;
-                            } else {
-                                self.consecutive_failure_key = Some(failure_key);
-                                self.consecutive_failure_count = 1;
-                            }
-                            if self.consecutive_failure_count >= 3 {
-                                self.pending_repeated_failure = Some(
-                                    "Your last tool call failed with the same error 3+ times in a row. \
-                                     Do NOT retry the same call. Try a different approach — read the \
-                                     file first, use a different tool, or explain the problem to the user."
-                                        .into(),
-                                );
-                            }
-                        } else {
-                            self.consecutive_failure_key = None;
-                            self.consecutive_failure_count = 0;
-                        }
-                        s
-                    }
-                    Err(e) => {
-                        if e.is_transient() {
-                            tracing::warn!("Transient tool error (retryable): {e}");
-                        } else {
-                            tracing::error!("Tool error: {e}");
-                        }
-                        // Surface the retry guidance so the model can act on
-                        // the classification: a transient error (I/O, timeout,
-                        // permission) may be worth retrying once; a
-                        // deterministic error will not succeed on retry.
-                        let retry_hint = if e.is_transient() {
-                            " This may be transient; a single retry is reasonable."
-                        } else {
-                            " This is a deterministic error; do not retry the same call — adjust the inputs or use a different approach."
-                        };
-                        let msg = format!("Tool error: {e}{retry_hint}");
-                        let failure_key = (name.clone(), cache_key.clone());
-                        if self.consecutive_failure_key.as_ref() == Some(&failure_key) {
-                            self.consecutive_failure_count += 1;
-                        } else {
-                            self.consecutive_failure_key = Some(failure_key);
-                            self.consecutive_failure_count = 1;
-                        }
-                        if self.consecutive_failure_count >= 3 {
-                            self.pending_repeated_failure = Some(
-                                "Your last tool call failed with the same error 3+ times in a row. \
-                                 Do NOT retry the same call. Try a different approach — read the \
-                                 file first, use a different tool, or explain the problem to the user."
-                                    .into(),
-                            );
-                        }
-                        msg
-                    }
-                };
-                // Cache read-only results
-                let is_read_only = matches!(
-                    name.as_str(),
-                    "list_dir"
-                        | "read_file"
-                        | "grep"
-                        | "search_code"
-                        | "git_status"
-                        | "git_diff"
-                        | "git_log"
-                        | "skill_search"
-                        | "skill_load"
-                        | "memory_search"
-                );
-                if is_read_only && !cache_key.is_empty() {
-                    self.tool_cache.insert(cache_key, result.clone());
-                }
-                let preview: String = result.chars().take(600).collect();
-                let _ = tx
-                    .send(AgentEvent::ToolEnd {
-                        name: name.clone(),
-                        preview,
-                    })
+                self.record_tool_result(&tx, id, name, cache_key, dispatch_result)
                     .await;
-                self.messages.push(ChatMessage {
-                    role: "tool".into(),
-                    content: Some(result),
-                    tool_calls: None,
-                    tool_call_id: Some(id),
-                });
             }
 
             // Plan progress: mark the current step Completed and advance to
@@ -961,6 +895,106 @@ impl Agent {
         // resumes from the summary rather than cold-starting the task.
         self.finish_with_summary(&tx).await?;
         Ok(())
+    }
+
+    /// Record a single tool-call result: consecutive-failure tracking, read-only
+    /// result caching, the `ToolEnd` event, and the `tool` ChatMessage push.
+    ///
+    /// Called for both serially-dispatched (file-mutating) tools and
+    /// parallel-dispatched (read-only) tools so both paths share identical
+    /// result bookkeeping.
+    async fn record_tool_result(
+        &mut self,
+        tx: &mpsc::Sender<AgentEvent>,
+        id: String,
+        name: String,
+        cache_key: String,
+        dispatch_result: Result<String, ToolError>,
+    ) {
+        let result = match dispatch_result {
+            Ok(s) => {
+                if s.starts_with("Error:") || s.starts_with("Tool error:") {
+                    let failure_key = (name.clone(), cache_key.clone());
+                    if self.consecutive_failure_key.as_ref() == Some(&failure_key) {
+                        self.consecutive_failure_count += 1;
+                    } else {
+                        self.consecutive_failure_key = Some(failure_key);
+                        self.consecutive_failure_count = 1;
+                    }
+                    if self.consecutive_failure_count >= 3 {
+                        self.pending_repeated_failure = Some(
+                            "Your last tool call failed with the same error 3+ times in a row. \
+                             Do NOT retry the same call. Try a different approach — read the \
+                             file first, use a different tool, or explain the problem to the user."
+                                .into(),
+                        );
+                    }
+                } else {
+                    self.consecutive_failure_key = None;
+                    self.consecutive_failure_count = 0;
+                }
+                s
+            }
+            Err(e) => {
+                if e.is_transient() {
+                    tracing::warn!("Transient tool error (retryable): {e}");
+                } else {
+                    tracing::error!("Tool error: {e}");
+                }
+                let retry_hint = if e.is_transient() {
+                    " This may be transient; a single retry is reasonable."
+                } else {
+                    " This is a deterministic error; do not retry the same call — adjust the inputs or use a different approach."
+                };
+                let msg = format!("Tool error: {e}{retry_hint}");
+                let failure_key = (name.clone(), cache_key.clone());
+                if self.consecutive_failure_key.as_ref() == Some(&failure_key) {
+                    self.consecutive_failure_count += 1;
+                } else {
+                    self.consecutive_failure_key = Some(failure_key);
+                    self.consecutive_failure_count = 1;
+                }
+                if self.consecutive_failure_count >= 3 {
+                    self.pending_repeated_failure = Some(
+                        "Your last tool call failed with the same error 3+ times in a row. \
+                         Do NOT retry the same call. Try a different approach — read the \
+                         file first, use a different tool, or explain the problem to the user."
+                            .into(),
+                    );
+                }
+                msg
+            }
+        };
+        // Cache read-only results
+        let is_read_only = matches!(
+            name.as_str(),
+            "list_dir"
+                | "read_file"
+                | "grep"
+                | "search_code"
+                | "git_status"
+                | "git_diff"
+                | "git_log"
+                | "skill_search"
+                | "skill_load"
+                | "memory_search"
+        );
+        if is_read_only && !cache_key.is_empty() {
+            self.tool_cache.insert(cache_key, result.clone());
+        }
+        let preview: String = result.chars().take(600).collect();
+        let _ = tx
+            .send(AgentEvent::ToolEnd {
+                name: name.clone(),
+                preview,
+            })
+            .await;
+        self.messages.push(ChatMessage {
+            role: "tool".into(),
+            content: Some(result),
+            tool_calls: None,
+            tool_call_id: Some(id),
+        });
     }
 
     /// Gracefully wrap up a turn that exhausted its iteration budget.
@@ -2617,5 +2651,37 @@ mod tests {
         assert_eq!(last.content.as_deref(), Some("Here is the report."));
         // blank_attempts was incremented past zero, proving the stall was handled.
         assert!(agent.blank_attempts > 0);
+    }
+
+    #[tokio::test]
+    async fn same_file_edits_in_one_turn_are_not_lost() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), "foo\n").unwrap();
+        // Round 1: two search_replace calls in ONE turn against a.txt.
+        let edit_round = concat!(
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_a\",\"type\":\"function\",\"function\":{\"name\":\"search_replace\",\"arguments\":\"{\\\"path\\\":\\\"a.txt\\\",\\\"old_string\\\":\\\"foo\\\",\\\"new_string\\\":\\\"bar\\\"}\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":1,\"id\":\"call_b\",\"type\":\"function\",\"function\":{\"name\":\"search_replace\",\"arguments\":\"{\\\"path\\\":\\\"a.txt\\\",\\\"old_string\\\":\\\"bar\\\",\\\"new_string\\\":\\\"baz\\\"}\"}}]}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        // Round 2: the model's final text answer.
+        let final_round = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let (base, _h) = spawn_mock(vec![edit_round, final_round]).await;
+        let mut agent = Agent::new(settings_for(tmp.path(), &base)).unwrap();
+        let (tx, mut rx) = mpsc::channel(256);
+        agent.run("edit a.txt", tx).await.unwrap();
+        while let Ok(_ev) = rx.try_recv() {}
+        // Both edits must have applied in order: foo -> bar -> baz.
+        let content = std::fs::read_to_string(tmp.path().join("a.txt")).unwrap();
+        assert!(
+            content.contains("baz"),
+            "final content should contain 'baz': {content}"
+        );
+        assert!(!content.contains("foo"), "foo should be gone: {content}");
+        // The turn ended with the final text answer.
+        let last = agent.messages.last().unwrap();
+        assert_eq!(last.content.as_deref(), Some("done"));
     }
 }
