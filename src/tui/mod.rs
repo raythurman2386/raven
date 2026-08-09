@@ -47,6 +47,7 @@ use crate::plan::{self, AgentState};
 use crate::session::{Session, SessionStore};
 
 mod blocks;
+mod markdown;
 mod render;
 mod selection;
 mod status;

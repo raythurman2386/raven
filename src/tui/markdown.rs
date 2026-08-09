@@ -16,7 +16,7 @@ use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use super::super::Theme;
+use super::Theme;
 
 /// Inline style flags accumulated while walking a span's children.
 #[derive(Clone, Copy, Default)]

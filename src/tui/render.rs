@@ -10,11 +10,9 @@ use ratatui::text::{Line, Span};
 use crate::agent::ChatMessage;
 
 use super::blocks::{AssistantBlock, BlockKind, SystemBlock, ToolBlock, UserBlock};
+use super::markdown;
 use super::status::spinner_frame;
 use super::Theme;
-
-#[path = "markdown.rs"]
-mod markdown;
 
 /// Render every block into display lines, returning the count of trailing
 /// lines owned by the *last* assistant block (0 if the log ends on any other
