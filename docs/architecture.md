@@ -160,7 +160,7 @@ Each `dispatch` is sync, so `spawn_blocking` moves it off the async runtime. Res
 
 The TUI (`src/tui/`) is intentionally minimal:
 
-- **Plan approval is model-driven with a fallback**: during the plan turn the model may call `exit_plan_mode`; when it does the TUI auto-executes the plan without a prompt. If the model finishes without that signal, the TUI sets `plan_pending` and waits for `yes`/`y`/`approve`/`go`/`execute`/`ok` to execute, or any other text to revise.
+- **Plan approval is human-gated**: plan mode always waits for the user to approve/revise/abort before executing. The TUI sets `plan_pending` and waits for `yes`/`y`/`approve`/`go`/`execute`/`ok` to execute, or any other text to revise.
 - **No multi-line input**: the input box is single-line only.
 
 Assistant output is rendered as markdown (`src/tui/markdown.rs`, via

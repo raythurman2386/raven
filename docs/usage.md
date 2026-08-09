@@ -62,8 +62,7 @@ Plan mode asks the model to propose a plan first, then proceeds to execution.
 # Plan mode is ON by default
 raven -p "Refactor the auth module"
 
-# The model proposes a plan. If it signals completion (exit_plan_mode), the
-# harness auto-executes it without prompting. Otherwise you see:
+# The model proposes a plan, then you approve it:
 #   ── Plan ready. Approve? [Y/n] ──
 # Press Enter (or y/yes/ok) to execute; anything else aborts.
 
@@ -76,14 +75,12 @@ raven --yolo -p "Write unit tests for auth"
 
 `--yolo` implies `--mode agent` (no approval step).
 
-### Model-driven auto-execution
+### Plan approval
 
-Plan mode transitions out automatically (Grok Build–style): during the
-plan-proposal turn the agent may call the `exit_plan_mode` tool to signal its
-plan is complete. When it does, the harness parses the plan, prints it, and
-immediately proceeds to execution — no human approval prompt blocks the flow.
-If the model finishes without calling `exit_plan_mode` (some models ignore
-tool calls), the harness falls back to prompting you to approve/revise/abort.
+Plan mode always requires your approval before execution. When the plan turn
+finishes, the harness parses and prints the plan, then prompts you to
+approve/revise/abort. Type `y`/`yes`/`ok` (or press Enter) to execute, `n` to
+abort, or any other text to revise the plan.
 
 ### Plan-mode tool restriction
 
@@ -136,8 +133,11 @@ raven --tui    # force TUI even with a task
 | Key | Action |
 |---|---|
 | Type + `Enter` | Submit a task |
-| `Backspace` | Edit input |
-| `Shift+Tab` | Cycle mode: plan → agent → chat |
+| `Left` / `Right` | Move the edit cursor |
+| `Home` / `End` | Jump to start / end of input |
+| `Tab` | Cycle slash-command autocomplete (accept if one match) |
+| `Shift+Tab` | Cycle completion backward, or cycle mode when no completion |
+| `Backspace` | Delete the char before the cursor |
 | `Ctrl+C` / `Esc` | Quit |
 
 Assistant responses render as markdown — headings, bold/italic, code blocks,

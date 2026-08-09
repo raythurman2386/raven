@@ -16,6 +16,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `/theme <name>` (or `/theme` to list), which recolors the whole scrollback
   instantly. The theme is also configurable via `theme` in `config.toml` and a
   `--theme` CLI flag (precedence: CLI > config > default `ravenwood`).
+- **Cursor-based input editing** — the chat box now tracks an edit cursor.
+  `Left`/`Right` move it, `Home`/`End` jump to the start/end, and text is
+  inserted/deleted at the cursor instead of only at the end.
+- **Slash-command autocomplete** — typing `/` shows a popup of matching
+  commands (names + aliases); `Tab` cycles the highlight (accepting when one
+  match) and `Shift+Tab` cycles backward. `/theme <partial>` completes theme
+  names. The popup renders between the status strip and the input box.
+
+### Removed
+
+- **Model-driven auto-execution** — the `exit_plan_mode` tool, the
+  `AgentEvent::PlanReady` event, and all auto-execute branches (TUI + headless)
+  are removed. Plan mode now always requires human approval before execution,
+  which also eliminates the auto-execute hang where the plan agent kept running
+  after signalling readiness.
+
+### Fixed
+
+- **Mouse hit-testing off by one** — the log block has `LEFT|RIGHT|BOTTOM`
+  borders (no top), but both `draw_ui` and `current_display` subtracted 2 rows
+  for borders, making the viewport 1 row too short. The last content row was
+  never rendered and mouse selection/scroll couldn't reach it. Both now
+  subtract 1.
 
 ## [0.1.7] - 2026-08-09
 

@@ -28,13 +28,13 @@ cross-agent research (Aider/Goose/Cline/Continue).
 **Tools (22):** list_dir, read_file, search_replace, write_file, grep, run_shell,
 search_code, todo_write, memory_update, memory_search, git_status, git_diff,
 git_log, git_commit, apply_patch, run_tests, run_lint, ask_user, web_search,
-web_fetch, skill_search, skill_load. Plus `exit_plan_mode` signal in plan toolset.
+web_fetch, skill_search, skill_load.
 (`src/tools/` module: definitions.rs, dispatch.rs, document.rs, git.rs, mod.rs, patch.rs, sandbox.rs, windows.rs)
 
 **Already production-grade (done):**
 - Linear token estimator (`src/tokenizer.rs`) — O(n), was O(n²) perf blocker.
 - Phase-timing telemetry (`RUST_LOG=info`: pre_http_ms / send_http_ms / stream_ms).
-- Plan mode with model-driven auto-exit + read-only plan toolset (`src/plan.rs`, `src/agent/`).
+- Plan mode with human-gated approval + read-only plan toolset (`src/plan.rs`, `src/agent/`).
 - `/stop` + mid-task steering, `/model`, slash-command registry (`src/commands.rs`).
 - TUI: streaming tail-patch, ravenwood theme, wrapped multi-line input, markdown rendering (`src/tui/`).
 - Session persistence (atomic, `messages.jsonl` + `summary.json`), sub-agent `run_parallel`.
