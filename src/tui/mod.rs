@@ -422,12 +422,14 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                         }
                         KeyCode::Right => {
                             if !state.running || state.pending_question.is_some() {
-                                if let Some(next) = state.input[state.cursor..]
-                                    .char_indices()
-                                    .nth(1)
-                                    .map(|(i, _)| state.cursor + i)
-                                {
-                                    state.cursor = next;
+                                // Move right by one char (byte-safe). Advance
+                                // past the char at the cursor, including the
+                                // last char so the cursor can reach the true
+                                // end of the line. (char_indices().nth(1)
+                                // returns None when only one char remains,
+                                // stranding the cursor before the last char.)
+                                if let Some(c) = state.input[state.cursor..].chars().next() {
+                                    state.cursor += c.len_utf8();
                                 }
                             }
                         }
