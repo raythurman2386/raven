@@ -417,9 +417,7 @@ impl Sandbox {
         if let Some(parent) = p.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let rel = p
-            .strip_prefix(&self.workspace)
-            .unwrap_or(p.as_path())
+        let rel = normalize_path(Path::new(path))
             .to_string_lossy()
             .into_owned();
         let mut file = self.open_beneath(
@@ -459,9 +457,7 @@ impl Sandbox {
             if let Some(parent) = p.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            let rel = p
-                .strip_prefix(&self.workspace)
-                .unwrap_or(p.as_path())
+            let rel = normalize_path(Path::new(path))
                 .to_string_lossy()
                 .into_owned();
             let mut file = self.open_beneath(
