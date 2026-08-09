@@ -47,6 +47,7 @@ use crate::plan::{self, AgentState};
 use crate::session::{Session, SessionStore};
 
 mod blocks;
+mod completion;
 mod markdown;
 mod render;
 mod selection;
@@ -56,6 +57,7 @@ mod theme;
 pub use theme::Theme;
 
 use blocks::{AssistantBlock, BlockKind, ErrorBlock, SystemBlock, ToolBlock, UserBlock};
+use completion::{apply as apply_completion, candidates_for, Completion};
 use render::{message_to_block, prewrap_visible, render_assistant_lines, render_blocks};
 use selection::{
     apply_selection_highlight, copy_to_clipboard, selection_text, word_bounds, DisplayPos,
@@ -74,6 +76,11 @@ struct TuiState {
     cached_est_tokens: usize,
     messages_dirty: bool,
     input: String,
+    /// Byte index of the edit cursor within `input`. Text is inserted/removed
+    /// at this position; `Left`/`Right`/`Home`/`End` move it.
+    cursor: usize,
+    /// Active slash-command autocomplete, if any.
+    completion: Option<Completion>,
     status: String,
     plan_pending: bool,
     plan_preview: Vec<String>,
@@ -128,6 +135,8 @@ impl TuiState {
             cached_est_tokens: 0,
             messages_dirty: false,
             input: String::new(),
+            cursor: 0,
+            completion: None,
             status: "ready".to_string(),
             plan_pending: false,
             plan_preview: Vec::new(),
@@ -259,6 +268,16 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
 
     let (tx, mut rx) = mpsc::channel::<AgentEvent>(128);
 
+    // Argument-completion candidates per command. `/theme` completes from the
+    // theme registry; other commands have no argument candidates.
+    let arg_candidates = |cmd: &str| -> Vec<String> {
+        if cmd == "theme" {
+            Theme::all().iter().map(|(n, _)| n.to_string()).collect()
+        } else {
+            Vec::new()
+        }
+    };
+
     loop {
         if state.blocks.len() > MAX_LOG_ENTRIES {
             let drop = state.blocks.len() - MAX_LOG_ENTRIES;
@@ -327,9 +346,20 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                             break
                         }
                         KeyCode::BackTab => {
-                            let m = state.cycle_mode();
-                            state.push_system(format!("mode: {}", m.label()));
-                            state.log_dirty = true;
+                            if !state.running
+                                && state.pending_question.is_none()
+                                && state.completion.is_some()
+                            {
+                                // Cycle completion backward; fall through to
+                                // mode-cycle when no completion is active.
+                                if let Some(comp) = state.completion.as_mut() {
+                                    comp.prev();
+                                }
+                            } else {
+                                let m = state.cycle_mode();
+                                state.push_system(format!("mode: {}", m.label()));
+                                state.log_dirty = true;
+                            }
                         }
                         KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             let _ = store.save_all_messages(&session, &state.session_messages);
@@ -378,17 +408,77 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                                 state.auto_scroll = true;
                             }
                         }
+                        KeyCode::Left => {
+                            if !state.running || state.pending_question.is_some() {
+                                // Move cursor left by one char (byte-safe).
+                                if let Some(prev) = state.input[..state.cursor]
+                                    .char_indices()
+                                    .next_back()
+                                    .map(|(i, _)| i)
+                                {
+                                    state.cursor = prev;
+                                }
+                            }
+                        }
+                        KeyCode::Right => {
+                            if !state.running || state.pending_question.is_some() {
+                                if let Some(next) = state.input[state.cursor..]
+                                    .char_indices()
+                                    .nth(1)
+                                    .map(|(i, _)| state.cursor + i)
+                                {
+                                    state.cursor = next;
+                                }
+                            }
+                        }
+                        KeyCode::Home => {
+                            if !state.running || state.pending_question.is_some() {
+                                state.cursor = 0;
+                            }
+                        }
+                        KeyCode::End => {
+                            if !state.running || state.pending_question.is_some() {
+                                state.cursor = state.input.len();
+                            }
+                        }
+                        KeyCode::Tab => {
+                            if !state.running || state.pending_question.is_some() {
+                                if let Some(comp) = state.completion.as_mut() {
+                                    if comp.candidates.len() == 1 {
+                                        // Single candidate: accept it immediately.
+                                        let cand = comp.candidates[0].clone();
+                                        let (new_input, new_cursor) =
+                                            apply_completion(&state.input, comp, &cand);
+                                        state.input = new_input;
+                                        state.cursor = new_cursor;
+                                        state.completion = None;
+                                    } else {
+                                        comp.next();
+                                    }
+                                }
+                            }
+                        }
                         KeyCode::Char(c) => {
                             if (!state.running || state.pending_question.is_some())
                                 && state.input.chars().count() < MAX_INPUT_CHARS
                             {
-                                state.input.push(c);
+                                state.input.insert(state.cursor, c);
+                                state.cursor += c.len_utf8();
                             }
+                            state.completion = candidates_for(&state.input, &arg_candidates);
                         }
                         KeyCode::Backspace => {
                             if !state.running || state.pending_question.is_some() {
-                                state.input.pop();
+                                if let Some(prev) = state.input[..state.cursor]
+                                    .char_indices()
+                                    .next_back()
+                                    .map(|(i, _)| i)
+                                {
+                                    state.input.remove(prev);
+                                    state.cursor = prev;
+                                }
                             }
+                            state.completion = candidates_for(&state.input, &arg_candidates);
                         }
                         KeyCode::Enter => {
                             if state.input.trim().is_empty() {
@@ -396,6 +486,8 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                             }
                             let text = state.input.trim().to_string();
                             state.input.clear();
+                            state.cursor = 0;
+                            state.completion = None;
                             state.scroll = 0;
                             state.auto_scroll = true;
                             state.turn_tool_count = 0;
@@ -552,58 +644,6 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                     );
                     state.log_dirty = true;
                 }
-                AgentEvent::PlanReady => {
-                    if let Some(handle) = state.task_handle.take() {
-                        if let Ok(Ok(msgs)) = handle.await {
-                            state.session_messages = msgs;
-                            state.messages_dirty = true;
-                            let _ = store.save_all_messages(&session, &state.session_messages);
-                            let _ = store.update_summary(&mut session, None);
-                        }
-                    }
-
-                    if state.mode.plans_first() && state.agent_state == AgentState::Planning {
-                        let plan = plan::parse_plan(&state.assistant_text);
-                        state.active_plan = Some(plan.clone());
-                        state.plan_preview = plan::format_plan(&plan)
-                            .lines()
-                            .map(|s| s.to_string())
-                            .collect();
-                        state.push_system(String::new());
-                        state.push_system("plan ready — auto-executing");
-                        state.log_dirty = true;
-
-                        state.running = true;
-                        state.agent_state = AgentState::Executing;
-                        state.status = "executing plan…".into();
-                        let exec_prompt = plan::EXECUTE_PROMPT.to_string();
-                        let _ = store.append_message(
-                            &session,
-                            &ChatMessage {
-                                role: "user".into(),
-                                content: Some(exec_prompt.clone()),
-                                tool_calls: None,
-                                tool_call_id: None,
-                            },
-                        );
-                        state.assistant_text.clear();
-                        let mut agent =
-                            Agent::with_messages(settings.clone(), state.session_messages.clone())?
-                                .with_plan(plan);
-                        let tx_exec = tx.clone();
-                        state.task_handle = Some(tokio::spawn(async move {
-                            agent.run(&exec_prompt, tx_exec).await?;
-                            Ok(agent.messages)
-                        }));
-                        state.plan_preview.clear();
-                    } else {
-                        state.plan_preview.clear();
-                        state.status = "ready".into();
-                        state.agent_state = AgentState::Idle;
-                        state.running = false;
-                        state.assistant_text.clear();
-                    }
-                }
                 AgentEvent::PlanProgress(plan) => {
                     state.plan_preview = plan::format_plan(&plan)
                         .lines()
@@ -736,6 +776,12 @@ fn compute_layout(area: Rect, state: &TuiState) -> Vec<Rect> {
         0
     };
     let input_h = input_box_height(&state.input, area.width);
+    // Completion popup sits between the status strip and the input box.
+    let completion_h = if let Some(c) = &state.completion {
+        (c.candidates.len() as u16).clamp(1, 6).saturating_add(2)
+    } else {
+        0
+    };
     Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -743,6 +789,7 @@ fn compute_layout(area: Rect, state: &TuiState) -> Vec<Rect> {
             Constraint::Min(5),
             Constraint::Length(plan_h),
             Constraint::Length(1),
+            Constraint::Length(completion_h),
             Constraint::Length(input_h),
         ])
         .split(area)
@@ -797,7 +844,9 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState)
 
     // Log
     let content_width = (chunks[1].width.saturating_sub(4)) as usize;
-    let log_h = chunks[1].height.saturating_sub(2) as usize;
+    // The log block has LEFT|RIGHT|BOTTOM borders (no top), so only the
+    // bottom border consumes a content row.
+    let log_h = chunks[1].height.saturating_sub(1) as usize;
     // Virtualized: pre-wrap only the visible window of the log, not the whole
     // history. `prewrap_visible` returns the visible lines (already sliced to
     // the viewport) plus the scroll offset. The offset is used only for mouse
@@ -903,6 +952,33 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState)
         chunks[3],
     );
 
+    // Completion popup (between status strip and input box).
+    if let Some(comp) = &state.completion {
+        let lines: Vec<Line> = comp
+            .candidates
+            .iter()
+            .enumerate()
+            .map(|(i, cand)| {
+                let style = if i == comp.selected {
+                    Style::default()
+                        .fg(theme.status_bg)
+                        .bg(theme.accent)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(theme.fg)
+                };
+                Line::from(Span::styled(cand.clone(), style))
+            })
+            .collect();
+        let popup = Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.accent))
+                .title(Span::styled(" tab ", Style::default().fg(theme.dim))),
+        );
+        f.render_widget(popup, chunks[4]);
+    }
+
     // Input
     let title = if let Some(q) = &state.pending_question_text {
         format!(" answer: {q} ")
@@ -943,9 +1019,9 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState)
             }))
             .title(Span::styled(title, Style::default().fg(theme.dim))),
     );
-    f.render_widget(input_w, chunks[4]);
+    f.render_widget(input_w, chunks[5]);
 
-    let (cx, cy) = input_cursor_position(&state.input, prompt, chunks[4]);
+    let (cx, cy) = input_cursor_position(&state.input, prompt, state.cursor, chunks[5]);
     f.set_cursor_position((cx, cy));
 }
 
@@ -988,23 +1064,23 @@ fn input_content_width(term_width: u16) -> usize {
 fn input_cursor_position(
     input: &str,
     prompt: &str,
+    cursor: usize,
     input_rect: ratatui::layout::Rect,
 ) -> (u16, u16) {
     let content_width = input_content_width(input_rect.width);
-    let combined = format!("{prompt}{input}");
+    // Walk the combined prompt+input up to the cursor byte offset.
     let mut col = 0usize;
     let mut row = 0usize;
-    for c in combined.chars() {
+    for c in prompt.chars().chain(input[..cursor].chars()) {
         if c == '\n' {
             row += 1;
             col = 0;
-            continue;
-        }
-        if col >= content_width {
+        } else if col >= content_width {
             row += 1;
-            col = 0;
+            col = 1;
+        } else {
+            col += 1;
         }
-        col += 1;
     }
     // Clamp the cursor to the last visible row of the box so a long input
     // doesn't push the cursor off-screen (the box stops growing at
@@ -1077,7 +1153,9 @@ fn mouse_to_display_pos(m: &MouseEvent, log_rect: Rect) -> Option<DisplayPos> {
 /// draw path so hit-testing agrees.
 fn current_display(state: &TuiState, log_rect: Rect) -> (Vec<Line<'static>>, u16) {
     let content_width = (log_rect.width.saturating_sub(4)) as usize;
-    let log_h = log_rect.height.saturating_sub(2) as usize;
+    // Match `draw_ui`: the log block has LEFT|RIGHT|BOTTOM borders (no top),
+    // so only the bottom border consumes a content row.
+    let log_h = log_rect.height.saturating_sub(1) as usize;
     prewrap_visible(
         &state.cached_log_lines,
         content_width.max(1),
@@ -1590,7 +1668,7 @@ mod tests {
         // to the last visible row, not push it off-screen.
         let rect = ratatui::layout::Rect::new(0, 20, 40, MAX_INPUT_BOX_HEIGHT + 2);
         let long = "x".repeat(1000);
-        let (_x, y) = input_cursor_position(&long, "❯ ", rect);
+        let (_x, y) = input_cursor_position(&long, "❯ ", long.len(), rect);
         assert!(
             y < rect.bottom(),
             "cursor y should stay within the box, got {y} (box bottom {})",
@@ -1631,7 +1709,7 @@ mod tests {
     #[test]
     fn input_cursor_position_at_end_of_input() {
         let rect = ratatui::layout::Rect::new(0, 20, 80, 3);
-        let (x, y) = input_cursor_position("hello", "❯ ", rect);
+        let (x, y) = input_cursor_position("hello", "❯ ", 5, rect);
         assert_eq!(x, 8, "cursor x should be after prompt + input");
         assert_eq!(y, 21, "cursor y should be one row below input box top");
     }
@@ -1639,14 +1717,14 @@ mod tests {
     #[test]
     fn input_cursor_position_wraps_long_input() {
         let rect = ratatui::layout::Rect::new(0, 20, 10, 5);
-        let (_x, y) = input_cursor_position("abcdefghijkl", "❯ ", rect);
+        let (_x, y) = input_cursor_position("abcdefghijkl", "❯ ", 12, rect);
         assert!(y > 21, "cursor should wrap to next row for long input");
     }
 
     #[test]
     fn input_cursor_position_empty_input() {
         let rect = ratatui::layout::Rect::new(0, 20, 80, 3);
-        let (x, y) = input_cursor_position("", "❯ ", rect);
+        let (x, y) = input_cursor_position("", "❯ ", 0, rect);
         assert_eq!(x, 3, "cursor x should be after prompt only");
         assert_eq!(y, 21);
     }
@@ -1855,6 +1933,8 @@ mod tests {
             cached_est_tokens: 0,
             messages_dirty: false,
             input: String::new(),
+            cursor: 0,
+            completion: None,
             status: String::new(),
             plan_pending: false,
             plan_preview: Vec::new(),
