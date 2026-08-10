@@ -1055,6 +1055,7 @@ fn apply_seccomp_network_block() {
 /// doesn't break the child.
 #[cfg(unix)]
 fn apply_os_confinement(workspace: &Path) {
+    unsafe { libc::setpgid(0, 0) };
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     apply_rlimits();
     #[cfg(target_os = "linux")]
@@ -1169,27 +1170,37 @@ pub(crate) fn cap_output(s: String) -> String {
 ///
 /// Returns `Some((exit_status, stdout, stderr))` on completion, or `None` if
 /// the child did not finish within `timeout_secs` (the child is killed).
+///
+/// After the direct child exits, the child's entire process group is killed
+/// to close inherited pipe fds held by grandchildren. Without this,
+/// `read_to_end` in the reader threads may never see EOF and `join()` would
+/// block forever (issue #124).
 pub(crate) fn wait_for_child(
     child: &mut std::process::Child,
     timeout_secs: u64,
 ) -> Option<(std::process::ExitStatus, Vec<u8>, Vec<u8>)> {
+    let (stdout_tx, stdout_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    let (stderr_tx, stderr_rx) = std::sync::mpsc::channel::<Vec<u8>>();
     let stdout_handle = child.stdout.take().map(|mut out| {
+        let tx = stdout_tx;
         std::thread::spawn(move || {
             let mut buf = Vec::new();
             let _ = std::io::Read::read_to_end(&mut out, &mut buf);
-            buf
+            let _ = tx.send(buf);
         })
     });
     let stderr_handle = child.stderr.take().map(|mut err| {
+        let tx = stderr_tx;
         std::thread::spawn(move || {
             let mut buf = Vec::new();
             let _ = std::io::Read::read_to_end(&mut err, &mut buf);
-            buf
+            let _ = tx.send(buf);
         })
     });
 
     let start = std::time::Instant::now();
     let deadline = std::time::Duration::from_secs(timeout_secs);
+    let pid = child.id();
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -1197,22 +1208,87 @@ pub(crate) fn wait_for_child(
                 if start.elapsed() >= deadline {
                     let _ = child.kill();
                     let _ = child.wait();
+                    kill_process_group(pid);
+                    let _ = drain_pipes(stdout_rx, stderr_rx, start, deadline);
+                    drop(stdout_handle);
+                    drop(stderr_handle);
                     return None;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(50));
                 continue;
             }
-            Err(_) => return None,
+            Err(_) => {
+                kill_process_group(pid);
+                let _ = drain_pipes(stdout_rx, stderr_rx, start, deadline);
+                drop(stdout_handle);
+                drop(stderr_handle);
+                return None;
+            }
         }
     };
 
-    let stdout = stdout_handle
-        .and_then(|h| h.join().ok())
-        .unwrap_or_default();
-    let stderr = stderr_handle
-        .and_then(|h| h.join().ok())
-        .unwrap_or_default();
+    kill_process_group(pid);
+
+    let (stdout, stderr) = drain_pipes(stdout_rx, stderr_rx, start, deadline);
+    drop(stdout_handle);
+    drop(stderr_handle);
     Some((status, stdout, stderr))
+}
+
+fn drain_pipes(
+    stdout_rx: std::sync::mpsc::Receiver<Vec<u8>>,
+    stderr_rx: std::sync::mpsc::Receiver<Vec<u8>>,
+    start: std::time::Instant,
+    deadline: std::time::Duration,
+) -> (Vec<u8>, Vec<u8>) {
+    let remaining = deadline.saturating_sub(start.elapsed());
+    let grace = std::time::Duration::from_millis(500);
+    let wait = remaining + grace;
+    let stdout = stdout_rx.recv_timeout(wait).unwrap_or_default();
+    let stderr = stderr_rx.recv_timeout(wait).unwrap_or_default();
+    (stdout, stderr)
+}
+
+fn kill_process_group(pid: u32) {
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(-(pid as i32), libc::SIGKILL);
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn wait_for_child_grandchild_pipe_does_not_hang() {
+    use std::process::Command;
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c")
+        .arg("(sleep 60 &); echo passed")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setpgid(0, 0);
+            Ok(())
+        });
+    }
+    let mut child = cmd.spawn().unwrap();
+    let start = std::time::Instant::now();
+    let result = wait_for_child(&mut child, 5)
+        .expect("child with grandchild holding pipe should return promptly");
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(4),
+        "should not hang: took {:?}",
+        start.elapsed()
+    );
+    assert_eq!(result.0.code(), Some(0));
+    assert!(
+        String::from_utf8_lossy(&result.1).contains("passed"),
+        "should drain stdout"
+    );
 }
 
 /// A running subprocess plus its OS-level confinement guard.
