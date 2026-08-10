@@ -495,14 +495,6 @@ impl Sandbox {
             if count == 0 {
                 return Ok(format!("Error: old_string not found in {}", path));
             }
-            if count > REPLACE_ALL_WARN_THRESHOLD {
-                return Ok(format!(
-                    "Warning: replace_all would match {} occurrences in {} (threshold: {}). \
-                     Provide a more specific old_string to narrow the match, \
-                     or use individual search_replace calls for targeted edits.",
-                    count, path, REPLACE_ALL_WARN_THRESHOLD
-                ));
-            }
             let new_content = content.replace(old_string, new_string);
             let mut file = self.open_beneath(
                 &rel,
@@ -511,6 +503,13 @@ impl Sandbox {
             )?;
             use std::io::Write;
             file.write_all(new_content.as_bytes())?;
+            if count > REPLACE_ALL_WARN_THRESHOLD {
+                return Ok(format!(
+                    "Replaced {} occurrence(s) in {} (warning: large count, \
+                     verify this was intended)",
+                    count, path
+                ));
+            }
             return Ok(format!("Replaced {} occurrence(s) in {}", count, path));
         }
 

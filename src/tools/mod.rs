@@ -405,12 +405,16 @@ mod tests {
         std::fs::write(tmp.path().join("file.rs"), &content).unwrap();
         let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
         let out = sb.search_replace("file.rs", "dup", "x", true).unwrap();
-        assert!(out.contains("Warning"));
-        assert!(out.contains("25"));
-        assert!(out.contains("threshold"));
+        // The write must happen even when the count exceeds the threshold —
+        // previously this returned a warning without writing, causing the
+        // agent to think the edit succeeded when nothing changed.
+        assert!(out.contains("Replaced"), "should report replacement: {out}");
+        assert!(out.contains("warning"), "should include warning: {out}");
+        assert!(out.contains("25"), "should mention count: {out}");
         assert_eq!(
             std::fs::read_to_string(tmp.path().join("file.rs")).unwrap(),
-            content
+            "x\n".repeat(25),
+            "file must be modified"
         );
     }
 
