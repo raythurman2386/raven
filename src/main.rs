@@ -6,10 +6,12 @@
 //! Inspired by the agent-harness ideas in xAI's [Grok Build](https://github.com/xai-org/grok-build);
 //! not affiliated.
 //!
-//! One binary, no cloud auth, no MCP marketplace, no kernel sandbox — just a
-//! streaming agent loop with tools, plan mode, context compaction, and parallel
-//! sub-agents, talking to any OpenAI-compatible `/v1/chat/completions` endpoint
-//! (local Ollama by default, Ollama Cloud with a Bearer token optionally).
+//! One binary, no cloud auth, no MCP marketplace — just a streaming agent loop
+//! with tools, plan mode, context compaction, and parallel sub-agents, talking
+//! to any OpenAI-compatible `/v1/chat/completions` endpoint (local Ollama by
+//! default, Ollama Cloud with a Bearer token optionally). Subprocesses are
+//! confined with Landlock, seccomp, rlimits, and openat2 (Linux) or Job
+//! Objects (Windows).
 //!
 //! ## Modules
 //!

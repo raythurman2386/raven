@@ -76,13 +76,15 @@ verify the kernel supports Landlock.
 ### 3. seccomp network block (Linux)
 
 **What it does:** Applies a seccomp-BPF filter to every subprocess that denies
-16 network syscalls (`socket`, `connect`, `sendto`, `sendmsg`, `bind`,
-`accept`, `listen`, `recvfrom`, `recvmsg`, `socketpair`, `setsockopt`,
-`getsockopt`, `shutdown`, `getpeername`, `getsockname`, `accept4`) with
-`EPERM`.
+`socket()` when the domain is `AF_INET` or `AF_INET6` with `KillProcess`
+(immediate kill, not `EPERM`). `AF_UNIX` sockets are allowed (needed by
+esbuild, vitest, git ssh helpers, etc.), and `socketpair()` is not blocked
+(it only supports `AF_UNIX` on Linux). All other network syscalls (`connect`,
+`sendto`, etc.) are allowed because no internet-facing socket can be created.
 
 **Why:** This closes the exfiltration hole. Even if the model reads a sensitive
-file, the subprocess cannot send it anywhere over the network.
+file, the subprocess cannot create an internet-facing socket to send it
+anywhere over the network.
 
 **Platforms:** Linux only (seccomp is a Linux feature). Supported arches:
 x86_64, aarch64, riscv64.
@@ -91,6 +93,9 @@ x86_64, aarch64, riscv64.
 continues without the filter. Also, the *Raven process itself* (not the
 subprocess) still has network access — the model API call goes through the
 parent process, which is not seccomp-confined.
+
+**Escape hatch:** Set `RAVEN_SANDBOX_NETWORK_BLOCK=0` to skip the filter
+entirely (e.g. if a legitimate tool needs network access).
 
 ### 4. Resource limits (`setrlimit`)
 

@@ -17,6 +17,7 @@ See the [root README quick start](../README.md#quick-start) for the full flag li
 | `RAVEN_CONTEXT_WINDOW` / `OG_CONTEXT_WINDOW` | _(inferred)_ | Override the model's context window size (tokens) |
 | `RAVEN_COMPACT_THRESHOLD` / `OG_COMPACT_THRESHOLD` | `0.75` | Fraction of usable context at which compaction triggers |
 | `RUST_LOG` | _(unset)_ | `tracing` filter (e.g. `debug`, `raven=trace`) |
+| `RAVEN_SANDBOX_NETWORK_BLOCK` | _(unset)_ | Set to `0` to skip the seccomp network block (Linux only) |
 
 ### Examples
 
