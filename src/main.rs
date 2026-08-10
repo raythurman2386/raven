@@ -253,10 +253,16 @@ async fn main() -> Result<()> {
         println!("Running {} parallel sub-agents…", tasks.len());
         let reports = run_parallel(&settings, tasks).await?;
         for r in &reports {
+            let merge_info = if r.merge_status.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", r.merge_status)
+            };
             println!(
-                "\n══ Sub-agent {} ══ ({:.1}s)\n{}\n",
+                "\n══ Sub-agent {} ══ ({:.1}s){}\n{}\n",
                 r.index,
                 r.elapsed.as_secs_f64(),
+                merge_info,
                 r.text
             );
         }

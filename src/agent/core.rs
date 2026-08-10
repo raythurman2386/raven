@@ -118,6 +118,27 @@ fn build_system_message(settings: &Settings) -> ChatMessage {
         "\n\nWorkspace root: {}\n",
         settings.workspace.display()
     ));
+
+    // Workspace state: give the model a ground-truth anchor so it can
+    // verify its mental model of what has changed against reality.
+    let sandbox = Sandbox::new(settings.workspace.clone());
+    if sandbox.is_git_repo().unwrap_or(false) {
+        match sandbox.git_status() {
+            Ok(status) if status.contains("No changes") => {
+                system.push_str("Working tree: clean\n");
+            }
+            Ok(status) => {
+                let lines: Vec<&str> = status.lines().take(10).collect();
+                system.push_str(&format!(
+                    "Working tree: dirty ({} changed)\n{}\n",
+                    status.lines().count(),
+                    lines.join("\n")
+                ));
+            }
+            Err(_) => {}
+        }
+    }
+
     if let Some(map) = crate::repomap::build_map(&settings.workspace) {
         system.push('\n');
         system.push_str(&map);

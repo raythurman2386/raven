@@ -16,6 +16,8 @@ pub struct SubAgentReport {
     pub index: usize,
     pub text: String,
     pub elapsed: std::time::Duration,
+    /// "merged", "conflict", "no changes", or "error: ..."
+    pub merge_status: String,
 }
 
 /// Run several focused sub-agents in parallel and return their final reports.
@@ -123,6 +125,7 @@ pub async fn run_parallel(settings: &Settings, tasks: Vec<String>) -> Result<Vec
             index: i,
             text: out,
             elapsed,
+            merge_status: String::new(), // set during merge below
         });
         if let Some((branch_name, wt_path, sandbox)) = cleanup {
             branches_to_merge.push((i, branch_name, wt_path, sandbox));
@@ -133,17 +136,36 @@ pub async fn run_parallel(settings: &Settings, tasks: Vec<String>) -> Result<Vec
     if is_git {
         let mut conflicted: Vec<(usize, String)> = Vec::new();
         for (i, branch_name, _wt_path, sandbox) in &branches_to_merge {
-            let _ = sandbox.merge_branch(branch_name);
-            if sandbox.has_merge_conflicts().unwrap_or(false) {
-                let _ = sandbox.abort_merge();
-                conflicted.push((*i, branch_name.clone()));
-                tracing::warn!(
-                    "merge conflict for sub-agent {} (branch {}), merge aborted",
-                    i,
-                    branch_name
-                );
-            } else {
-                tracing::info!("merged branch {} into main", branch_name);
+            let merge_result = sandbox.merge_branch(branch_name);
+            let status = match merge_result {
+                Ok(out) if out.contains("Already up to date") => "no changes".to_string(),
+                Ok(out)
+                    if out.contains("CONFLICT")
+                        || sandbox.has_merge_conflicts().unwrap_or(false) =>
+                {
+                    let _ = sandbox.abort_merge();
+                    conflicted.push((*i, branch_name.clone()));
+                    tracing::warn!(
+                        "merge conflict for sub-agent {} (branch {}), merge aborted",
+                        i,
+                        branch_name
+                    );
+                    "conflict".to_string()
+                }
+                Ok(_) => "merged".to_string(),
+                Err(e) => {
+                    tracing::warn!(
+                        "merge error for sub-agent {} (branch {}): {}",
+                        i,
+                        branch_name,
+                        e
+                    );
+                    format!("error: {e}")
+                }
+            };
+            // Find the result for this sub-agent and set its merge_status.
+            if let Some(r) = results.iter_mut().find(|r| r.index == *i) {
+                r.merge_status = status;
             }
         }
         // Remove each worktree first so the branch is no longer referenced by
