@@ -132,6 +132,11 @@ impl Sandbox {
         Ok(())
     }
 
+    /// Check whether the working tree has no uncommitted changes.
+    ///
+    /// Returns `true` when the workspace is not a git repository or when
+    /// `git status --porcelain` produces no output. Git failures default
+    /// to `true` (fail-open) so the guard never blocks the agent loop.
     pub fn is_working_tree_clean(&self) -> bool {
         if !self.is_git_repo().unwrap_or(false) {
             return true;
