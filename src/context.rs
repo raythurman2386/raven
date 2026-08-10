@@ -59,56 +59,94 @@ pub fn infer_context_window(model: &str) -> usize {
     }
 }
 
-/// Fetch the actual context window from Ollama's `/api/show` endpoint.
+/// Fetch the actual context window from the provider's API.
 ///
-/// The response includes `{architecture}.context_length` in `model_info`.
-/// Falls back to [`infer_context_window`] if the API call fails (Ollama
-/// not running, model not found, or the key is missing).
+/// For Ollama, uses `/api/show`. For OpenAI-compatible providers (OpenRouter,
+/// etc.), uses `/models` and reads the `context_length` field. Falls back to
+/// [`infer_context_window`] if the API call fails or the field is missing.
 pub async fn fetch_context_window(base_url: &str, model: &str) -> usize {
-    let show_url = format!(
-        "{}/api/show",
-        base_url.trim_end_matches('/').trim_end_matches("/v1")
-    );
+    let trimmed = base_url.trim_end_matches('/').trim_end_matches("/v1");
+
+    // Try Ollama's /api/show first (works when base_url is localhost:11434).
+    if let Some(ctx) = fetch_ollama_context(trimmed, model).await {
+        return ctx;
+    }
+
+    // Try the OpenAI-compatible /models endpoint (OpenRouter, etc.).
+    if let Some(ctx) = fetch_openai_context(base_url, model).await {
+        return ctx;
+    }
+
+    // Fall back to name heuristics.
+    infer_context_window(model)
+}
+
+/// Query Ollama's `/api/show` for the model's context length.
+async fn fetch_ollama_context(base_url: &str, model: &str) -> Option<usize> {
+    let show_url = format!("{}/api/show", base_url);
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
-        .build();
+        .build()
+        .ok()?;
 
-    let client = match client {
-        Ok(c) => c,
-        Err(_) => return infer_context_window(model),
-    };
-
-    let resp = match client
+    let resp = client
         .post(&show_url)
         .json(&serde_json::json!({ "model": model }))
         .send()
         .await
-    {
-        Ok(r) => r,
-        Err(_) => return infer_context_window(model),
-    };
+        .ok()?;
 
-    let body: serde_json::Value = match resp.json().await {
-        Ok(v) => v,
-        Err(_) => return infer_context_window(model),
-    };
-
-    let info = match body.get("model_info") {
-        Some(i) => i,
-        None => return infer_context_window(model),
-    };
-
-    let arch = match info.get("general.architecture").and_then(|a| a.as_str()) {
-        Some(a) => a,
-        None => return infer_context_window(model),
-    };
-
+    let body: serde_json::Value = resp.json().await.ok()?;
+    let info = body.get("model_info")?;
+    let arch = info.get("general.architecture")?.as_str()?;
     let key = format!("{arch}.context_length");
-    match info.get(&key).and_then(|v| v.as_u64()) {
-        Some(n) if n > 0 => n as usize,
-        _ => infer_context_window(model),
+    let n = info.get(&key)?.as_u64()?;
+    if n > 0 {
+        Some(n as usize)
+    } else {
+        None
     }
+}
+
+/// Query the OpenAI-compatible `/models` endpoint for the model's context
+/// length. Works with OpenRouter and other providers that expose
+/// `context_length` in the model metadata.
+async fn fetch_openai_context(base_url: &str, model: &str) -> Option<usize> {
+    let models_url = format!("{}/models", base_url.trim_end_matches('/'));
+
+    let mut req = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .ok()?
+        .get(&models_url);
+
+    // Pass the API key if available.
+    if let Ok(key) = std::env::var("RAVEN_API_KEY").or_else(|_| std::env::var("OLLAMA_API_KEY")) {
+        if !key.trim().is_empty() {
+            req = req.bearer_auth(&key);
+        }
+    }
+
+    let resp = req.send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+
+    let body: serde_json::Value = resp.json().await.ok()?;
+    let models = body.get("data")?.as_array()?;
+
+    // Find the model by ID and read its context_length.
+    for m in models {
+        let id = m.get("id")?.as_str()?;
+        if id == model {
+            let ctx = m.get("context_length")?.as_u64()?;
+            if ctx > 0 {
+                return Some(ctx as usize);
+            }
+        }
+    }
+    None
 }
 
 /// A boundary that keeps tool-call / tool-result pairs together.
