@@ -25,8 +25,10 @@
 //!    user approval.
 //!
 //! The `--yolo` flag disables confirmation entirely, but the denylist still
-//! applies as a last-resort filter. Neither mechanism replaces OS-level
-//! sandboxing (Landlock/seccomp), which is intentionally out of scope.
+//! applies as a last-resort filter. These shell-level guards are complemented
+//! by OS-level sandboxing (Landlock, seccomp, rlimits, openat2) applied to
+//! every subprocess — see [`apply_os_confinement`] and
+//! [`docs/security.md`](../docs/security.md).
 
 use anyhow::{bail, Context, Result};
 use regex::Regex;
