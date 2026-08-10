@@ -1740,6 +1740,43 @@ mod tests {
     }
 
     #[test]
+    fn search_replace_dotdot_on_existing_file() {
+        // Regression for #104/#108: the non-empty old_string write path in
+        // search_replace passed the raw path to openat2 (RESOLVE_BENEATH),
+        // which fails on `..`-paths when the intermediate dir doesn't exist.
+        let tmp = tempfile::tempdir().unwrap();
+        let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
+        sb.write_file("f.txt", "hello world").unwrap();
+        let out = sb
+            .search_replace("newdir/../f.txt", "hello", "goodbye", false)
+            .unwrap();
+        assert!(out.contains("Edited"), "edit should succeed: {out}");
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("f.txt")).unwrap(),
+            "goodbye world"
+        );
+    }
+
+    #[test]
+    fn search_replace_dotdot_replace_all() {
+        // Same regression, replace_all path.
+        let tmp = tempfile::tempdir().unwrap();
+        let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
+        sb.write_file("f.txt", "a a a").unwrap();
+        let out = sb
+            .search_replace("newdir/../f.txt", "a", "b", true)
+            .unwrap();
+        assert!(
+            out.contains("Replaced"),
+            "replace_all should succeed: {out}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("f.txt")).unwrap(),
+            "b b b"
+        );
+    }
+
+    #[test]
     fn is_verification_command_rejects_non_test_commands() {
         let non_tests = [
             "cargo build",

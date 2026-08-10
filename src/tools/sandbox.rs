@@ -476,8 +476,18 @@ impl Sandbox {
             return Ok(format!("Error: {} is not a file", path));
         }
 
+        // Normalize the path lexically so `..` components that cancel out
+        // (e.g. `newdir/../f.txt`) resolve to a bare relative path before we
+        // hand it to `openat2` (RESOLVE_BENEATH). Without this, openat2 tries
+        // to traverse `newdir` literally and fails with ENOENT when the
+        // intermediate dir does not exist — even though `safe_resolve` already
+        // validated the normalized path. (Issues #104, #108.)
+        let rel = normalize_path(Path::new(path))
+            .to_string_lossy()
+            .into_owned();
+
         // Open via openat2 (kernel-enforced confinement, no TOCTOU race).
-        let file = self.open_beneath(path, OpenFlags::RDONLY | OpenFlags::CLOEXEC, 0)?;
+        let file = self.open_beneath(&rel, OpenFlags::RDONLY | OpenFlags::CLOEXEC, 0)?;
         let content = std::io::read_to_string(file).context("read file before edit")?;
 
         if replace_all {
@@ -495,7 +505,7 @@ impl Sandbox {
             }
             let new_content = content.replace(old_string, new_string);
             let mut file = self.open_beneath(
-                path,
+                &rel,
                 OpenFlags::WRONLY | OpenFlags::TRUNC | OpenFlags::CLOEXEC,
                 0,
             )?;
@@ -513,7 +523,7 @@ impl Sandbox {
                 new_content.push_str(new_string);
                 new_content.push_str(&content[f + old_string.len()..]);
                 let mut file = self.open_beneath(
-                    path,
+                    &rel,
                     OpenFlags::WRONLY | OpenFlags::TRUNC | OpenFlags::CLOEXEC,
                     0,
                 )?;
