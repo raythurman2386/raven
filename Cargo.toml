@@ -27,6 +27,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 crossterm = "0.29"
 ratatui = "0.30"
+unicode-width = "0.2"
+unicode-segmentation = "1.13"
 pulldown-cmark = "0.13.4"
 anydoc = "0.1.6"
 tempfile = "3"

@@ -1027,34 +1027,49 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState)
     f.set_cursor_position((cx, cy));
 }
 
-/// Number of wrapped lines a string occupies at the given width (char count).
+/// Number of wrapped lines a string occupies at the given display width.
 ///
-/// A single `\n` forces a new line; a run of chars longer than `width` wraps
-/// to the next line. Used to size the input box so long tasks are visible
-/// instead of clipping.
+/// A single `\n` forces a new line; a run of graphemes whose total display
+/// width exceeds `width` wraps to the next line. Uses `unicode-width` and
+/// `unicode-segmentation` to match ratatui's wrapping behavior exactly.
 fn wrapped_line_count(s: &str, width: usize) -> usize {
+    use unicode_segmentation::UnicodeSegmentation;
+    use unicode_width::UnicodeWidthStr;
+
     if s.is_empty() {
         return 1;
     }
+    let w = width.max(1);
     let mut lines = 0usize;
     for seg in s.split('\n') {
-        let w = width.max(1);
         if seg.is_empty() {
             lines += 1;
         } else {
-            lines += seg.chars().count().div_ceil(w);
+            // Walk graphemes, wrapping when the accumulated display width
+            // exceeds the available width — same logic ratatui's reflow uses.
+            let mut current_width = 0usize;
+            let mut seg_lines = 1usize;
+            for grapheme in seg.graphemes(true) {
+                let gw = grapheme.width();
+                if current_width + gw > w {
+                    seg_lines += 1;
+                    current_width = 0;
+                }
+                current_width += gw;
+            }
+            lines += seg_lines;
         }
     }
     lines
 }
 
-/// The effective content width (in chars) of the input box for a given
-/// terminal width.
+/// The effective content width (in display cells) of the input box for a
+/// given terminal width.
 ///
 /// The input box has `Borders::ALL` (2 border cols) plus a prompt glyph
-/// (e.g. `❯ `, 2 chars). Both the wrap-width computation and the cursor
-/// position must use this same value, or the cursor will land in the wrong
-/// place once the input wraps to a second line.
+/// (e.g. `❯ `, 2 display cells). Both the wrap-width computation and the
+/// cursor position must use this same value, or the cursor will land in the
+/// wrong place once the input wraps to a second line.
 fn input_content_width(term_width: u16) -> usize {
     let avail = term_width.saturating_sub(2).max(1) as usize; // minus 2 border cols
     avail.saturating_sub(2).max(1) // minus prompt glyph "❯ "
@@ -1063,33 +1078,44 @@ fn input_content_width(term_width: u16) -> usize {
 /// Compute the terminal (x, y) where the cursor should sit after the input
 /// text, accounting for the prompt prefix, wrapping width, and the input box's
 /// top-left position.
+///
+/// Uses grapheme clusters and display cell width (via `unicode-width` and
+/// `unicode-segmentation`) to match ratatui's wrapping behavior exactly.
+/// This fixes cursor misalignment with CJK characters (2 cells), emoji (2
+/// cells), and combining marks (0 cells) that the old char-count approach
+/// could not handle.
 fn input_cursor_position(
     input: &str,
     prompt: &str,
     cursor: usize,
     input_rect: ratatui::layout::Rect,
 ) -> (u16, u16) {
-    // The input line is `prompt + input`, rendered in a Paragraph with
-    // Borders::ALL. Ratatui wraps the whole line at the content area width
-    // (rect.width - 2 for the two border columns). The prompt is part of the
-    // wrapped line, NOT a separate column reservation, so the wrap width here
-    // must be rect.width - 2 — not input_content_width (which also subtracts
-    // the prompt and would put the cursor 2 columns off once input wraps).
+    use unicode_segmentation::UnicodeSegmentation;
+    use unicode_width::UnicodeWidthStr;
+
+    // Ratatui wraps the prompt+input line at rect.width - 2 (borders only).
     let content_width = input_rect.width.saturating_sub(2).max(1) as usize;
-    // Walk the combined prompt+input up to the cursor byte offset.
+
+    // Walk the combined prompt+input up to the cursor byte offset, by
+    // grapheme cluster, accumulating display width. col starts at 0 and
+    // includes the prompt, so the wrap width is content_width for all rows.
+    let prefix = format!("{}{}", prompt, &input[..cursor.min(input.len())]);
     let mut col = 0usize;
     let mut row = 0usize;
-    for c in prompt.chars().chain(input[..cursor].chars()) {
-        if c == '\n' {
+
+    for grapheme in prefix.graphemes(true) {
+        let gw = grapheme.width();
+        if grapheme == "\n" {
             row += 1;
             col = 0;
-        } else if col >= content_width {
+        } else if col + gw > content_width {
             row += 1;
-            col = 1;
+            col = gw;
         } else {
-            col += 1;
+            col += gw;
         }
     }
+
     // Clamp the cursor to the last visible row of the box so a long input
     // doesn't push the cursor off-screen (the box stops growing at
     // MAX_INPUT_BOX_HEIGHT, but the input text continues).
@@ -1753,6 +1779,46 @@ mod tests {
         let (x, y) = input_cursor_position("", "❯ ", 0, rect);
         assert_eq!(x, 3, "cursor x should be after prompt only");
         assert_eq!(y, 21);
+    }
+
+    #[test]
+    fn input_cursor_position_emoji_is_two_cells() {
+        // Emoji (😀) is 2 display cells. The cursor after one emoji should
+        // be 2 cells further than after one ASCII char.
+        let rect = ratatui::layout::Rect::new(0, 20, 80, 3);
+        let (x, _) = input_cursor_position("😀", "❯ ", 4, rect);
+        // prompt "❯ " = 2 cells, emoji = 2 cells, so cursor at x = 1 + 4 = 5
+        assert_eq!(x, 5, "emoji should be 2 display cells, got x={x}");
+    }
+
+    #[test]
+    fn input_cursor_position_cjk_is_two_cells() {
+        // CJK character (あ) is 2 display cells.
+        let rect = ratatui::layout::Rect::new(0, 20, 80, 3);
+        let (x, _) = input_cursor_position("あ", "❯ ", 3, rect);
+        // prompt "❯ " = 2 cells, CJK = 2 cells, so cursor at x = 1 + 4 = 5
+        assert_eq!(x, 5, "CJK char should be 2 display cells, got x={x}");
+    }
+
+    #[test]
+    fn input_cursor_position_combining_mark_is_zero_width() {
+        // e + combining acute (U+0301) is one grapheme of width 1.
+        let rect = ratatui::layout::Rect::new(0, 20, 80, 3);
+        let combined = "e\u{0301}";
+        let (x, _) = input_cursor_position(combined, "❯ ", combined.len(), rect);
+        // prompt "❯ " = 2 cells, grapheme = 1 cell, so cursor at x = 1 + 3 = 4
+        assert_eq!(x, 4, "combining mark should be 0 width, got x={x}");
+    }
+
+    #[test]
+    fn wrapped_line_count_emoji_is_two_cells() {
+        // 10 emoji in a width-10 box: each emoji is 2 cells, so 5 fit per line.
+        let input = "😀".repeat(10);
+        let lines = wrapped_line_count(&input, 10);
+        assert_eq!(
+            lines, 2,
+            "10 emoji at width 10 should wrap to 2 lines, got {lines}"
+        );
     }
 
     #[test]
