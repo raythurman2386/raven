@@ -252,3 +252,70 @@ fn max_tokens_clamped_to_remaining_context() {
     // Margin larger than remaining: floor applies.
     assert_eq!(clamp_max_tokens(4096, 128_000, 128_000, 64), 256);
 }
+
+#[tokio::test]
+async fn dirty_tree_guard_gives_extra_iteration_for_commit() {
+    let tmp = tempfile::tempdir().unwrap();
+    // Initialize a git repo so is_working_tree_clean() works.
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["config", "user.email", "test@test.test"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["config", "user.name", "Test"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    // Every iteration the model writes a file (dirtying the tree), never
+    // finishing on its own. After max_iterations (2) the budget is exhausted
+    // but the tree is dirty — the guard should inject a commit nudge and
+    // give one more iteration with tools.
+    let write_round = sse_tool_call(
+        "call_w",
+        "write_file",
+        r#"{"path":"out.txt","content":"done"}"#,
+    );
+    // The extra iteration: model calls git_commit, then finishes.
+    let commit_round = sse_tool_call("call_c", "git_commit", r#"{"message":"checkpoint"}"#);
+    let final_round = sse_text("All committed.");
+
+    let mut s = settings_for(tmp.path());
+    s.max_iterations = 2;
+    let mut agent = Agent::new(s).unwrap().with_completion_source(scripted(vec![
+        write_round.clone(),
+        write_round.clone(),
+        commit_round,
+        final_round,
+    ]));
+    let (tx, mut rx) = mpsc::channel(64);
+    agent.run("do the thing", tx).await.unwrap();
+    let events = drain(&mut rx).await;
+
+    assert!(
+        events.iter().any(|e| matches!(e, AgentEvent::Done)),
+        "turn must end with Done"
+    );
+    assert!(
+        !events.iter().any(|e| matches!(e, AgentEvent::Error(_))),
+        "turn must not emit Error"
+    );
+    // The git_commit tool must have been called in the extra iteration.
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::ToolStart { name, .. } if name == "git_commit")),
+        "git_commit should be called in the extra iteration"
+    );
+    // The working tree should be clean after the commit.
+    assert!(
+        agent.sandbox.is_working_tree_clean(),
+        "working tree should be clean after commit"
+    );
+}
