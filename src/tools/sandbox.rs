@@ -1210,8 +1210,8 @@ pub(crate) fn wait_for_child(
                     let _ = child.wait();
                     kill_process_group(pid);
                     let _ = drain_pipes(stdout_rx, stderr_rx, start, deadline);
-                    let _ = stdout_handle.map(|h| h.join().ok());
-                    let _ = stderr_handle.map(|h| h.join().ok());
+                    drop(stdout_handle);
+                    drop(stderr_handle);
                     return None;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(50));
@@ -1220,8 +1220,8 @@ pub(crate) fn wait_for_child(
             Err(_) => {
                 kill_process_group(pid);
                 let _ = drain_pipes(stdout_rx, stderr_rx, start, deadline);
-                let _ = stdout_handle.map(|h| h.join().ok());
-                let _ = stderr_handle.map(|h| h.join().ok());
+                drop(stdout_handle);
+                drop(stderr_handle);
                 return None;
             }
         }
@@ -1230,8 +1230,8 @@ pub(crate) fn wait_for_child(
     kill_process_group(pid);
 
     let (stdout, stderr) = drain_pipes(stdout_rx, stderr_rx, start, deadline);
-    let _ = stdout_handle.map(|h| h.join().ok());
-    let _ = stderr_handle.map(|h| h.join().ok());
+    drop(stdout_handle);
+    drop(stderr_handle);
     Some((status, stdout, stderr))
 }
 
