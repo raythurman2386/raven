@@ -6,6 +6,77 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-08-10
+
+### Added
+
+- **Live agent eval suite** — `evals/run.py` runs 10 fixture cases (read-only
+  symbol, single edit, multi-file refactor, fix failing test, git commit,
+  sandbox escape, memory recall, skill use, plan-then-execute, add test)
+  against a built headless `raven`, graded by deterministic `checks.sh`
+  (not LLM-as-judge). Layer A (`cargo test eval_suite`) is an offline
+  scripted-fake-model harness; Layer B is live fixtures; Layer C is the
+  arena. Reports land in `evals/out/`; baseline in `evals/baselines/default.md`.
+- **Cloud API support** — a repo-root/CWD `.env` is auto-loaded (without
+  overriding exported vars), and API keys resolve via
+  `RAVEN_API_KEY` → `OLLAMA_API_KEY` → `OPENROUTER_API_KEY` → `XAI_API_KEY` →
+  `OPENAI_API_KEY`. `/model` now fetches the real context window from the
+  provider's `/models` endpoint (with bearer auth) for non-Ollama providers,
+  falling back to name heuristics.
+- **macOS release targets** — `aarch64-apple-darwin` and `x86_64-apple-darwin`
+  added to the release matrix (native runners, no cross-compile).
+- **Chat toolset** — Chat mode now includes `ask_user` (and all read-only
+  tools); the system prompt is mode-aware and `dispatch()` has a runtime
+  read-only guard as a defense-in-depth backstop.
+- **Ground-truth anchors** — the system prompt includes the current git
+  working-tree state, and parallel sub-agent merge results now carry a
+  `merge_status` ("merged"/"conflict"/"no changes"/"error") surfaced to the
+  model so it can't assume unmerged work landed.
+- **Sandbox escape hatches** — `RAVEN_SANDBOX_LANDLOCK=0` and
+  `RAVEN_SANDBOX_NETWORK_BLOCK=0` to skip confinement for tests/recovery.
+
+### Changed
+
+- **seccomp network block** — now blocks only `socket()` for `AF_INET`/
+  `AF_INET6` with `KillProcess` (immediate kill, not `EPERM`). `AF_UNIX`
+  sockets and `socketpair()` are allowed, so esbuild/vitest and git ssh
+  helpers work without an escape hatch while the exfiltration guarantee holds.
+- **Landlock ABI V3** — `AccessFs::from_all` now includes `REFER`, fixing
+  `rustc` `.rmeta` hardlinks into `target/`. `CARGO_HOME`, `CARGO_TARGET_DIR`,
+  `TMPDIR`, and the npm cache are pinned under `workspace/.raven/`, and `$HOME`
+  is read-only (gitconfig/rustup) instead of read-write.
+- **`--yolo` implies `--mode agent`** — full toolset, no plan step, no
+  confirmations. An explicit `--mode` still overrides.
+- **`replace_all` always writes** — when the match count exceeds the warning
+  threshold it still performs the replacement and appends a warning, instead
+  of silently returning success without modifying the file.
+- **Release profile** — `opt-level="z"` + `panic="abort"` cut the binary from
+  13M to 8.3M (36%); tokio narrowed to specific features.
+- **TUI polish** — parallel tool calls deactivate the correct named block
+  (no stuck spinner), idle redraw is gated on `input_dirty`, cursor alignment
+  is grapheme-aware display width, a mode indicator shows in the top bar,
+  tool-result previews render dim under each call, and Esc is layered
+  (completion → selection → ask_user → quit).
+
+### Fixed
+
+- **`run_shell` hang past timeout** — the reader-thread `join()` blocked on an
+  inherited stdout pipe held open by a grandchild, so a green (non-timeout)
+  run could hang forever. Pipes are now drained with a bounded deadline and
+  reader handles are dropped instead of joined.
+- **`search_replace` on `..`-paths** — the raw path was passed to `openat2`
+  instead of the lexically normalized path, so `newdir/../f.txt` failed with
+  ENOENT even though it was validated as inside the workspace.
+- **Iteration-budget dirty tree** — when the budget is exhausted with
+  uncommitted changes, raven now injects a commit nudge and gives the model
+  one more tooled iteration to checkpoint its work before summarizing.
+- **`install.ps1`** — saves the Windows binary with a `.exe` extension
+  (removing any old extensionless file) so it no longer triggers the
+  "How do you want to open this file" dialog.
+- **TUI cursor alignment** — uses grapheme-aware display width (unicode-width
+  + unicode-segmentation) instead of char count, fixing CJK/emoji/combining-mark
+  drift at the root rather than patching symptoms.
+
 ## [0.1.8] - 2026-08-09
 
 ### Added
@@ -232,7 +303,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Ratatui 0.30, crossterm 0.29.
 
-[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.1.8...HEAD
+[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.1.9...HEAD
+[0.1.9]: https://github.com/raythurman2386/raven/compare/v0.1.8...v0.1.9
 [0.1.8]: https://github.com/raythurman2386/raven/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/raythurman2386/raven/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/raythurman2386/raven/compare/v0.1.5...v0.1.6
