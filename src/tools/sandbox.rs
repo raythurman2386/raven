@@ -1179,18 +1179,22 @@ pub(crate) fn wait_for_child(
     child: &mut std::process::Child,
     timeout_secs: u64,
 ) -> Option<(std::process::ExitStatus, Vec<u8>, Vec<u8>)> {
+    let (stdout_tx, stdout_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    let (stderr_tx, stderr_rx) = std::sync::mpsc::channel::<Vec<u8>>();
     let stdout_handle = child.stdout.take().map(|mut out| {
+        let tx = stdout_tx;
         std::thread::spawn(move || {
             let mut buf = Vec::new();
             let _ = std::io::Read::read_to_end(&mut out, &mut buf);
-            buf
+            let _ = tx.send(buf);
         })
     });
     let stderr_handle = child.stderr.take().map(|mut err| {
+        let tx = stderr_tx;
         std::thread::spawn(move || {
             let mut buf = Vec::new();
             let _ = std::io::Read::read_to_end(&mut err, &mut buf);
-            buf
+            let _ = tx.send(buf);
         })
     });
 
@@ -1205,8 +1209,9 @@ pub(crate) fn wait_for_child(
                     let _ = child.kill();
                     let _ = child.wait();
                     kill_process_group(pid);
-                    let _ = stdout_handle.map(|h| h.join());
-                    let _ = stderr_handle.map(|h| h.join());
+                    let _ = drain_pipes(stdout_rx, stderr_rx, start, deadline);
+                    let _ = stdout_handle.map(|h| h.join().ok());
+                    let _ = stderr_handle.map(|h| h.join().ok());
                     return None;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(50));
@@ -1214,8 +1219,9 @@ pub(crate) fn wait_for_child(
             }
             Err(_) => {
                 kill_process_group(pid);
-                let _ = stdout_handle.map(|h| h.join());
-                let _ = stderr_handle.map(|h| h.join());
+                let _ = drain_pipes(stdout_rx, stderr_rx, start, deadline);
+                let _ = stdout_handle.map(|h| h.join().ok());
+                let _ = stderr_handle.map(|h| h.join().ok());
                 return None;
             }
         }
@@ -1223,13 +1229,24 @@ pub(crate) fn wait_for_child(
 
     kill_process_group(pid);
 
-    let stdout = stdout_handle
-        .and_then(|h| h.join().ok())
-        .unwrap_or_default();
-    let stderr = stderr_handle
-        .and_then(|h| h.join().ok())
-        .unwrap_or_default();
+    let (stdout, stderr) = drain_pipes(stdout_rx, stderr_rx, start, deadline);
+    let _ = stdout_handle.map(|h| h.join().ok());
+    let _ = stderr_handle.map(|h| h.join().ok());
     Some((status, stdout, stderr))
+}
+
+fn drain_pipes(
+    stdout_rx: std::sync::mpsc::Receiver<Vec<u8>>,
+    stderr_rx: std::sync::mpsc::Receiver<Vec<u8>>,
+    start: std::time::Instant,
+    deadline: std::time::Duration,
+) -> (Vec<u8>, Vec<u8>) {
+    let remaining = deadline.saturating_sub(start.elapsed());
+    let grace = std::time::Duration::from_millis(500);
+    let wait = remaining + grace;
+    let stdout = stdout_rx.recv_timeout(wait).unwrap_or_default();
+    let stderr = stderr_rx.recv_timeout(wait).unwrap_or_default();
+    (stdout, stderr)
 }
 
 fn kill_process_group(pid: u32) {
