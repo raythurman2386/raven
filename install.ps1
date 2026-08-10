@@ -84,9 +84,16 @@ Write-Host "==> Version:   $versionTag"
 Write-Host "==> Artifact:  $artifact"
 Write-Host "==> Install:   $To"
 
-$destPath = Join-Path $To $BINARY
+$destPath = Join-Path $To "$BINARY.exe"
+
+$oldPath = Join-Path $To $BINARY
+if (Test-Path $oldPath) {
+    Write-Host "==> Removing old extensionless $BINARY (left by a previous install)"
+    Remove-Item -Force $oldPath
+}
+
 if ((Test-Path $destPath) -and (-not $Force)) {
-    Write-Host "==> $BINARY already exists at $destPath"
+    Write-Host "==> $BINARY.exe already exists at $destPath"
     Write-Host "    Use -Force to overwrite."
     exit 0
 }
