@@ -198,6 +198,7 @@ impl Agent {
             let name = tc.function.name.clone();
             let id = tc.id.clone();
             let cache_key = format!("{}:{}", name, tc.function.arguments);
+            let read_only = self.plan_only;
 
             // Track file-editing tools so we can auto-lint after this turn.
             if matches!(
@@ -264,16 +265,18 @@ impl Agent {
                 // call order instead of racing (issue #111).
                 let dispatch_name = name.clone();
                 let dispatch_result: Result<String, ToolError> =
-                    tokio::task::spawn_blocking(move || dispatch(&sandbox, &dispatch_name, &args))
-                        .await
-                        .unwrap_or_else(|e| {
-                            Err(ToolError::Other(format!("Tool error: join failed: {e}")))
-                        });
+                    tokio::task::spawn_blocking(move || {
+                        dispatch(&sandbox, &dispatch_name, &args, read_only)
+                    })
+                    .await
+                    .unwrap_or_else(|e| {
+                        Err(ToolError::Other(format!("Tool error: join failed: {e}")))
+                    });
                 self.record_tool_result(tx, id, name, cache_key, dispatch_result)
                     .await;
             } else {
                 handles.push(tokio::task::spawn_blocking(move || {
-                    let result = dispatch(&sandbox, &name, &args);
+                    let result = dispatch(&sandbox, &name, &args, read_only);
                     (id, name, result, cache_key)
                 }));
             }

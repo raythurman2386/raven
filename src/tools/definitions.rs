@@ -359,3 +359,37 @@ pub fn plan_tool_definitions() -> serde_json::Value {
         .collect();
     serde_json::Value::Array(filtered)
 }
+
+/// Read-only toolset for Chat mode: all plan tools plus `ask_user` so the
+/// model can ask clarifying questions. Excludes all write/shell tools.
+pub fn chat_tool_definitions() -> serde_json::Value {
+    const CHAT_TOOLS: &[&str] = &[
+        "list_dir",
+        "read_file",
+        "grep",
+        "search_code",
+        "git_status",
+        "git_diff",
+        "git_log",
+        "web_search",
+        "web_fetch",
+        "skill_search",
+        "skill_load",
+        "memory_search",
+        "ask_user",
+    ];
+
+    let all = tool_definitions();
+    let arr = all.as_array().cloned().unwrap_or_default();
+    let filtered: Vec<serde_json::Value> = arr
+        .into_iter()
+        .filter(|tool| {
+            tool.get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+                .map(|name| CHAT_TOOLS.contains(&name))
+                .unwrap_or(false)
+        })
+        .collect();
+    serde_json::Value::Array(filtered)
+}

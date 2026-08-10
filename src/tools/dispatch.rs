@@ -21,11 +21,25 @@ fn anyhow_to_tool_error(e: anyhow::Error, path: &str, operation: &str) -> ToolEr
 /// Unknown tool names return an error string in `Ok` so the model receives
 /// actionable feedback. Filesystem errors are returned as [`ToolError::Io`]
 /// with path and operation context.
+///
+/// When `read_only` is true, write/shell tools are rejected with an error
+/// message before execution. This is a defense-in-depth backstop: the toolset
+/// advertised to the model should already exclude these tools in read-only
+/// modes (Plan, Chat), but if the model emits a write tool call it wasn't
+/// offered, dispatch refuses to execute it.
 pub fn dispatch(
     sandbox: &Sandbox,
     name: &str,
     args: &serde_json::Value,
+    read_only: bool,
 ) -> Result<String, ToolError> {
+    if read_only && is_write_tool(name) {
+        return Ok(format!(
+            "Error: tool '{}' is not available in read-only mode. \
+             Use --mode agent to enable write tools.",
+            name
+        ));
+    }
     let res: anyhow::Result<String> = match name {
         "list_dir" => {
             let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
@@ -164,4 +178,21 @@ fn extract_file_path(name: &str, args: &serde_json::Value) -> String {
             .to_string(),
         _ => String::new(),
     }
+}
+
+/// Tools that modify the workspace or execute commands. These are rejected
+/// in read-only modes (Plan, Chat) as a defense-in-depth backstop.
+fn is_write_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "write_file"
+            | "search_replace"
+            | "apply_patch"
+            | "run_shell"
+            | "run_tests"
+            | "run_lint"
+            | "git_commit"
+            | "memory_update"
+            | "todo_write"
+    )
 }

@@ -19,7 +19,7 @@ mod windows;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
-pub use definitions::{plan_tool_definitions, tool_definitions};
+pub use definitions::{chat_tool_definitions, plan_tool_definitions, tool_definitions};
 pub use dispatch::dispatch;
 pub use sandbox::{safe_command_re, Sandbox};
 
@@ -695,7 +695,7 @@ mod tests {
     #[test]
     fn dispatch_unknown_tool_returns_error() {
         let sb = sandbox();
-        let result = dispatch(&sb, "nonexistent_tool", &serde_json::json!({})).unwrap();
+        let result = dispatch(&sb, "nonexistent_tool", &serde_json::json!({}), false).unwrap();
         assert!(result.contains("Unknown tool"));
     }
 
@@ -761,7 +761,13 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("test.txt"), "content").unwrap();
         let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
-        let result = dispatch(&sb, "read_file", &serde_json::json!({"path": "test.txt"})).unwrap();
+        let result = dispatch(
+            &sb,
+            "read_file",
+            &serde_json::json!({"path": "test.txt"}),
+            false,
+        )
+        .unwrap();
         assert!(result.contains("content"));
     }
 
@@ -773,6 +779,7 @@ mod tests {
             &sb,
             "write_file",
             &serde_json::json!({"path": "out.txt", "content": "data"}),
+            false,
         )
         .unwrap();
         assert!(result.contains("Wrote"));
@@ -1019,6 +1026,114 @@ mod tests {
         assert!(
             !plan_names.iter().any(|n| n == "ask_user"),
             "ask_user is interactive and must not be advertised during planning"
+        );
+    }
+
+    #[test]
+    fn chat_toolset_includes_ask_user() {
+        let chat = chat_tool_definitions();
+        let names: Vec<String> = chat
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| {
+                t.get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(|n| n.as_str())
+                    .map(str::to_string)
+            })
+            .collect();
+        assert!(
+            names.iter().any(|n| n == "ask_user"),
+            "chat toolset should include ask_user, got {names:?}"
+        );
+    }
+
+    #[test]
+    fn chat_toolset_excludes_write_tools() {
+        let chat = chat_tool_definitions();
+        let names: Vec<String> = chat
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| {
+                t.get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(|n| n.as_str())
+                    .map(str::to_string)
+            })
+            .collect();
+        let forbidden = [
+            "write_file",
+            "search_replace",
+            "run_shell",
+            "todo_write",
+            "memory_update",
+            "apply_patch",
+            "run_tests",
+            "git_commit",
+        ];
+        for bad in forbidden {
+            assert!(
+                !names.iter().any(|n| n == bad),
+                "chat toolset must not include {bad}, got {names:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn dispatch_read_only_rejects_write_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
+        let result = dispatch(
+            &sb,
+            "write_file",
+            &serde_json::json!({"path": "out.txt", "content": "data"}),
+            true,
+        )
+        .unwrap();
+        assert!(
+            result.contains("not available in read-only mode"),
+            "write_file should be rejected in read-only mode: {result}"
+        );
+        assert!(
+            !tmp.path().join("out.txt").exists(),
+            "file must not be created in read-only mode"
+        );
+    }
+
+    #[test]
+    fn dispatch_read_only_rejects_run_shell() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
+        let result = dispatch(
+            &sb,
+            "run_shell",
+            &serde_json::json!({"command": "echo hi"}),
+            true,
+        )
+        .unwrap();
+        assert!(
+            result.contains("not available in read-only mode"),
+            "run_shell should be rejected in read-only mode: {result}"
+        );
+    }
+
+    #[test]
+    fn dispatch_read_only_allows_read_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("test.txt"), "content").unwrap();
+        let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
+        let result = dispatch(
+            &sb,
+            "read_file",
+            &serde_json::json!({"path": "test.txt"}),
+            true,
+        )
+        .unwrap();
+        assert!(
+            result.contains("content"),
+            "read_file should work in read-only mode: {result}"
         );
     }
 
@@ -1505,7 +1620,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("Cargo.toml"), "[package]\n").unwrap();
         let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
-        let out = dispatch(&sb, "run_lint", &serde_json::json!({}))
+        let out = dispatch(&sb, "run_lint", &serde_json::json!({}), false)
             .unwrap_or_else(|e| format!("Tool error: {e}"));
         assert!(out.contains("--- run_lint (cargo)"), "{out}");
     }

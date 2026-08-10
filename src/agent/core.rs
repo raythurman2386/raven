@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 use tokio::sync::mpsc;
 
-use crate::config::{load_agents_md, Settings};
+use crate::config::{load_agents_md, Mode, Settings};
 use crate::context::{compact_if_needed_llm, history_tokens};
 use crate::error::{cap_http_body, AgentError};
 use crate::memory;
@@ -91,6 +91,29 @@ const SYSTEM_BASE: &str = r#"You are an efficient coding agent. You help with so
 /// Build the system message from settings, including the repo map if applicable.
 fn build_system_message(settings: &Settings) -> ChatMessage {
     let mut system = SYSTEM_BASE.to_string();
+
+    // Mode awareness: tell the model what it can and cannot do in this mode.
+    let mode_desc = match settings.mode {
+        Mode::Plan => {
+            "You are in PLAN mode. You can read files and inspect the workspace \
+            but CANNOT edit files or run shell commands. Propose a concise step-by-step \
+            plan first; the user will approve it before you can execute."
+        }
+        Mode::Agent => {
+            "You are in AGENT mode. You have full access to read/write files, \
+            run shell commands, and commit changes."
+        }
+        Mode::Chat => {
+            "You are in CHAT mode. You can read files and inspect the workspace \
+            but CANNOT edit files or run shell commands. Answer questions, explore the \
+            codebase, and ask clarifying questions with the ask_user tool. If the user \
+            wants changes made, suggest they switch to agent mode."
+        }
+    };
+    system.push_str("\n--- Mode ---\n");
+    system.push_str(mode_desc);
+    system.push('\n');
+
     system.push_str(&format!(
         "\n\nWorkspace root: {}\n",
         settings.workspace.display()
@@ -273,7 +296,10 @@ impl Agent {
     /// run shell.
     fn tools_value(&self) -> serde_json::Value {
         if self.plan_only {
-            crate::tools::plan_tool_definitions()
+            match self.settings.mode {
+                Mode::Chat => crate::tools::chat_tool_definitions(),
+                _ => crate::tools::plan_tool_definitions(),
+            }
         } else {
             cached_tool_definitions().clone()
         }
