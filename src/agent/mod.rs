@@ -1,6 +1,6 @@
 //! Streaming agent loop + lightweight parallel sub-agents.
 //!
-//! The [`Agent`] owns the conversation history (`messages`), a [`Sandbox`],
+//! The [`Agent`] owns the conversation history (`messages`), a [`crate::tools::Sandbox`],
 //! and a `reqwest::Client`. [`Agent::run`] appends a user message, then loops:
 //!
 //! 1. Estimate history tokens and compact if over the soft limit.

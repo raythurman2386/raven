@@ -38,6 +38,12 @@ fn help_succeeds_and_lists_flags() {
     ] {
         assert!(out.contains(flag), "help should mention `{flag}`");
     }
+    // Regression for issue #126: --help must document that --yolo implies
+    // --mode agent (full toolset), so the behavior is discoverable.
+    assert!(
+        out.contains("imply") || out.contains("implies") || out.contains("agent"),
+        "--help should document --yolo's agent-mode implication, got: {out}"
+    );
 }
 
 #[test]

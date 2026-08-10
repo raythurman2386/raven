@@ -123,7 +123,7 @@ raven -m qwen2.5-coder:14b -w /path/to/project -p "Fix the tests"
 # Skip plan approval (full tools, no plan step)
 raven --mode agent -p "Refactor utils"
 
-# Fully autonomous (no confirmations)
+# Fully autonomous (implies --mode agent: full tools, no plan, no confirmations)
 raven --yolo -p "Write unit tests for auth"
 
 # Append session-specific rules to the system prompt
