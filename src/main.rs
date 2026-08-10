@@ -37,7 +37,7 @@ use std::path::PathBuf;
 use raven::agent::{run_parallel, Agent, ChatMessage};
 use raven::config::{
     default_api_key, default_base_url, default_max_iter, default_model, env_compact_threshold,
-    env_context_window, load_config_file, Mode, Settings,
+    env_context_window, load_config_file, resolve_mode, Mode, Settings,
 };
 use raven::context::{fetch_context_window, infer_context_window};
 use raven::runner;
@@ -104,7 +104,8 @@ struct Cli {
     #[arg(long)]
     theme: Option<String>,
 
-    /// Skip all confirmations
+    /// Skip all confirmations and imply `--mode agent` (full toolset, no plan
+    /// step). An explicit `--mode` overrides this implicit agent-mode behavior.
     #[arg(long)]
     yolo: bool,
 
@@ -221,7 +222,7 @@ async fn main() -> Result<()> {
     let max_tokens = Settings::derived_max_tokens(context_window);
 
     let max_iterations = cfg.max_iterations.unwrap_or_else(default_max_iter);
-    let mode = cli.mode.map(Mode::from).or(cfg.mode).unwrap_or(Mode::Plan);
+    let mode = resolve_mode(cli.mode.map(Mode::from), cfg.mode, cli.yolo);
     let temperature = cfg.temperature.unwrap_or(0.2);
 
     let settings = Settings {

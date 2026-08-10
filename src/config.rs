@@ -61,6 +61,28 @@ impl Mode {
     }
 }
 
+/// Resolve the effective interaction mode from the configured/explicit mode and
+/// the `--yolo` flag.
+///
+/// `--yolo` implies `--mode agent`: it disables the plan step and the shell
+/// confirmation gate, and must expose the full (write/shell) toolset. Without
+/// this, `raven --yolo` (no explicit `--mode`) would keep the default
+/// `Mode::Plan` and silently degrade to a read-only toolset, leaving the model
+/// unable to write files or run shell (see issue #126).
+///
+/// An explicit CLI `--mode` (`explicit_mode = Some`) takes precedence over the
+/// yolo-implied agent mode, so a user can still request `--mode chat --yolo`
+/// for autonomous read-only exploration. The config-file `mode` does *not*
+/// count as explicit — only a CLI flag pins the mode.
+pub fn resolve_mode(explicit_mode: Option<Mode>, config_mode: Option<Mode>, yolo: bool) -> Mode {
+    let base = explicit_mode.or(config_mode).unwrap_or(Mode::Plan);
+    if yolo && explicit_mode.is_none() {
+        Mode::Agent
+    } else {
+        base
+    }
+}
+
 /// Runtime configuration for an [`crate::agent::Agent`].
 ///
 /// Constructed from CLI flags + environment variables in `crate::main`.
@@ -290,6 +312,63 @@ fn load_toml_file(path: &std::path::Path) -> ConfigFile {
 mod tests {
     use super::*;
     use crate::context::infer_context_window;
+
+    #[test]
+    fn resolve_mode_yolo_forces_agent_when_no_explicit_mode() {
+        // Regression for issue #126: `raven --yolo` (no --mode) must expose the
+        // full (non-read-only) toolset, i.e. resolve to Mode::Agent.
+        let mode = resolve_mode(None, None, true);
+        assert_eq!(mode, Mode::Agent);
+        assert!(!mode.read_only(), "yolo mode must not be read-only");
+        assert!(!mode.plans_first(), "yolo mode must skip the plan step");
+    }
+
+    #[test]
+    fn resolve_mode_yolo_does_not_override_explicit_cli_mode() {
+        // `--mode chat --yolo` keeps chat: explicit CLI mode wins over the
+        // yolo-implied agent mode, so a user can still get autonomous
+        // read-only exploration.
+        let mode = resolve_mode(Some(Mode::Chat), None, true);
+        assert_eq!(mode, Mode::Chat);
+        assert!(mode.read_only());
+    }
+
+    #[test]
+    fn resolve_mode_yolo_ignores_config_file_mode() {
+        // Only an explicit CLI --mode pins the mode; a config-file `mode`
+        // does NOT count as explicit, so yolo still forces agent.
+        let mode = resolve_mode(None, Some(Mode::Chat), true);
+        assert_eq!(mode, Mode::Agent);
+        assert!(!mode.read_only());
+    }
+
+    #[test]
+    fn resolve_mode_no_yolo_keeps_default_plan() {
+        let mode = resolve_mode(None, None, false);
+        assert_eq!(mode, Mode::Plan);
+        assert!(mode.read_only());
+        assert!(mode.plans_first());
+    }
+
+    #[test]
+    fn resolve_mode_no_yolo_respects_explicit_mode() {
+        assert_eq!(resolve_mode(Some(Mode::Agent), None, false), Mode::Agent);
+        assert_eq!(resolve_mode(Some(Mode::Chat), None, false), Mode::Chat);
+    }
+
+    #[test]
+    fn resolve_mode_no_yolo_respects_config_file_mode() {
+        assert_eq!(resolve_mode(None, Some(Mode::Agent), false), Mode::Agent);
+        assert_eq!(resolve_mode(None, Some(Mode::Chat), false), Mode::Chat);
+    }
+
+    #[test]
+    fn resolve_mode_explicit_overrides_config() {
+        assert_eq!(
+            resolve_mode(Some(Mode::Agent), Some(Mode::Chat), false),
+            Mode::Agent
+        );
+    }
 
     #[test]
     fn infer_context_window_known_models() {
