@@ -74,12 +74,30 @@ cargo mutants --exclude-file src/main.rs --exclude-file src/tui/mod.rs --jobs 2
 Fix surviving mutants that indicate weak assertions. Don't chase 100% kill
 rate on logging-only or display-only code.
 
+## Agent eval suite
+
+Task-level agent strength is measured by the opt-in suite under [`evals/`](../evals/README.md).
+
+| Layer | Command | Model? |
+|-------|---------|--------|
+| A — offline harness | `cargo test eval_suite` | No (scripted fake model) |
+| B — live fixtures | `python3 evals/run.py --smoke` or full | Yes |
+| C — arena | full suite × multiple models | Yes |
+
+Live runs copy each `evals/cases/<id>/repo` to a temp workspace, invoke headless
+`raven`, then grade with deterministic `checks.sh` (not LLM-as-judge). Reports
+go to `evals/out/`; update `evals/baselines/default.md` only after a deliberate
+pinned run.
+
+CI policy: `cargo test` always (includes Layer A). Live smoke/full is manual or
+nightly when an endpoint is available.
+
 ## What is NOT tested
 
-- **Live Ollama API calls** — real model responses require a running Ollama
-  server and are not exercised in CI. The HTTP/streaming loop *is* covered by
-  mock-server integration tests (see above); live behavior is tested manually
-  via `--headless` mode.
+- **Live Ollama API calls in `cargo test`** — real model responses require a
+  running endpoint and are **not** part of the default suite. Use
+  `python3 evals/run.py` for live task evals. The HTTP/streaming loop *is*
+  covered by mock-server integration tests (see above).
 - **TUI rendering** — the markdown renderer and scrollback pre-wrapping logic
   *are* unit-tested (see `src/tui/render.rs` + `src/tui/markdown.rs`), but the
   ratatui/crossterm event loop and interactive layout are not; those are

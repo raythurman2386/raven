@@ -20,6 +20,7 @@ use crate::plan::Plan;
 use crate::tools::{tool_definitions, Sandbox};
 
 use super::loop_control::{compute_reminders, summarize_request};
+use super::stream::ParsedCompletion;
 #[cfg(test)]
 use super::stream::{process_non_stream_json, process_stream_text};
 use super::types::{AgentEvent, ChatMessage, FunctionCall, ToolCall};
@@ -476,10 +477,13 @@ impl Agent {
             .saturating_sub(margin);
         let clamped_max = self.settings.max_tokens.min(remaining.max(256) as u32);
 
+        // Ephemeral reminders go out as user nudges (not extra system
+        // messages) so providers that only honor a single leading system
+        // message still see them. They are request-only and never persisted.
         let body = if reminders.is_empty() {
             json!({
                 "model": self.settings.model,
-                "messages": &self.messages,
+                "messages": request_messages_json(&self.messages),
                 "tools": self.tools_value(),
                 "tool_choice": "auto",
                 "temperature": self.settings.temperature,
@@ -490,15 +494,15 @@ impl Agent {
             let mut request_messages: Vec<ChatMessage> = self.messages.clone();
             for text in &reminders {
                 request_messages.push(ChatMessage {
-                    role: "system".into(),
-                    content: Some(text.clone()),
+                    role: "user".into(),
+                    content: Some(format!("<raven_reminder>\n{text}\n</raven_reminder>")),
                     tool_calls: None,
                     tool_call_id: None,
                 });
             }
             json!({
                 "model": self.settings.model,
-                "messages": request_messages,
+                "messages": request_messages_json(&request_messages),
                 "tools": self.tools_value(),
                 "tool_choice": "auto",
                 "temperature": self.settings.temperature,
@@ -521,7 +525,7 @@ impl Agent {
 
         let t_send = std::time::Instant::now();
         #[cfg(test)]
-        let (content_buf, tool_acc) = if let Some(source) = self.completion_source.as_mut() {
+        let parsed: ParsedCompletion = if let Some(source) = self.completion_source.as_mut() {
             let raw = source(&body);
             if self.settings.no_stream {
                 let v: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
@@ -544,7 +548,7 @@ impl Agent {
             }
         };
         #[cfg(not(test))]
-        let (content_buf, tool_acc) = {
+        let parsed: ParsedCompletion = {
             let resp = match self.send_with_retry(&url, &body, tx).await {
                 Ok(r) => r,
                 Err(e) => {
@@ -567,13 +571,46 @@ impl Agent {
 
         let t_stream = std::time::Instant::now();
         tracing::info!(
-            "iter={} stream_ms={} content_chars={} tool_calls={}",
+            "iter={} stream_ms={} content_chars={} tool_calls={} finish_reason={:?}",
             iter + 1,
             t_stream.elapsed().as_millis(),
-            content_buf.chars().count(),
-            tool_acc.len()
+            parsed.content.chars().count(),
+            parsed.tool_acc.len(),
+            parsed.finish_reason
         );
 
+        if let Some(err) = parsed.error {
+            let msg = if parsed.finish_reason.as_deref() == Some("length") {
+                format!("{err} (finish_reason=length; response may be truncated)")
+            } else {
+                err
+            };
+            let _ = tx.send(AgentEvent::Error(msg)).await;
+            return Ok(IterationOutcome::Finished);
+        }
+
+        // Truncated tool JSON with finish_reason=length: surface rather than
+        // dispatching half-formed arguments.
+        if parsed.finish_reason.as_deref() == Some("length") && !parsed.tool_acc.is_empty() {
+            let incomplete = parsed.tool_acc.values().any(|(_, _, args)| {
+                if args.trim().is_empty() {
+                    return true;
+                }
+                serde_json::from_str::<Value>(args).is_err()
+            });
+            if incomplete {
+                let _ = tx
+                    .send(AgentEvent::Error(
+                        "Completion truncated (finish_reason=length) with incomplete tool call arguments"
+                            .into(),
+                    ))
+                    .await;
+                return Ok(IterationOutcome::Finished);
+            }
+        }
+
+        let content_buf = parsed.content;
+        let tool_acc = parsed.tool_acc;
         let content_blank = content_buf.trim().is_empty();
 
         let assistant = ChatMessage {
@@ -635,6 +672,12 @@ impl Agent {
                 .header("Content-Type", "application/json");
             if let Some(key) = &self.settings.api_key {
                 req = req.header("Authorization", format!("Bearer {}", key));
+            }
+            // OpenRouter optional ranking headers (harmless elsewhere).
+            if url.contains("openrouter.ai") {
+                req = req
+                    .header("HTTP-Referer", "https://github.com/raven-agent/raven")
+                    .header("X-Title", "Raven");
             }
 
             match req.json(body).send().await {
@@ -706,5 +749,70 @@ impl Agent {
             status: 503,
             body: "retries exhausted — all attempts failed with transient errors".into(),
         })
+    }
+}
+
+/// Serialize chat messages for the wire format.
+///
+/// Assistant messages that only carry `tool_calls` omit `content` in our
+/// in-memory type (`None` + `skip_serializing_if`). Some OpenAI-compatible
+/// validators want an explicit `"content": null` instead — emit that here
+/// without changing the persisted `ChatMessage` shape.
+fn request_messages_json(messages: &[ChatMessage]) -> Value {
+    Value::Array(
+        messages
+            .iter()
+            .map(|m| {
+                let mut v = serde_json::to_value(m).unwrap_or_else(|_| json!({}));
+                if m.tool_calls.is_some() {
+                    if let Some(obj) = v.as_object_mut() {
+                        if !obj.contains_key("content") {
+                            obj.insert("content".into(), Value::Null);
+                        }
+                    }
+                }
+                v
+            })
+            .collect(),
+    )
+}
+
+#[cfg(test)]
+mod wire_format_tests {
+    use super::super::types::{ChatMessage, FunctionCall, ToolCall};
+    use super::request_messages_json;
+    use serde_json::json;
+
+    #[test]
+    fn request_messages_json_sets_null_content_for_tool_only_assistant() {
+        let msgs = vec![ChatMessage {
+            role: "assistant".into(),
+            content: None,
+            tool_calls: Some(vec![ToolCall {
+                id: "c1".into(),
+                type_: "function".into(),
+                function: FunctionCall {
+                    name: "read_file".into(),
+                    arguments: r#"{"path":"a"}"#.into(),
+                },
+            }]),
+            tool_call_id: None,
+        }];
+        let v = request_messages_json(&msgs);
+        let obj = v.as_array().unwrap()[0].as_object().unwrap();
+        assert!(obj.get("content").unwrap().is_null());
+        assert!(obj.get("tool_calls").is_some());
+    }
+
+    #[test]
+    fn request_messages_json_keeps_text_content() {
+        let msgs = vec![ChatMessage {
+            role: "assistant".into(),
+            content: Some("hi".into()),
+            tool_calls: None,
+            tool_call_id: None,
+        }];
+        let v = request_messages_json(&msgs);
+        assert_eq!(v.as_array().unwrap()[0]["content"], json!("hi"));
     }
 }

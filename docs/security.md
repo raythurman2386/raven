@@ -56,17 +56,30 @@ subprocesses.
 ### 2. Landlock filesystem confinement (Linux)
 
 **What it does:** Applies a Landlock ruleset to every subprocess before `exec`.
-The child is granted read/write only under the workspace, temp dirs, the user's
-HOME, and `/dev`; read-only for `/usr`, `/bin`, `/lib`, `/lib64`, `/etc`.
-Everything else is denied by the kernel.
+The child is granted **read/write** under the workspace, the process temp dir,
+and `/dev`; **read-only** for `/usr`, `/bin`, `/lib`, `/lib64`, `/etc`, and
+`$HOME` (or, when the workspace lives under `$HOME`, sibling dirs such as
+`.rustup` / `.cargo` / `.config`). Everything else is denied by the kernel.
 
-**Why HOME and /dev are allowed:** Most dev tools (git, npm, cargo) need to
-read/write config and caches under HOME, and `/dev/null` is needed by many
-tools. Blocking these entirely would break the tool. This is a documented,
-pragmatic tradeoff — the primary protection is confining to the workspace, but
-HOME is a necessary exception.
+**Why ABI V3 + pinned caches:** Landlock ABI V1 does not include `REFER`.
+Without it, `rename`/`link` across directories fails with `EXDEV` even under
+the same allowed tree — which is how `rustc` stages `.rmeta` into `target/`.
+Raven therefore:
 
-**Platforms:** Linux only (Landlock is a Linux LSM, kernel 5.13+).
+1. Uses Landlock **ABI V3** so `AccessFs::from_all` includes `REFER`.
+2. Pins `CARGO_HOME`, `CARGO_TARGET_DIR`, `TMPDIR`, and the npm cache under
+   `workspace/.raven/` so package caches do not hardlink from `$HOME` into
+   `target/` across separate hierarchies.
+3. Grants `$HOME` **read-only** (not RW) so git can read `~/.gitconfig` and
+   rustup can read toolchains, without letting builds write caches into HOME.
+
+**Why /dev is allowed:** git and many tools need `/dev/null` open for
+read+write.
+
+**Escape hatch:** `RAVEN_SANDBOX_LANDLOCK=0` skips Landlock (tests / recovery).
+
+**Platforms:** Linux only (Landlock is a Linux LSM, kernel 5.13+; REFER needs
+5.19+ / ABI V2+).
 
 **Limitation:** Best-effort. If the kernel doesn't support Landlock, Raven logs
 a warning and continues without it. The `CompatLevel::BestEffort` mode means

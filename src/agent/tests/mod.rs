@@ -3,6 +3,7 @@
 //! These exercise the streaming loop, tool dispatch, stall/verify recovery,
 //! compaction, and parallel sub-agents against a mock HTTP server.
 
+mod eval_suite;
 mod fake_model;
 
 use super::core::Agent;

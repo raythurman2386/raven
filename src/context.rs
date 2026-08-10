@@ -66,10 +66,24 @@ pub fn infer_context_window(model: &str) -> usize {
 /// [`infer_context_window`] if the API call fails or the field is missing.
 pub async fn fetch_context_window(base_url: &str, model: &str) -> usize {
     let trimmed = base_url.trim_end_matches('/').trim_end_matches("/v1");
+    let host = base_url.to_ascii_lowercase();
+    let looks_cloud = [
+        "openrouter.ai",
+        "api.openai.com",
+        "api.x.ai",
+        "api.anthropic.com",
+        "together.xyz",
+        "groq.com",
+        "fireworks.ai",
+    ]
+    .iter()
+    .any(|s| host.contains(s));
 
-    // Try Ollama's /api/show first (works when base_url is localhost:11434).
-    if let Some(ctx) = fetch_ollama_context(trimmed, model).await {
-        return ctx;
+    // Skip the Ollama /api/show probe on known cloud hosts (extra failed RTT).
+    if !looks_cloud {
+        if let Some(ctx) = fetch_ollama_context(trimmed, model).await {
+            return ctx;
+        }
     }
 
     // Try the OpenAI-compatible /models endpoint (OpenRouter, etc.).
@@ -121,11 +135,9 @@ async fn fetch_openai_context(base_url: &str, model: &str) -> Option<usize> {
         .ok()?
         .get(&models_url);
 
-    // Pass the API key if available.
-    if let Ok(key) = std::env::var("RAVEN_API_KEY").or_else(|_| std::env::var("OLLAMA_API_KEY")) {
-        if !key.trim().is_empty() {
-            req = req.bearer_auth(&key);
-        }
+    // Pass the API key if available (same aliases as config::default_api_key).
+    if let Some(key) = crate::config::default_api_key() {
+        req = req.bearer_auth(&key);
     }
 
     let resp = req.send().await.ok()?;

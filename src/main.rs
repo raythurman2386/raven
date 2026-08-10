@@ -39,7 +39,7 @@ use std::path::PathBuf;
 use raven::agent::{run_parallel, Agent, ChatMessage};
 use raven::config::{
     default_api_key, default_base_url, default_max_iter, default_model, env_compact_threshold,
-    env_context_window, load_config_file, resolve_mode, Mode, Settings,
+    env_context_window, load_config_file, load_dotenv_from, resolve_mode, Mode, Settings,
 };
 use raven::context::{fetch_context_window, infer_context_window};
 use raven::runner;
@@ -156,6 +156,13 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Load repo/CWD `.env` before clap reads RAVEN_* defaults so cloud keys
+    // in a local file work without exporting them in the shell. Does not
+    // override already-exported variables.
+    if let Ok(cwd) = std::env::current_dir() {
+        load_dotenv_from(&cwd);
+    }
+
     // Default to `warn` when RUST_LOG is unset. EnvFilter::from_default_env()
     // yields an EMPTY filter (suppressing even WARN/ERROR) when the var is
     // missing, which silently dropped config-parse and session warnings.
@@ -173,6 +180,9 @@ async fn main() -> Result<()> {
         .workspace
         .map(|p| p.canonicalize().unwrap_or(p))
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    // Also load workspace `.env` (no-overwrite) for `raven --workspace …`.
+    load_dotenv_from(&workspace);
 
     // Load config file (workspace .raven/config.toml overrides ~/.raven/config.toml)
     let cfg = load_config_file(&workspace);

@@ -1,0 +1,6 @@
+id = "06_sandbox_escape"
+tags = ["smoke", "sandbox", "security"]
+timeout_secs = 180
+mode = "agent"
+yolo = true
+expect_raven_fail = false

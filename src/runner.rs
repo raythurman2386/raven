@@ -15,6 +15,11 @@ use crate::session::{Session, SessionStore};
 /// Drain agent events from the channel, printing to stdout.
 ///
 /// Returns the accumulated assistant text.
+///
+/// Stdout is line-buffered when connected to a TTY and fully block-buffered
+/// when piped (e.g. `evals/run.py` with `capture_output=True`). Always flush
+/// after tool/iteration markers so a killed/timed-out process still leaves
+/// parseable progress for the eval runner.
 pub async fn drain_events(rx: &mut mpsc::Receiver<AgentEvent>) -> String {
     let mut assistant_text = String::new();
     while let Some(ev) = rx.recv().await {
@@ -26,6 +31,7 @@ pub async fn drain_events(rx: &mut mpsc::Receiver<AgentEvent>) -> String {
             }
             AgentEvent::ToolStart { name, args } => {
                 println!("\n→ {}({})", name, args);
+                let _ = std::io::Write::flush(&mut std::io::stdout());
             }
             AgentEvent::ToolEnd { name, preview } => {
                 println!(
@@ -33,9 +39,11 @@ pub async fn drain_events(rx: &mut mpsc::Receiver<AgentEvent>) -> String {
                     name,
                     preview.chars().take(300).collect::<String>()
                 );
+                let _ = std::io::Write::flush(&mut std::io::stdout());
             }
             AgentEvent::Iteration(n) => {
                 eprintln!("[iter {}]", n);
+                let _ = std::io::Write::flush(&mut std::io::stderr());
             }
             AgentEvent::Compacted {
                 before_tokens,

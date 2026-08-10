@@ -724,9 +724,10 @@ impl Sandbox {
         command
             .args(&args)
             .current_dir(&self.workspace)
-            .env("CI", "true")
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
+        setup_shell_env(&mut command, &self.workspace);
+        command.env("CI", "true");
         let mut confined =
             spawn_confined(&mut command, &self.workspace).context("spawn test runner")?;
         match wait_for_child(&mut confined.child, 600) {
@@ -832,6 +833,7 @@ impl Sandbox {
             .current_dir(&self.workspace)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
+        setup_shell_env(&mut command, &self.workspace);
         let mut confined = spawn_confined(&mut command, &self.workspace).context("spawn linter")?;
         match wait_for_child(&mut confined.child, 600) {
             Some((status, stdout, stderr)) => {
@@ -967,44 +969,91 @@ fn apply_rlimits() {
 /// that's acceptable).
 #[cfg(target_os = "linux")]
 fn apply_landlock(workspace: &Path) {
+    if std::env::var("RAVEN_SANDBOX_LANDLOCK").as_deref() == Ok("0") {
+        tracing::info!("landlock disabled via RAVEN_SANDBOX_LANDLOCK=0");
+        return;
+    }
     use landlock::{
         path_beneath_rules, Access, AccessFs, CompatLevel, Compatible, Ruleset, RulesetAttr,
         RulesetCreatedAttr, ABI,
     };
-    // The Landlock ABI should be incremented (and tested) regularly.
-    let abi = ABI::V1;
+    // ABI V2+ is required so `AccessFs::from_all` includes `REFER`. Without
+    // REFER, `rename`/`link` across directories (even under the same
+    // path_beneath rule) fails with EXDEV — which is exactly how rustc
+    // stages `.rmeta` from `target/.../incremental` into `target/.../deps`.
+    // BestEffort compatibility still runs on older kernels (rights unknown
+    // to the kernel are dropped).
+    let abi = ABI::V3;
     let access_all = AccessFs::from_all(abi);
     let access_read = AccessFs::from_read(abi);
 
-    let mut paths: Vec<PathBuf> = vec![workspace.to_path_buf()];
-    // Allow temp dirs so tools can write scratch files.
+    // Canonicalize so nested-path checks are reliable. Landlock treats each
+    // `path_beneath` rule as a separate hierarchy for hard-link purposes:
+    // `link(2)` across two rules returns EXDEV even on the same mount. That
+    // breaks `cargo`/`rustc` when the workspace lives under `/tmp` *and* we
+    // also grant the global temp dir — rustc writes a temp file under the
+    // `/tmp` rule then hardlinks the `.rmeta` into `target/` under the
+    // workspace rule. Skip the global temp rule when the workspace already
+    // lives under it; build caches/temps are pinned into the workspace via
+    // [`pin_build_tool_dirs`].
+    let ws_canon = workspace
+        .canonicalize()
+        .unwrap_or_else(|_| workspace.to_path_buf());
+    // Read-write roots. Keep this list minimal: every extra RW rule is a
+    // separate Landlock hierarchy, and hardlinks across hierarchies fail
+    // with EXDEV (breaks cargo/rustc). Build caches and TMPDIR are pinned
+    // under the workspace via [`pin_build_tool_dirs`].
+    let mut rw_paths: Vec<PathBuf> = vec![ws_canon.clone()];
+
+    // Always allow the process temp dir. With ABI V3 `REFER`, nested
+    // workspace-under-/tmp rules no longer break cargo hardlinks; git
+    // worktrees and other tools still need to create siblings under /tmp.
     if let Ok(tmp) = std::env::temp_dir().canonicalize() {
-        paths.push(tmp);
-    }
-    // Allow the user's home directory so tools can read/write config and
-    // caches (git config, npm/cargo caches, etc.). This is a pragmatic
-    // tradeoff: the primary protection is confining to the workspace, but
-    // blocking HOME entirely breaks most dev tools.
-    if let Ok(home) = std::env::var("HOME").map(PathBuf::from) {
-        if let Ok(home_canon) = home.canonicalize() {
-            paths.push(home_canon);
+        if tmp != ws_canon {
+            rw_paths.push(tmp);
         }
     }
-    // Allow /dev so tools can open /dev/null (git, etc.). This is a narrow,
-    // pragmatic exception — /dev/null is harmless and most dev tools need it.
-    paths.push(PathBuf::from("/dev"));
+    // /dev needs RW so git can open `/dev/null` for reading and writing.
+    rw_paths.push(PathBuf::from("/dev"));
+
+    // Read-only roots. HOME is RO (not RW): git needs `~/.gitconfig`, rustup
+    // needs `~/.rustup`, and cargo needs toolchain libs. With ABI V3 `REFER`,
+    // rustc can hardlink/rename within the workspace RW tree even while HOME
+    // is a separate RO hierarchy. Package *caches* that would hardlink from
+    // `~/.cargo` into `target/` are pinned under the workspace instead
+    // ([`pin_build_tool_dirs`]).
+    let mut ro_paths: Vec<PathBuf> = vec!["/usr", "/bin", "/lib", "/lib64", "/etc"]
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
+    if let Ok(home) = std::env::var("HOME").map(PathBuf::from) {
+        if let Ok(home_canon) = home.canonicalize() {
+            // Skip adding HOME when the workspace is inside it — the workspace
+            // RW rule already covers that tree; a second HOME rule would nest.
+            if home_canon != ws_canon && !ws_canon.starts_with(&home_canon) {
+                ro_paths.push(home_canon);
+            } else if ws_canon.starts_with(&home_canon) {
+                // Workspace under HOME: grant sibling toolchain dirs RO.
+                for sub in [".rustup", ".cargo", ".config"] {
+                    let p = home_canon.join(sub);
+                    if p.exists() {
+                        if let Ok(c) = p.canonicalize() {
+                            if !c.starts_with(&ws_canon) {
+                                ro_paths.push(c);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     let result = Ruleset::default()
         .set_compatibility(CompatLevel::BestEffort)
         .handle_access(access_all)
         .and_then(|r| r.create())
-        .and_then(|r| r.add_rules(path_beneath_rules(&paths, access_all)))
-        .and_then(|r| {
-            r.add_rules(path_beneath_rules(
-                &["/usr", "/bin", "/lib", "/lib64", "/etc"],
-                access_read,
-            ))
-        })
+        .and_then(|r| r.add_rules(path_beneath_rules(&rw_paths, access_all)))
+        .and_then(|r| r.add_rules(path_beneath_rules(&ro_paths, access_read)))
         .and_then(|r| r.restrict_self());
 
     match result {
@@ -1148,7 +1197,10 @@ fn shell_command(command: &str) -> Command {
 /// `SystemRoot`, `PATH`, `USERPROFILE`, `HOMEDRIVE`, `HOMEPATH`, `TEMP`,
 /// `TMP`, `COMSPEC`, and `PATHEXT` so that `cmd.exe` and common tools can
 /// start.
-fn setup_shell_env(cmd: &mut Command, _workspace: &std::path::Path) {
+///
+/// Also pins build-tool caches (`CARGO_HOME`, `TMPDIR`, npm cache, …) under
+/// the workspace — see [`pin_build_tool_dirs`].
+fn setup_shell_env(cmd: &mut Command, workspace: &std::path::Path) {
     cmd.env_clear();
     #[cfg(windows)]
     {
@@ -1170,13 +1222,54 @@ fn setup_shell_env(cmd: &mut Command, _workspace: &std::path::Path) {
     }
     #[cfg(not(windows))]
     {
-        cmd.env("PWD", _workspace);
-        for key in &["PATH", "HOME", "LANG"] {
+        cmd.env("PWD", workspace);
+        for key in &["PATH", "HOME", "LANG", "TERM", "USER", "LOGNAME"] {
+            if let Ok(val) = std::env::var(key) {
+                cmd.env(key, val);
+            }
+        }
+        // Keep rustup toolchain discovery working (read-only under $HOME).
+        for key in &["RUSTUP_HOME", "RUSTUP_TOOLCHAIN"] {
             if let Ok(val) = std::env::var(key) {
                 cmd.env(key, val);
             }
         }
     }
+    pin_build_tool_dirs(cmd, workspace);
+}
+
+/// Pin package-manager caches and temp dirs inside the workspace.
+///
+/// Landlock grants separate `path_beneath` rules for the workspace, `$HOME`,
+/// and the process temp dir. Linux rejects `link(2)` / some renames across
+/// different Landlock rules with `EXDEV` ("Invalid cross-device link"), even
+/// when the mounts would otherwise allow a copy fallback. Cargo and rustc
+/// then fail mid-compile when hardlinking from `~/.cargo` or `/tmp` into
+/// `target/`.
+///
+/// Keeping `CARGO_HOME`, `CARGO_TARGET_DIR`, `TMPDIR`, and the npm cache under
+/// the workspace rule avoids that class of failure for eval temp dirs and
+/// any workspace that does not share a device with `$HOME`.
+fn pin_build_tool_dirs(cmd: &mut Command, workspace: &std::path::Path) {
+    let raven_dir = workspace.join(".raven");
+    let cargo_home = raven_dir.join("cargo-home");
+    let tmp_dir = raven_dir.join("tmp");
+    let npm_cache = raven_dir.join("npm-cache");
+    let target_dir = workspace.join("target");
+    for dir in [&cargo_home, &tmp_dir, &npm_cache, &target_dir] {
+        let _ = std::fs::create_dir_all(dir);
+    }
+
+    cmd.env("CARGO_HOME", &cargo_home);
+    cmd.env("CARGO_TARGET_DIR", &target_dir);
+    cmd.env("TMPDIR", &tmp_dir);
+    cmd.env("TEMP", &tmp_dir);
+    cmd.env("TMP", &tmp_dir);
+    cmd.env("npm_config_cache", &npm_cache);
+    // Avoid inheriting a host sccache/RUSTC_WRAPPER that writes outside the
+    // workspace rule and trips the same EXDEV class of failures.
+    cmd.env_remove("RUSTC_WRAPPER");
+    cmd.env_remove("CARGO_INCREMENTAL");
 }
 
 /// Resolve a command name to its platform-appropriate executable.

@@ -1,0 +1,6 @@
+id = "09_plan_then_execute"
+tags = ["plan"]
+timeout_secs = 360
+mode = "plan"
+yolo = false
+stdin_approve = true

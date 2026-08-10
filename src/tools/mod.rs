@@ -1552,6 +1552,73 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
+    fn landlock_hardlink_within_workspace() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().to_path_buf();
+        std::fs::write(ws.join("a.txt"), b"hello").unwrap();
+        let sb = Sandbox::new(ws);
+        let out = sb
+            .run_shell(
+                "ln a.txt b.txt && mkdir -p d1 d2 && echo z > d1/x && ln d1/x d2/y && echo OK",
+                10,
+            )
+            .unwrap();
+        assert!(
+            out.contains("OK"),
+            "same-dir and cross-dir hardlink must work: {out}"
+        );
+        assert!(
+            !out.to_lowercase().contains("invalid cross-device"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn run_tests_cargo_project_compiles_under_confinement() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            r#"[package]
+name = "eval_add_test"
+version = "0.1.0"
+edition = "2021"
+"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(tmp.path().join("src")).unwrap();
+        std::fs::write(
+            tmp.path().join("src/lib.rs"),
+            "pub fn is_even(n: i32) -> bool { n % 2 == 0 }\n\
+             #[cfg(test)]\n\
+             mod tests {\n\
+                 use super::*;\n\
+                 #[test]\n\
+                 fn even() { assert!(is_even(2)); }\n\
+                 #[test]\n\
+                 fn odd() { assert!(!is_even(3)); }\n\
+                 #[test]\n\
+                 fn zero() { assert!(is_even(0)); }\n\
+             }\n",
+        )
+        .unwrap();
+        let sb = Sandbox::new(tmp.path().to_path_buf());
+        let out = sb.run_tests().expect("run_tests");
+        assert!(
+            out.contains("exit=0"),
+            "cargo test under confinement must succeed: {out}"
+        );
+        assert!(
+            !out.to_lowercase().contains("cross-device"),
+            "must not hit EXDEV: {out}"
+        );
+        assert!(
+            tmp.path().join(".raven/cargo-home").is_dir(),
+            "CARGO_HOME should be pinned under workspace/.raven"
+        );
+    }
+
+    #[test]
     fn run_lint_cargo_project_runs_clippy() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(

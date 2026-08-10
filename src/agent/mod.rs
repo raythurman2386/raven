@@ -17,11 +17,12 @@
 //!
 //! - `messages[0]` is always the system message; compaction never drops it.
 //! - Tool-call / tool-result pairs are kept together during compaction.
-//! - Ephemeral reminders are request-only and never pollute persisted
-//!   `self.messages`.
+//! - Ephemeral reminders are request-only user nudges (`<raven_reminder>`)
+//!   and never pollute persisted `self.messages`.
 //! - File-mutating tools (`write_file`, `search_replace`, `apply_patch`) run
 //!   serially in call order; other tools may run in parallel via
-//!   `spawn_blocking`.
+//!   `spawn_blocking`. Tool *results* are always recorded in original
+//!   `tool_calls[]` order.
 //! - Blank empty turns are stalls (capped retries), not clean finishes.
 
 mod core;

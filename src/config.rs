@@ -8,10 +8,13 @@
 //! `RAVEN_*` vars take priority over legacy `OLLAMA_*` / `OG_*` fallbacks:
 //! - `RAVEN_MODEL` > `OLLAMA_MODEL`
 //! - `RAVEN_HOST` > `OLLAMA_HOST`
-//! - `RAVEN_API_KEY` > `OLLAMA_API_KEY`
+//! - `RAVEN_API_KEY` > `OLLAMA_API_KEY` > `OPENROUTER_API_KEY` > `XAI_API_KEY` > `OPENAI_API_KEY`
 //! - `RAVEN_MAX_ITER` > `OG_MAX_ITER`
 //! - `RAVEN_CONTEXT_WINDOW` > `OG_CONTEXT_WINDOW`
 //! - `RAVEN_COMPACT_THRESHOLD` > `OG_COMPACT_THRESHOLD`
+//!
+//! A repo-root or CWD `.env` file is loaded early by the binary (see
+//! [`load_dotenv`]) without overriding already-exported shell variables.
 
 use anyhow::Result;
 use serde::Deserialize;
@@ -213,13 +216,76 @@ pub fn default_base_url() -> String {
         .unwrap_or_else(|_| "http://localhost:11434/v1".into())
 }
 
-/// Read the API key from `RAVEN_API_KEY` or `OLLAMA_API_KEY`. Empty/whitespace strings are treated as absent.
+/// Read the API key from common env vars. Empty/whitespace strings are treated as absent.
+///
+/// Order: `RAVEN_API_KEY` → `OLLAMA_API_KEY` → `OPENROUTER_API_KEY` →
+/// `XAI_API_KEY` → `OPENAI_API_KEY`.
 pub fn default_api_key() -> Option<String> {
-    std::env::var("RAVEN_API_KEY")
-        .or_else(|_| std::env::var("OLLAMA_API_KEY"))
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    const KEYS: &[&str] = &[
+        "RAVEN_API_KEY",
+        "OLLAMA_API_KEY",
+        "OPENROUTER_API_KEY",
+        "XAI_API_KEY",
+        "OPENAI_API_KEY",
+    ];
+    for name in KEYS {
+        if let Ok(s) = std::env::var(name) {
+            let t = s.trim().to_string();
+            if !t.is_empty() {
+                return Some(t);
+            }
+        }
+    }
+    None
+}
+
+/// Load `KEY=VALUE` pairs from a `.env` file into the process environment.
+///
+/// Existing variables are **not** overwritten. Lines may be blank, comments
+/// (`#…`), or `KEY=VALUE` with optional single/double quotes around the value.
+/// Returns the number of keys newly set.
+pub fn load_dotenv(path: &std::path::Path) -> usize {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return 0;
+    };
+    let mut set = 0usize;
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, val)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        if key.is_empty() || std::env::var_os(key).is_some() {
+            continue;
+        }
+        let mut val = val.trim().to_string();
+        if val.len() >= 2 {
+            let bytes = val.as_bytes();
+            if (bytes[0] == b'"' && bytes[val.len() - 1] == b'"')
+                || (bytes[0] == b'\'' && bytes[val.len() - 1] == b'\'')
+            {
+                val = val[1..val.len() - 1].to_string();
+            }
+        }
+        // SAFETY: single-threaded at startup before other threads spawn; we only
+        // insert keys that are not already present.
+        std::env::set_var(key, val);
+        set += 1;
+    }
+    set
+}
+
+/// Load `.env` from `dir/.env` then `cwd/.env` (first wins per-key via no-overwrite).
+pub fn load_dotenv_from(dir: &std::path::Path) {
+    let _ = load_dotenv(&dir.join(".env"));
+    if let Ok(cwd) = std::env::current_dir() {
+        if cwd != dir {
+            let _ = load_dotenv(&cwd.join(".env"));
+        }
+    }
 }
 
 /// Max agent iterations: `RAVEN_MAX_ITER` env var, else `OG_MAX_ITER`, else `30`.
@@ -525,6 +591,37 @@ mod tests {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
         assert!(key.is_none());
+    }
+
+    #[test]
+    fn load_dotenv_sets_missing_keys_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(".env");
+        let unique = format!("RAVEN_TEST_DOTENV_{}", std::process::id());
+        let unique_pre = format!("RAVEN_TEST_DOTENV_PRE_{}", std::process::id());
+        std::fs::write(
+            &path,
+            format!("{unique}=from_file\n{unique_pre}=from_file\n# comment\nEMPTY=\n"),
+        )
+        .unwrap();
+        std::env::set_var(&unique_pre, "already");
+        let n = super::load_dotenv(&path);
+        assert!(n >= 1);
+        assert_eq!(std::env::var(&unique).unwrap(), "from_file");
+        assert_eq!(std::env::var(&unique_pre).unwrap(), "already");
+        std::env::remove_var(&unique);
+        std::env::remove_var(&unique_pre);
+    }
+
+    #[test]
+    fn load_dotenv_strips_quotes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(".env");
+        let unique = format!("RAVEN_TEST_DOTENV_Q_{}", std::process::id());
+        std::fs::write(&path, format!("{unique}=\"quoted value\"\n")).unwrap();
+        super::load_dotenv(&path);
+        assert_eq!(std::env::var(&unique).unwrap(), "quoted value");
+        std::env::remove_var(&unique);
     }
 
     #[test]

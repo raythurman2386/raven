@@ -1,0 +1,5 @@
+id = "03_multi_file_refactor"
+tags = ["edit", "refactor"]
+timeout_secs = 360
+mode = "agent"
+yolo = true

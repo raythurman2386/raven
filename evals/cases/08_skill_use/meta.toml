@@ -1,0 +1,5 @@
+id = "08_skill_use"
+tags = ["skills", "edit"]
+timeout_secs = 300
+mode = "agent"
+yolo = true

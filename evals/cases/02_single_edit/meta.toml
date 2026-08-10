@@ -1,0 +1,6 @@
+id = "02_single_edit"
+tags = ["smoke", "edit", "test"]
+timeout_secs = 300
+mode = "agent"
+yolo = true
+requires_git = false

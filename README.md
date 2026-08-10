@@ -163,7 +163,7 @@ Layered config, highest priority wins:
 
 ```toml
 # ~/.raven/config.toml or .raven/config.toml
-model = "qwen2.5-coder:14b"
+model = "gemma4:latest"
 host = "http://localhost:11434/v1"
 context_window = 131072
 compact_threshold = 0.75
@@ -244,12 +244,19 @@ The `--yolo` flag disables confirmation entirely, but the denylist still applies
 ## Testing
 
 ```bash
-cargo test                    # 422 tests, all offline
+cargo test                    # offline unit + integration tests
+cargo test eval_suite         # Layer A agent eval harness (fake model)
 cargo clippy                  # zero warnings
 cargo clippy -- -W clippy::pedantic  # stricter linting
+
+# Live task evals (needs a model endpoint + built binary)
+cargo build --release
+python3 evals/run.py --smoke
+python3 evals/run.py          # full fixture suite
 ```
 
-See `docs/testing.md` for coverage and mutation testing instructions.
+See `docs/testing.md` and [`evals/README.md`](evals/README.md) for coverage,
+mutation testing, and the agent eval suite.
 
 ---
 
@@ -274,6 +281,7 @@ src/
   web.rs        # Web tools (web_search, web_fetch)
   error.rs      # Typed AgentError enum
   runner.rs     # Shared event-draining and plan-approval flow
+evals/          # Agent eval suite (fixtures, run.py, baselines)
 ```
 
 ---

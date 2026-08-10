@@ -1,0 +1,6 @@
+id = "01_readonly_symbol"
+tags = ["smoke", "readonly", "repomap"]
+timeout_secs = 180
+mode = "chat"
+yolo = false
+requires_git = false

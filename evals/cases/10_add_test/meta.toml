@@ -1,0 +1,5 @@
+id = "10_add_test"
+tags = ["smoke", "test", "edit"]
+timeout_secs = 300
+mode = "agent"
+yolo = true

@@ -1,0 +1,5 @@
+id = "07_memory_recall"
+tags = ["memory", "readonly"]
+timeout_secs = 180
+mode = "chat"
+yolo = false

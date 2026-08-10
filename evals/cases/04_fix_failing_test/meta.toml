@@ -1,0 +1,5 @@
+id = "04_fix_failing_test"
+tags = ["smoke", "edit", "debug"]
+timeout_secs = 300
+mode = "agent"
+yolo = true

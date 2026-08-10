@@ -143,11 +143,16 @@ impl Agent {
 
         // Any tool calls parsed here are ignored — with no tools advertised the
         // model cannot legitimately emit one; we only keep the text content.
-        let (content_buf, _tool_acc) = if self.settings.no_stream {
+        let parsed = if self.settings.no_stream {
             self.process_non_stream(resp, tx).await
         } else {
             self.process_stream(resp, tx).await
         };
+        if let Some(err) = parsed.error {
+            tracing::warn!("summary request returned provider error: {err}");
+            return self.emit_summary(tx, None).await;
+        }
+        let content_buf = parsed.content;
 
         self.emit_summary(tx, (!content_buf.is_empty()).then_some(content_buf))
             .await

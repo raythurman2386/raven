@@ -319,3 +319,74 @@ async fn dirty_tree_guard_gives_extra_iteration_for_commit() {
         "working tree should be clean after commit"
     );
 }
+
+/// Build an SSE body with multiple tool calls in one assistant turn.
+fn sse_multi_tools(calls: &[(&str, &str, &str)]) -> String {
+    let mut parts = Vec::new();
+    for (i, (id, name, args)) in calls.iter().enumerate() {
+        parts.push(format!(
+            "{{\"index\":{i},\"id\":{},\"type\":\"function\",\"function\":{{\"name\":{},\"arguments\":{}}}}}",
+            json!(id),
+            json!(name),
+            json!(args),
+        ));
+    }
+    format!(
+        "data: {{\"choices\":[{{\"delta\":{{\"tool_calls\":[{}]}}}}]}}\n\ndata: [DONE]\n\n",
+        parts.join(",")
+    )
+}
+
+#[tokio::test]
+async fn mixed_read_write_tool_results_preserve_call_order() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("a.txt"), "A\n").unwrap();
+    std::fs::write(tmp.path().join("b.txt"), "B\n").unwrap();
+
+    // Order: read a, write c, read b — mutator in the middle used to reorder results.
+    let multi = sse_multi_tools(&[
+        ("call_r1", "read_file", r#"{"path":"a.txt"}"#),
+        (
+            "call_w1",
+            "write_file",
+            r#"{"path":"c.txt","content":"C\n"}"#,
+        ),
+        ("call_r2", "read_file", r#"{"path":"b.txt"}"#),
+    ]);
+    let done = sse_text("done");
+    let mut agent = Agent::new(settings_for(tmp.path()))
+        .unwrap()
+        .with_completion_source(scripted(vec![multi, done]));
+    let (tx, mut rx) = mpsc::channel(64);
+    agent.run("mixed tools", tx).await.unwrap();
+    let _ = drain(&mut rx).await;
+
+    // Find the assistant tool_calls message, then the next three tool results.
+    let mut ids = Vec::new();
+    let mut saw_assistant_tools = false;
+    for m in &agent.messages {
+        if m.role == "assistant" && m.tool_calls.is_some() {
+            saw_assistant_tools = true;
+            continue;
+        }
+        if saw_assistant_tools && m.role == "tool" {
+            ids.push(m.tool_call_id.clone().unwrap_or_default());
+            if ids.len() == 3 {
+                break;
+            }
+        }
+    }
+    assert_eq!(
+        ids,
+        vec![
+            "call_r1".to_string(),
+            "call_w1".to_string(),
+            "call_r2".to_string()
+        ],
+        "tool results must follow tool_calls[] order, got {ids:?}"
+    );
+    assert!(
+        tmp.path().join("c.txt").is_file(),
+        "write should have applied"
+    );
+}

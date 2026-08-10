@@ -18,6 +18,34 @@ use crate::tools::{dispatch, safe_command_re, Sandbox};
 use super::core::Agent;
 use super::types::{AgentEvent, ChatMessage, ToolCall};
 
+/// Outcome of a parallel `spawn_blocking` tool dispatch.
+type ParallelToolJoin = (String, String, Result<String, ToolError>, String);
+
+/// Deferred tool outcome held until all calls finish so results can be
+/// appended in original `tool_calls[]` order.
+struct PendingToolResult {
+    id: String,
+    name: String,
+    cache_key: String,
+    result: Result<String, ToolError>,
+}
+
+impl PendingToolResult {
+    fn ready(
+        id: String,
+        name: String,
+        cache_key: String,
+        result: Result<String, ToolError>,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            cache_key,
+            result,
+        }
+    }
+}
+
 impl Agent {
     /// Execute a batch of tool calls, applying the serial/parallel policy.
     ///
@@ -42,11 +70,16 @@ impl Agent {
         assistant.tool_calls = Some(tcs.clone());
         self.messages.push(assistant);
 
-        // Execute tools in parallel. Each dispatch is sync, so run them
-        // on the blocking pool and collect results in call-id order.
-        // Results are cached by (name, args) to avoid redundant calls.
-        let mut handles = Vec::new();
-        for tc in &tcs {
+        // Slot results by original call index so tool messages always follow
+        // `tool_calls[]` order (OpenAI-compatible validators and some cloud
+        // routers reject interleaved / reordered tool results).
+        // File-mutating tools still run serially; other tools may run in
+        // parallel via spawn_blocking. Only *recording* is deferred/ordered.
+        let n = tcs.len();
+        let mut slots: Vec<Option<PendingToolResult>> = (0..n).map(|_| None).collect();
+        let mut handles: Vec<(usize, tokio::task::JoinHandle<ParallelToolJoin>)> = Vec::new();
+
+        for (idx, tc) in tcs.iter().enumerate() {
             // If the streamed `arguments` JSON is malformed (e.g. a
             // truncated chunk), surface a clear error to the model instead
             // of silently dispatching with empty args — a write_file or
@@ -60,18 +93,12 @@ impl Agent {
                         "Tool error: arguments for {} are not valid JSON: {}\nRaw: {}",
                         tc.function.name, e, tc.function.arguments
                     );
-                    let _ = tx
-                        .send(AgentEvent::ToolEnd {
-                            name: tc.function.name.clone(),
-                            preview: result.chars().take(600).collect(),
-                        })
-                        .await;
-                    self.messages.push(ChatMessage {
-                        role: "tool".into(),
-                        content: Some(result),
-                        tool_calls: None,
-                        tool_call_id: Some(tc.id.clone()),
-                    });
+                    slots[idx] = Some(PendingToolResult::ready(
+                        tc.id.clone(),
+                        tc.function.name.clone(),
+                        String::new(),
+                        Ok(result),
+                    ));
                     continue;
                 }
             };
@@ -97,18 +124,12 @@ impl Agent {
                     .await
                     .unwrap_or_else(|_| "The user did not provide an answer.".to_string());
                 let result = format!("User answered: {answer}");
-                let _ = tx
-                    .send(AgentEvent::ToolEnd {
-                        name: "ask_user".into(),
-                        preview: result.chars().take(600).collect(),
-                    })
-                    .await;
-                self.messages.push(ChatMessage {
-                    role: "tool".into(),
-                    content: Some(result),
-                    tool_calls: None,
-                    tool_call_id: Some(tc.id.clone()),
-                });
+                slots[idx] = Some(PendingToolResult::ready(
+                    tc.id.clone(),
+                    "ask_user".into(),
+                    String::new(),
+                    Ok(result),
+                ));
                 continue;
             }
 
@@ -138,18 +159,12 @@ impl Agent {
                         || answer.trim().eq_ignore_ascii_case("yes");
                     if !allowed {
                         let result = "Shell command NOT run: the user declined permission. Do not retry unless you have a safer alternative.".to_string();
-                        let _ = tx
-                            .send(AgentEvent::ToolEnd {
-                                name: "run_shell".into(),
-                                preview: result.chars().take(600).collect(),
-                            })
-                            .await;
-                        self.messages.push(ChatMessage {
-                            role: "tool".into(),
-                            content: Some(result),
-                            tool_calls: None,
-                            tool_call_id: Some(tc.id.clone()),
-                        });
+                        slots[idx] = Some(PendingToolResult::ready(
+                            tc.id.clone(),
+                            "run_shell".into(),
+                            String::new(),
+                            Ok(result),
+                        ));
                         continue;
                     }
                 }
@@ -173,18 +188,12 @@ impl Agent {
                         .to_string();
                     crate::web::fetch_text(&url).await
                 };
-                let _ = tx
-                    .send(AgentEvent::ToolEnd {
-                        name: tc.function.name.clone(),
-                        preview: result.chars().take(600).collect(),
-                    })
-                    .await;
-                self.messages.push(ChatMessage {
-                    role: "tool".into(),
-                    content: Some(result),
-                    tool_calls: None,
-                    tool_call_id: Some(tc.id.clone()),
-                });
+                slots[idx] = Some(PendingToolResult::ready(
+                    tc.id.clone(),
+                    tc.function.name.clone(),
+                    String::new(),
+                    Ok(result),
+                ));
                 continue;
             }
 
@@ -239,19 +248,12 @@ impl Agent {
             );
             if is_read_only {
                 if let Some(cached) = self.tool_cache.get(&cache_key) {
-                    let preview: String = cached.chars().take(600).collect();
-                    let _ = tx
-                        .send(AgentEvent::ToolEnd {
-                            name: name.clone(),
-                            preview,
-                        })
-                        .await;
-                    self.messages.push(ChatMessage {
-                        role: "tool".into(),
-                        content: Some(cached.clone()),
-                        tool_calls: None,
-                        tool_call_id: Some(id),
-                    });
+                    slots[idx] = Some(PendingToolResult::ready(
+                        id,
+                        name,
+                        cache_key,
+                        Ok(cached.clone()),
+                    ));
                     continue;
                 }
             }
@@ -260,9 +262,9 @@ impl Agent {
                 name.as_str(),
                 "write_file" | "search_replace" | "apply_patch"
             ) {
-                // Serialize file-mutating tools: dispatch, await, and record
-                // the result inline so two edits to the same file apply in
-                // call order instead of racing (issue #111).
+                // Serialize file-mutating tools: dispatch and await inline so
+                // two edits to the same file apply in call order instead of
+                // racing (issue #111). Recording still goes through slots.
                 let dispatch_name = name.clone();
                 let dispatch_result: Result<String, ToolError> =
                     tokio::task::spawn_blocking(move || {
@@ -272,26 +274,49 @@ impl Agent {
                     .unwrap_or_else(|e| {
                         Err(ToolError::Other(format!("Tool error: join failed: {e}")))
                     });
-                self.record_tool_result(tx, id, name, cache_key, dispatch_result)
-                    .await;
+                slots[idx] = Some(PendingToolResult::ready(
+                    id,
+                    name,
+                    cache_key,
+                    dispatch_result,
+                ));
             } else {
-                handles.push(tokio::task::spawn_blocking(move || {
-                    let result = dispatch(&sandbox, &name, &args, read_only);
-                    (id, name, result, cache_key)
-                }));
+                handles.push((
+                    idx,
+                    tokio::task::spawn_blocking(move || {
+                        let result = dispatch(&sandbox, &name, &args, read_only);
+                        (id, name, result, cache_key)
+                    }),
+                ));
             }
         }
 
-        for h in handles {
+        for (idx, h) in handles {
+            // Preserve the original tool_call id even if the join fails —
+            // empty ids produce provider 400s on the next request.
+            let fallback_id = tcs.get(idx).map(|t| t.id.clone()).unwrap_or_default();
+            let fallback_name = tcs
+                .get(idx)
+                .map(|t| t.function.name.clone())
+                .unwrap_or_else(|| "unknown".into());
             let (id, name, dispatch_result, cache_key) = h.await.unwrap_or_else(|e| {
                 (
-                    String::new(),
-                    "unknown".into(),
+                    fallback_id,
+                    fallback_name,
                     Err(ToolError::Other(format!("Tool error: join failed: {e}"))),
                     String::new(),
                 )
             });
-            self.record_tool_result(tx, id, name, cache_key, dispatch_result)
+            slots[idx] = Some(PendingToolResult::ready(
+                id,
+                name,
+                cache_key,
+                dispatch_result,
+            ));
+        }
+
+        for slot in slots.into_iter().flatten() {
+            self.record_tool_result(tx, slot.id, slot.name, slot.cache_key, slot.result)
                 .await;
         }
 
