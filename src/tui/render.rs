@@ -66,6 +66,18 @@ pub fn render_blocks(blocks: &[BlockKind], tick: u64, theme: Theme) -> (Vec<Line
                     format!("{prefix}{}", t.text()),
                     style,
                 )));
+                if let Some(preview) = t.preview.as_ref() {
+                    for pline in preview.lines().take(3) {
+                        let snip: String = pline.chars().take(120).collect();
+                        if snip.trim().is_empty() {
+                            continue;
+                        }
+                        lines.push(Line::from(Span::styled(
+                            format!("  {snip}"),
+                            Style::default().fg(theme.dim),
+                        )));
+                    }
+                }
                 last_assistant_start = None;
             }
             BlockKind::System(s) => {

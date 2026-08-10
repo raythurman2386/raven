@@ -56,25 +56,51 @@ impl AssistantBlock {
 }
 
 /// A tool call. `active` glimmers bright while running; `end_tick` drives the
-/// fade after completion.
+/// fade after completion. `name` matches [`crate::agent::AgentEvent::ToolEnd`]
+/// so parallel tools deactivate the correct row (not always `blocks.last()`).
 #[derive(Clone)]
 pub struct ToolBlock {
     text: String,
+    /// Tool function name from the agent event (e.g. `read_file`).
+    pub name: String,
     pub active: bool,
     pub end_tick: Option<u64>,
+    /// Optional short result preview (from `ToolEnd`), shown dim under the call.
+    pub preview: Option<String>,
 }
 
 impl ToolBlock {
     pub fn new(text: String) -> Self {
         Self {
             text,
+            name: String::new(),
             active: false,
             end_tick: None,
+            preview: None,
+        }
+    }
+
+    /// Build an active tool row with a stable name for `ToolEnd` matching.
+    pub fn start(name: impl Into<String>, text: String) -> Self {
+        Self {
+            text,
+            name: name.into(),
+            active: true,
+            end_tick: None,
+            preview: None,
         }
     }
 
     pub fn text(&self) -> &str {
         &self.text
+    }
+
+    /// Attach a capped result preview after the tool finishes.
+    pub fn set_preview(&mut self, preview: impl Into<String>) {
+        let p: String = preview.into().chars().take(300).collect();
+        if !p.trim().is_empty() {
+            self.preview = Some(p);
+        }
     }
 }
 
@@ -133,5 +159,20 @@ mod tests {
         assert!(!b.active);
         b.active = true;
         assert!(b.active);
+    }
+
+    #[test]
+    fn tool_block_start_sets_name_and_active() {
+        let b = ToolBlock::start("read_file", "⇢ read_file(a)".into());
+        assert!(b.active);
+        assert_eq!(b.name, "read_file");
+        assert!(b.preview.is_none());
+    }
+
+    #[test]
+    fn tool_block_set_preview_caps_length() {
+        let mut b = ToolBlock::start("run_shell", "⇢ run_shell".into());
+        b.set_preview("x".repeat(500));
+        assert_eq!(b.preview.as_ref().unwrap().chars().count(), 300);
     }
 }

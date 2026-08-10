@@ -50,14 +50,62 @@ pub fn waiting_diamond(tick: u64) -> &'static str {
 }
 
 /// The agent state label + color shown in the status strip.
-pub fn state_label(state: &AgentState, status: &str, theme: Theme) -> (&'static str, Color) {
+///
+/// `running` is the TUI's turn-in-flight flag — without it, a plain
+/// `"running"` / `"running…"` status falls through to `"ready"` and the
+/// strip lies for most of a normal agent turn.
+pub fn state_label(
+    state: &AgentState,
+    status: &str,
+    running: bool,
+    theme: Theme,
+) -> (&'static str, Color) {
     match state {
         AgentState::Planning => ("planning", theme.plan),
         AgentState::AwaitingApproval => ("awaiting approval", theme.plan),
         AgentState::Executing => ("executing", theme.accent),
-        _ if status.starts_with("tool:") => ("tool", theme.tool),
+        _ if status.starts_with("tool:") || status.starts_with("⇢") => ("tool", theme.tool),
         _ if status.starts_with("thinking") => ("thinking", theme.dim),
         _ if status.starts_with("awaiting answer") => ("awaiting answer", theme.plan),
+        _ if status.starts_with("awaiting plan") => ("awaiting approval", theme.plan),
+        _ if running || status.starts_with("running") => ("running", theme.accent),
         _ => ("ready", theme.user),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn state_label_running_status_is_busy() {
+        let t = Theme::default_theme();
+        let (label, _) = state_label(&AgentState::Idle, "running", true, t);
+        assert_eq!(label, "running");
+        let (label, _) = state_label(&AgentState::Idle, "running…", false, t);
+        assert_eq!(label, "running");
+        let (label, _) = state_label(&AgentState::Idle, "ready", false, t);
+        assert_eq!(label, "ready");
+    }
+
+    #[test]
+    fn state_label_thinking_and_tool() {
+        let t = Theme::default_theme();
+        assert_eq!(
+            state_label(&AgentState::Idle, "thinking… (iter 2)", true, t).0,
+            "thinking"
+        );
+        assert_eq!(
+            state_label(&AgentState::Idle, "tool: read_file", true, t).0,
+            "tool"
+        );
+    }
+
+    #[test]
+    fn fmt_tokens_compacts() {
+        assert_eq!(fmt_tokens(42), "42");
+        assert_eq!(fmt_tokens(1_500), "1.5K");
+        assert_eq!(fmt_tokens(12_000), "12K");
+        assert_eq!(fmt_tokens(1_500_000), "1.5M");
     }
 }

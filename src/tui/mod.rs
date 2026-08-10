@@ -75,6 +75,9 @@ struct TuiState {
     stream_patch: bool,
     cached_est_tokens: usize,
     messages_dirty: bool,
+    /// Set when the input box / cursor / completion changed so an idle TUI
+    /// still redraws (typing must not freeze the chatbox).
+    input_dirty: bool,
     input: String,
     /// Byte index of the edit cursor within `input`. Text is inserted/removed
     /// at this position; `Left`/`Right`/`Home`/`End` move it.
@@ -134,6 +137,7 @@ impl TuiState {
             stream_patch: false,
             cached_est_tokens: 0,
             messages_dirty: false,
+            input_dirty: false,
             input: String::new(),
             cursor: 0,
             completion: None,
@@ -288,7 +292,8 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
         // Capture whether the log/stream changed this tick *before* the flags
         // are cleared below, so we can force an immediate draw (rather than
         // waiting for the DRAW_INTERVAL throttle).
-        let dirty = state.log_dirty || state.stream_patch || state.messages_dirty;
+        let dirty =
+            state.log_dirty || state.stream_patch || state.messages_dirty || state.input_dirty;
 
         if state.log_dirty {
             let (rendered, tail) = render_blocks(&state.blocks, state.tick, state.theme);
@@ -324,14 +329,25 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
             state.messages_dirty = false;
         }
 
-        let force_draw = dirty || !state.running || state.live_tool.is_some();
-        if force_draw || last_draw.elapsed() >= DRAW_INTERVAL {
-            if state.running || state.live_tool.is_some() {
+        // Draw when dirty, when animating (running / live tool / ask_user /
+        // copy toast), or on the throttled interval while a turn is in flight.
+        // Idle with nothing to animate must NOT spin a full redraw every 40ms.
+        let animating = state.running
+            || state.live_tool.is_some()
+            || state.pending_question.is_some()
+            || state
+                .copy_status
+                .as_ref()
+                .is_some_and(|(start, _)| state.tick.wrapping_sub(*start) < 50);
+        let force_draw = dirty || animating;
+        if force_draw || (state.running && last_draw.elapsed() >= DRAW_INTERVAL) {
+            if animating {
                 state.tick = state.tick.wrapping_add(1);
             }
             terminal.draw(|f| {
                 draw_ui(f, app_name, &settings, &state);
             })?;
+            state.input_dirty = false;
             last_draw = std::time::Instant::now();
         }
 
@@ -362,51 +378,38 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                             }
                         }
                         KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            let _ = store.save_all_messages(&session, &state.session_messages);
-                            let _ = store.update_summary(&mut session, None);
-                            session = store.create(&settings.model)?;
-                            state.session_messages.clear();
-                            state.blocks.clear();
-                            state.push_system(format!(
-                                "{app_name} · {} · {}",
-                                settings.model, settings.base_url
-                            ));
-                            state
-                                .push_system(format!("workspace {}", settings.workspace.display()));
-                            state.push_system(String::new());
-                            state.push_system(
+                            reset_session(
+                                &mut state,
+                                &mut session,
+                                &store,
+                                &settings,
+                                app_name,
                                 "new session · enter submit · ctrl+n new · shift+tab mode · ctrl+c quit",
-                            );
-                            state.log_dirty = true;
-                            state.plan_preview.clear();
-                            state.plan_pending = false;
-                            state.running = false;
-                            state.agent_state = AgentState::Idle;
-                            state.status = "ready".into();
-                            state.assistant_text.clear();
-                            state.input.clear();
-                            state.scroll = 0;
-                            state.auto_scroll = true;
+                            )?;
                         }
                         KeyCode::Up => {
                             state.scroll = state.scroll.saturating_add(1);
                             state.auto_scroll = false;
+                            state.input_dirty = true;
                         }
                         KeyCode::Down => {
                             state.scroll = state.scroll.saturating_sub(1);
                             if state.scroll == 0 {
                                 state.auto_scroll = true;
                             }
+                            state.input_dirty = true;
                         }
                         KeyCode::PageUp => {
                             state.scroll = state.scroll.saturating_add(10);
                             state.auto_scroll = false;
+                            state.input_dirty = true;
                         }
                         KeyCode::PageDown => {
                             state.scroll = state.scroll.saturating_sub(10);
                             if state.scroll == 0 {
                                 state.auto_scroll = true;
                             }
+                            state.input_dirty = true;
                         }
                         KeyCode::Left => {
                             if !state.running || state.pending_question.is_some() {
@@ -417,6 +420,7 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                                     .map(|(i, _)| i)
                                 {
                                     state.cursor = prev;
+                                    state.input_dirty = true;
                                 }
                             }
                         }
@@ -430,17 +434,20 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                                 // stranding the cursor before the last char.)
                                 if let Some(c) = state.input[state.cursor..].chars().next() {
                                     state.cursor += c.len_utf8();
+                                    state.input_dirty = true;
                                 }
                             }
                         }
                         KeyCode::Home => {
                             if !state.running || state.pending_question.is_some() {
                                 state.cursor = 0;
+                                state.input_dirty = true;
                             }
                         }
                         KeyCode::End => {
                             if !state.running || state.pending_question.is_some() {
                                 state.cursor = state.input.len();
+                                state.input_dirty = true;
                             }
                         }
                         KeyCode::Tab => {
@@ -453,9 +460,11 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                                             apply_completion(&state.input, comp, &cand);
                                         state.input = new_input;
                                         state.cursor = new_cursor;
+                                        state.input_dirty = true;
                                         state.completion = None;
                                     } else {
                                         comp.next();
+                                        state.input_dirty = true;
                                     }
                                 }
                             }
@@ -466,6 +475,7 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                             {
                                 state.input.insert(state.cursor, c);
                                 state.cursor += c.len_utf8();
+                                state.input_dirty = true;
                             }
                             state.completion = candidates_for(&state.input, &arg_candidates);
                         }
@@ -478,17 +488,32 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                                 {
                                     state.input.remove(prev);
                                     state.cursor = prev;
+                                    state.input_dirty = true;
                                 }
                             }
                             state.completion = candidates_for(&state.input, &arg_candidates);
                         }
                         KeyCode::Enter => {
+                            // Enter accepts the highlighted completion when the
+                            // popup is open (so `/th` + Enter → `/theme`).
+                            if let Some(comp) = state.completion.take() {
+                                if let Some(candidate) = comp.candidates.get(comp.selected) {
+                                    state.input.replace_range(
+                                        comp.replace_start..comp.replace_end,
+                                        candidate,
+                                    );
+                                    state.cursor = state.input.len();
+                                    state.input_dirty = true;
+                                }
+                                continue;
+                            }
                             if state.input.trim().is_empty() {
                                 continue;
                             }
                             let text = state.input.trim().to_string();
                             state.input.clear();
                             state.cursor = 0;
+                            state.input_dirty = true;
                             state.completion = None;
                             state.scroll = 0;
                             state.auto_scroll = true;
@@ -552,23 +577,46 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                                 )?;
                             }
                         }
-                        KeyCode::Esc => break,
+                        KeyCode::Esc => {
+                            // Layered dismiss: completion → selection → ask_user → quit.
+                            if state.completion.take().is_some() || state.selection.take().is_some()
+                            {
+                                state.input_dirty = true;
+                            } else if state.pending_question.take().is_some() {
+                                state.pending_question_text = None;
+                                state.status = if state.running {
+                                    "running".into()
+                                } else {
+                                    "ready".into()
+                                };
+                                state.push_system("question dismissed");
+                                state.log_dirty = true;
+                            } else {
+                                break;
+                            }
+                        }
                         _ => {}
                     }
                 }
                 Event::Paste(text) => {
-                    // Bracketed paste: append the entire pasted block at once.
-                    // Without this, a large paste arrives as a rapid stream of
-                    // individual Char events that get dropped by the poll loop,
-                    // and any newline in the pasted text is treated as Enter
-                    // (submitting mid-paste).
+                    // Bracketed paste: insert at the cursor (not always at end).
+                    // Without this handler, a large paste arrives as a rapid
+                    // stream of Char events that get dropped by the poll loop,
+                    // and any newline in the pasted text is treated as Enter.
                     if !state.running || state.pending_question.is_some() {
-                        // Cap the paste so a multi-MB paste can't grow memory
-                        // or slow down per-frame re-wrap unboundedly.
                         let remaining = MAX_INPUT_CHARS.saturating_sub(state.input.chars().count());
-                        state
-                            .input
-                            .push_str(&text.chars().take(remaining).collect::<String>());
+                        let pasted: String = text
+                            .chars()
+                            .filter(|c| *c != '\r')
+                            .take(remaining)
+                            .collect();
+                        if !pasted.is_empty() {
+                            let at = state.cursor.min(state.input.len());
+                            state.input.insert_str(at, &pasted);
+                            state.cursor = at + pasted.len();
+                            state.input_dirty = true;
+                            state.completion = candidates_for(&state.input, &arg_candidates);
+                        }
                     }
                 }
                 Event::Mouse(m) => {
@@ -606,22 +654,20 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                     state.live_tool = Some(format!("⇢ {name}({snip})"));
                     state.turn_tool_count += 1;
                     state.status = "running".into();
-                    // Push an inline tool block that glimmers while active.
-                    let mut tb = ToolBlock::new(format!("⇢ {name}({snip})"));
-                    tb.active = true;
+                    // Named active block so ToolEnd can match under parallelism.
+                    let tb = ToolBlock::start(name.clone(), format!("⇢ {name}({snip})"));
                     state.blocks.push(BlockKind::Tool(tb));
                     state.log_dirty = true;
                 }
                 AgentEvent::ToolEnd { name, preview } => {
-                    let _ = name;
-                    let _ = preview;
-                    state.live_tool = None;
                     state.status = "running".into();
-                    // Mark the last tool block finished so it fades to dim.
-                    if let Some(BlockKind::Tool(tb)) = state.blocks.last_mut() {
-                        tb.active = false;
-                        tb.end_tick = Some(state.tick);
-                    }
+                    // Deactivate the matching active tool (not always last).
+                    deactivate_tool(&mut state.blocks, &name, &preview, state.tick);
+                    // Keep live_tool pointing at another still-active tool if any.
+                    state.live_tool = state.blocks.iter().rev().find_map(|b| match b {
+                        BlockKind::Tool(tb) if tb.active => Some(tb.text().to_string()),
+                        _ => None,
+                    });
                     state.log_dirty = true;
                 }
                 AgentEvent::Iteration(n) => {
@@ -666,7 +712,12 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                     state.scroll = 0;
                 }
                 AgentEvent::Done => {
+                    // Drop any unanswered ask_user channel (agent is finished).
+                    state.pending_question = None;
+                    state.pending_question_text = None;
                     if let Some(handle) = state.task_handle.take() {
+                        // Prefer try_join-style: the agent task should already
+                        // be finished when Done is emitted; await is then cheap.
                         if let Ok(Ok(msgs)) = handle.await {
                             state.session_messages = msgs;
                             state.messages_dirty = true;
@@ -706,6 +757,8 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                     state.log_dirty = true;
                 }
                 AgentEvent::Error(e) => {
+                    state.pending_question = None;
+                    state.pending_question_text = None;
                     state.push_error(e);
                     state.plan_preview.clear();
                     state.status = "ready".into();
@@ -805,7 +858,12 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState)
     } else {
         0.0
     };
-    let (state_txt, state_color) = state_label(&state.agent_state, &state.status, state.theme);
+    let (state_txt, state_color) = state_label(
+        &state.agent_state,
+        &state.status,
+        state.running,
+        state.theme,
+    );
 
     let show_plan = show_plan(state);
     let plan_h = if show_plan {
@@ -841,6 +899,14 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState)
             Style::default().fg(usage_color(pct, theme)),
         ),
         Span::styled("  ·  ", Style::default().fg(theme.dim)),
+        Span::styled(
+            state.mode.label(),
+            Style::default().fg(match state.mode {
+                Mode::Plan => theme.plan,
+                Mode::Agent => theme.accent,
+                Mode::Chat => theme.user,
+            }),
+        ),
     ]);
     f.render_widget(Paragraph::new(top), chunks[0]);
 
@@ -880,10 +946,12 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState)
             .iter()
             .map(|l| Line::from(Span::styled(l.clone(), Style::default().fg(theme.plan))))
             .collect();
-        lines.push(Line::from(Span::styled(
-            "yes to execute · or type revisions",
-            Style::default().fg(theme.dim),
-        )));
+        if state.plan_pending || state.agent_state == AgentState::AwaitingApproval {
+            lines.push(Line::from(Span::styled(
+                "yes to execute · or type revisions",
+                Style::default().fg(theme.dim),
+            )));
+        }
         let plan_widget = Paragraph::new(lines).scroll((state.plan_scroll, 0)).block(
             Block::default()
                 .title(Span::styled(" plan ", Style::default().fg(theme.plan)))
@@ -956,12 +1024,24 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState)
 
     // Completion popup (between status strip and input box).
     if let Some(comp) = &state.completion {
-        let lines: Vec<Line> = comp
-            .candidates
+        // Window the candidates around `selected` so the highlighted entry is
+        // always visible even when there are more candidates than rows.
+        const MAX_ROWS: usize = 6;
+        let total = comp.candidates.len();
+        let start = if total <= MAX_ROWS {
+            0
+        } else {
+            comp.selected
+                .saturating_sub(MAX_ROWS / 2)
+                .min(total.saturating_sub(MAX_ROWS))
+        };
+        let end = (start + MAX_ROWS).min(total);
+        let lines: Vec<Line> = comp.candidates[start..end]
             .iter()
             .enumerate()
             .map(|(i, cand)| {
-                let style = if i == comp.selected {
+                let idx = start + i;
+                let style = if idx == comp.selected {
                     Style::default()
                         .fg(theme.status_bg)
                         .bg(theme.accent)
@@ -1218,6 +1298,7 @@ fn handle_mouse_event(
                 state.scroll = state.scroll.saturating_add(3);
                 state.auto_scroll = false;
             }
+            state.input_dirty = true;
         }
         MouseEventKind::ScrollDown => {
             let chunks = compute_layout(size, state);
@@ -1229,6 +1310,7 @@ fn handle_mouse_event(
                     state.auto_scroll = true;
                 }
             }
+            state.input_dirty = true;
         }
         MouseEventKind::Down(MouseButton::Left) => {
             // Check the [stop] button first (right edge of status strip).
@@ -1245,11 +1327,14 @@ fn handle_mouse_event(
                     state.push_system("⏹ stopped (click)");
                     state.log_dirty = true;
                 }
+                state.pending_question = None;
+                state.pending_question_text = None;
                 state.running = false;
                 state.agent_state = AgentState::Idle;
                 state.status = "ready".into();
                 state.assistant_text.clear();
                 state.live_tool = None;
+                state.turn_tool_count = 0;
                 return;
             }
 
@@ -1285,6 +1370,7 @@ fn handle_mouse_event(
                     state.copy_status = None;
                 }
                 state.last_click = Some((state.tick, display_pos));
+                state.input_dirty = true;
             }
         }
         MouseEventKind::Drag(MouseButton::Left) => {
@@ -1298,6 +1384,7 @@ fn handle_mouse_event(
                 if let Some(sel) = state.selection.as_mut() {
                     sel.extend(display_pos);
                     state.copy_status = None;
+                    state.input_dirty = true;
                 }
                 let _ = display;
             }
@@ -1317,6 +1404,7 @@ fn handle_mouse_event(
                 } else {
                     state.selection = None;
                 }
+                state.input_dirty = true;
             }
         }
         _ => {}
@@ -1324,6 +1412,79 @@ fn handle_mouse_event(
 }
 
 // ── Task / plan helpers (keeps the event loop readable) ──────────────────
+
+/// Deactivate the tool block matching `name` (the most recent active one).
+///
+/// Parallel tools can finish out of order, so we must not always clear
+/// `blocks.last()`. Falls back to the last tool block when no active block
+/// matches (e.g. a tool that started before the TUI attached).
+fn deactivate_tool(blocks: &mut [BlockKind], name: &str, preview: &str, tick: u64) {
+    for b in blocks.iter_mut().rev() {
+        if let BlockKind::Tool(tb) = b {
+            if tb.active && (tb.name == name || tb.name.is_empty()) {
+                tb.active = false;
+                tb.end_tick = Some(tick);
+                tb.set_preview(preview);
+                return;
+            }
+        }
+    }
+    // Fallback: last tool block.
+    if let Some(BlockKind::Tool(tb)) = blocks.last_mut() {
+        tb.active = false;
+        tb.end_tick = Some(tick);
+        tb.set_preview(preview);
+    }
+}
+
+/// Abort any in-flight agent task and reset the UI + session to a fresh state.
+///
+/// Shared by Ctrl+N and `/new` so both paths abort the running task, drop the
+/// ask_user oneshot, and clear live tool/plan/assistant state — otherwise a
+/// stale agent could keep delivering events into the new session.
+fn reset_session(
+    state: &mut TuiState,
+    session: &mut Session,
+    store: &SessionStore,
+    settings: &Settings,
+    app_name: &str,
+    hint: &str,
+) -> Result<()> {
+    if let Some(handle) = state.task_handle.take() {
+        handle.abort();
+    }
+    let _ = store.save_all_messages(session, &state.session_messages);
+    let _ = store.update_summary(session, None);
+    *session = store.create(&settings.model)?;
+    state.session_messages.clear();
+    state.blocks.clear();
+    state.pending_question = None;
+    state.pending_question_text = None;
+    state.push_system(format!(
+        "{app_name} · {} · {}",
+        settings.model, settings.base_url
+    ));
+    state.push_system(format!("workspace {}", settings.workspace.display()));
+    state.push_system(String::new());
+    state.push_system(hint);
+    state.log_dirty = true;
+    state.plan_preview.clear();
+    state.plan_pending = false;
+    state.active_plan = None;
+    state.running = false;
+    state.agent_state = AgentState::Idle;
+    state.status = "ready".into();
+    state.assistant_text.clear();
+    state.input.clear();
+    state.cursor = 0;
+    state.completion = None;
+    state.selection = None;
+    state.live_tool = None;
+    state.turn_tool_count = 0;
+    state.scroll = 0;
+    state.auto_scroll = true;
+    Ok(())
+}
 
 fn start_task(
     state: &mut TuiState,
@@ -1457,25 +1618,14 @@ async fn dispatch_slash_command(
             state.log_dirty = true;
         }
         "new" => {
-            let _ = store.save_all_messages(session, &state.session_messages);
-            let _ = store.update_summary(session, None);
-            *session = store.create(&settings.model)?;
-            state.session_messages.clear();
-            state.blocks.clear();
-            state.push_system(format!(
-                "raven · {} · {}",
-                settings.model, settings.base_url
-            ));
-            state.push_system(format!("workspace {}", settings.workspace.display()));
-            state.push_system(String::new());
-            state.push_system("new session · enter submit · /model · /new · /help · /quit");
-            state.log_dirty = true;
-            state.plan_preview.clear();
-            state.plan_pending = false;
-            state.running = false;
-            state.agent_state = AgentState::Idle;
-            state.status = "ready".into();
-            state.assistant_text.clear();
+            reset_session(
+                state,
+                session,
+                store,
+                settings,
+                "raven",
+                "new session · enter submit · /model · /new · /help · /quit",
+            )?;
         }
         "clear" => {
             state.blocks.clear();
@@ -1492,11 +1642,15 @@ async fn dispatch_slash_command(
                 state.push_system("nothing running to stop");
                 state.log_dirty = true;
             }
+            // Drop ask_user oneshot so the agent (if still winding down) sees cancel.
+            state.pending_question = None;
+            state.pending_question_text = None;
             state.running = false;
             state.agent_state = AgentState::Idle;
             state.status = "ready".into();
             state.assistant_text.clear();
             state.live_tool = None;
+            state.turn_tool_count = 0;
         }
         "model" => {
             let name = pc.args.trim();
@@ -1665,8 +1819,53 @@ mod tests {
 
     #[test]
     fn state_label_awaiting_answer() {
-        let (txt, _color) = state_label(&AgentState::Idle, "awaiting answer", Theme::RAVENWOOD);
+        let (txt, _color) = state_label(
+            &AgentState::Idle,
+            "awaiting answer",
+            false,
+            Theme::RAVENWOOD,
+        );
         assert_eq!(txt, "awaiting answer");
+    }
+
+    #[test]
+    fn state_label_running_when_busy() {
+        let (txt, _color) = state_label(&AgentState::Idle, "running…", true, Theme::RAVENWOOD);
+        assert_eq!(txt, "running");
+        let (txt, _color) = state_label(&AgentState::Idle, "ready", false, Theme::RAVENWOOD);
+        assert_eq!(txt, "ready");
+    }
+
+    #[test]
+    fn deactivate_tool_matches_by_name_not_last() {
+        // Parallel: read_a, write_b, read_c all active. End read_a first.
+        let mut blocks = vec![
+            BlockKind::Tool(ToolBlock::start("read_a", "⇢ read_a".into())),
+            BlockKind::Tool(ToolBlock::start("write_b", "⇢ write_b".into())),
+            BlockKind::Tool(ToolBlock::start("read_c", "⇢ read_c".into())),
+        ];
+        deactivate_tool(&mut blocks, "read_a", "ok", 5);
+        // read_a cleared; write_b and read_c still active.
+        assert!(!matches!(&blocks[0], BlockKind::Tool(t) if t.active));
+        assert!(matches!(&blocks[1], BlockKind::Tool(t) if t.active));
+        assert!(matches!(&blocks[2], BlockKind::Tool(t) if t.active));
+        // read_a got the preview.
+        assert!(matches!(&blocks[0], BlockKind::Tool(t) if t.preview.as_deref() == Some("ok")));
+        // End read_c next — must clear read_c, not write_b.
+        deactivate_tool(&mut blocks, "read_c", "done", 6);
+        assert!(matches!(&blocks[1], BlockKind::Tool(t) if t.active));
+        assert!(!matches!(&blocks[2], BlockKind::Tool(t) if t.active));
+    }
+
+    #[test]
+    fn deactivate_tool_falls_back_to_last_when_no_match() {
+        let mut blocks = vec![
+            BlockKind::Tool(ToolBlock::start("read_a", "⇢ read_a".into())),
+            BlockKind::Tool(ToolBlock::start("read_b", "⇢ read_b".into())),
+        ];
+        deactivate_tool(&mut blocks, "unknown", "x", 1);
+        assert!(matches!(&blocks[0], BlockKind::Tool(t) if t.active));
+        assert!(!matches!(&blocks[1], BlockKind::Tool(t) if t.active));
     }
 
     #[test]
@@ -2024,6 +2223,7 @@ mod tests {
             stream_patch: false,
             cached_est_tokens: 0,
             messages_dirty: false,
+            input_dirty: false,
             input: String::new(),
             cursor: 0,
             completion: None,
