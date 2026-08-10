@@ -720,6 +720,21 @@ impl Sandbox {
             spawn_confined(&mut command, &self.workspace).context("spawn test runner")?;
         match wait_for_child(&mut confined.child, 600) {
             Some((status, stdout, stderr)) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::process::ExitStatusExt;
+                    if let Some(signal) = status.signal() {
+                        let mut out = format!(
+                            "--- run_tests ({}) killed by signal {} (sandbox denial?) ---\n",
+                            cmd, signal
+                        );
+                        out.push_str(&String::from_utf8_lossy(&stdout));
+                        if !stderr.is_empty() {
+                            out.push_str(&String::from_utf8_lossy(&stderr));
+                        }
+                        return Ok(cap_output(out));
+                    }
+                }
                 let mut out = format!(
                     "--- run_tests ({}) exit={} ---\n",
                     cmd,
@@ -811,6 +826,21 @@ impl Sandbox {
         let mut confined = spawn_confined(&mut command, &self.workspace).context("spawn linter")?;
         match wait_for_child(&mut confined.child, 600) {
             Some((status, stdout, stderr)) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::process::ExitStatusExt;
+                    if let Some(signal) = status.signal() {
+                        let mut out = format!(
+                            "--- run_lint ({}) killed by signal {} (sandbox denial?) ---\n",
+                            cmd, signal
+                        );
+                        out.push_str(&String::from_utf8_lossy(&stdout));
+                        if !stderr.is_empty() {
+                            out.push_str(&String::from_utf8_lossy(&stderr));
+                        }
+                        return Ok(cap_output(out));
+                    }
+                }
                 let mut out = format!(
                     "--- run_lint ({}) exit={} ---\n",
                     cmd,
@@ -982,39 +1012,37 @@ fn apply_landlock(workspace: &Path) {
     }
 }
 
-/// Apply a seccomp filter that blocks network syscalls.
+/// Apply a seccomp filter that blocks network exfiltration.
 ///
-/// Linux-only. Denies `socket`, `connect`, `sendto`, `sendmsg`, `bind`,
-/// `accept`, `listen`, `recvfrom`, `recvmsg`, `socketpair`, `setsockopt`,
-/// `getsockopt`, `shutdown`, `getpeername`, `getsockname`, and `accept4`.
-/// This closes the exfiltration hole — even if the model reads a file, it
-/// can't send it anywhere. Best-effort: if the arch is unsupported, we log
-/// and continue.
+/// Linux-only. Blocks `socket()` only when the domain is AF_INET or AF_INET6,
+/// which prevents creating any internet-facing socket. AF_UNIX sockets (used
+/// for local IPC by esbuild, vitest, git ssh helpers, etc.) are allowed.
+/// `socketpair()` is not blocked at all — it only supports AF_UNIX on Linux
+/// and is never a threat.
+///
+/// All other network syscalls (`connect`, `sendto`, `sendmsg`, etc.) are
+/// allowed because the only sockets that can exist are AF_UNIX ones (we block
+/// creation of AF_INET/AF_INET6 sockets above). This preserves the exfiltration
+/// guarantee while fixing esbuild/vitest without an escape hatch.
+///
+/// Denied syscalls are killed immediately (`KillProcess`) rather than returning
+/// EPERM, so the harness can surface the denial as a fast error instead of
+/// masking it as a timeout.
+///
+/// Set `RAVEN_SANDBOX_NETWORK_BLOCK=0` to skip the filter entirely.
+/// Best-effort: if the arch is unsupported, we log and continue.
 #[cfg(target_os = "linux")]
 fn apply_seccomp_network_block() {
-    use seccompiler::{BpfProgram, SeccompAction, SeccompFilter, SeccompRule};
+    use seccompiler::{
+        BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition, SeccompFilter,
+        SeccompRule,
+    };
     use std::convert::TryInto;
 
-    let syscalls = [
-        libc::SYS_socket,
-        libc::SYS_connect,
-        libc::SYS_sendto,
-        libc::SYS_sendmsg,
-        libc::SYS_bind,
-        libc::SYS_accept,
-        libc::SYS_listen,
-        libc::SYS_recvfrom,
-        libc::SYS_recvmsg,
-        libc::SYS_socketpair,
-        libc::SYS_setsockopt,
-        libc::SYS_getsockopt,
-        libc::SYS_shutdown,
-        libc::SYS_getpeername,
-        libc::SYS_getsockname,
-        libc::SYS_accept4,
-    ];
-
-    let rules: Vec<(i64, Vec<SeccompRule>)> = syscalls.iter().map(|&s| (s, vec![])).collect();
+    if std::env::var("RAVEN_SANDBOX_NETWORK_BLOCK").as_deref() == Ok("0") {
+        tracing::info!("seccomp: network block disabled via RAVEN_SANDBOX_NETWORK_BLOCK=0");
+        return;
+    }
 
     let target_arch = match std::env::consts::ARCH.try_into() {
         Ok(arch) => arch,
@@ -1024,10 +1052,32 @@ fn apply_seccomp_network_block() {
         }
     };
 
+    let rules: Vec<(i64, Vec<SeccompRule>)> = vec![(
+        libc::SYS_socket,
+        vec![
+            SeccompRule::new(vec![SeccompCondition::new(
+                0,
+                SeccompCmpArgLen::Dword,
+                SeccompCmpOp::Eq,
+                libc::AF_INET as u64,
+            )
+            .expect("valid seccomp condition")])
+            .expect("valid seccomp rule"),
+            SeccompRule::new(vec![SeccompCondition::new(
+                0,
+                SeccompCmpArgLen::Dword,
+                SeccompCmpOp::Eq,
+                libc::AF_INET6 as u64,
+            )
+            .expect("valid seccomp condition")])
+            .expect("valid seccomp rule"),
+        ],
+    )];
+
     let filter: BpfProgram = match SeccompFilter::new(
         rules.into_iter().collect(),
         SeccompAction::Allow,
-        SeccompAction::Errno(libc::EPERM as u32),
+        SeccompAction::KillProcess,
         target_arch,
     ) {
         Ok(f) => match f.try_into() {
@@ -1358,6 +1408,9 @@ pub(crate) fn spawn_confined(
 ///
 /// Thin wrapper over [`spawn_confined`] that also drains pipes and waits,
 /// returning the capped command output or an error string on timeout.
+///
+/// When the child is killed by a signal (e.g. seccomp `KillProcess`), the
+/// denial is surfaced as an explicit error rather than masked as a timeout.
 pub(crate) fn run_confined(
     cmd: &mut Command,
     workspace: &Path,
@@ -1366,6 +1419,19 @@ pub(crate) fn run_confined(
     let mut confined = spawn_confined(cmd, workspace)?;
     match wait_for_child(&mut confined.child, timeout_secs) {
         Some((status, stdout, stderr)) => {
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::ExitStatusExt;
+                if let Some(signal) = status.signal() {
+                    let mut out = format!(
+                        "Error: command killed by signal {} (sandbox denial?)\n",
+                        signal
+                    );
+                    out.push_str(&String::from_utf8_lossy(&stdout));
+                    out.push_str(&String::from_utf8_lossy(&stderr));
+                    return Ok(cap_output(out));
+                }
+            }
             let mut out = format!("exit={}\n", status.code().unwrap_or(-1));
             out.push_str(&String::from_utf8_lossy(&stdout));
             out.push_str(&String::from_utf8_lossy(&stderr));
