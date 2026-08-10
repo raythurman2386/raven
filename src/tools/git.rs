@@ -132,6 +132,15 @@ impl Sandbox {
         Ok(())
     }
 
+    pub fn is_working_tree_clean(&self) -> bool {
+        if !self.is_git_repo().unwrap_or(false) {
+            return true;
+        }
+        self.run_git(&["status", "--porcelain=v1"])
+            .map(|out| out.trim().is_empty() || out.trim() == "exit=0")
+            .unwrap_or(true)
+    }
+
     pub(crate) fn is_git_repo(&self) -> Result<bool> {
         let mut cmd = Command::new("git");
         cmd.args(["rev-parse", "--is-inside-work-tree"])

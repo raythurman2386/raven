@@ -24,6 +24,11 @@ use super::loop_control::{compute_reminders, summarize_request};
 use super::stream::{process_non_stream_json, process_stream_text};
 use super::types::{AgentEvent, ChatMessage, FunctionCall, ToolCall};
 
+enum IterationOutcome {
+    Continue,
+    Finished,
+}
+
 static TOOL_DEFS: OnceLock<serde_json::Value> = OnceLock::new();
 
 /// Test-only completion source: a closure that returns the raw completion
@@ -309,247 +314,258 @@ impl Agent {
         }
 
         for iter in 0..self.settings.max_iterations {
-            let _ = tx.send(AgentEvent::Iteration(iter + 1)).await;
-            let t_iter = std::time::Instant::now();
-            // True if this turn's tools edited files, triggering a lint pass.
-            let mut edited = false;
-
-            // Plan progress: mark the current step InProgress at the start of
-            // each iteration.
-            if let Some(ref mut plan) = self.plan {
-                crate::plan::advance_step(plan, &mut self.current_step, false, false);
-                let _ = tx.send(AgentEvent::PlanProgress(plan.clone())).await;
-            }
-
-            // Reminders for the *next* request only. These are appended to the
-            // outgoing request body, NOT to `self.messages`, so the persisted
-            // conversation stays a strict `[system, user, assistant, tool, ...]`
-            // alternation that compaction and session persistence can rely on.
-            let mut reminders = compute_reminders(&self.messages, iter);
-            if let Some(lint) = self.pending_lint.take() {
-                reminders.push(lint);
-            }
-            if let Some(v) = self.pending_verify.take() {
-                reminders.push(v);
-            }
-            if let Some(f) = self.pending_repeated_failure.take() {
-                reminders.push(f);
-            }
-            if let Some(b) = self.pending_blank.take() {
-                reminders.push(b);
-            }
-
-            // Compaction: if estimated history tokens exceed the soft limit,
-            // summarize the middle turns with the model (falling back to the
-            // extractive summarizer if the summarization request fails) and
-            // keep a recent tail.
-            //
-            // Capture the fields the summarizer needs as owned values (client
-            // is Arc-backed and cheap to clone) so the closure doesn't borrow
-            // `self` — which would conflict with the mutable borrow of
-            // `self.messages` below.
-            let client = self.client.clone();
-            let base_url = self.settings.base_url.clone();
-            let model = self.settings.model.clone();
-            let api_key = self.settings.api_key.clone();
-            if let Some((before, after)) = compact_if_needed_llm(
-                &mut self.messages,
-                self.settings.context_window,
-                self.settings.compact_threshold,
-                move |middle| {
-                    Box::pin(summarize_request(
-                        client.clone(),
-                        base_url.clone(),
-                        model.clone(),
-                        api_key.clone(),
-                        middle,
-                    ))
-                },
-            )
-            .await
+            match self
+                .run_single_iteration(&tx, iter, &mut edited_any)
+                .await?
             {
-                let _ = tx
-                    .send(AgentEvent::Compacted {
-                        before_tokens: before,
-                        after_tokens: after,
-                    })
-                    .await;
+                IterationOutcome::Continue => continue,
+                IterationOutcome::Finished => return Ok(()),
             }
-
-            // Clamp max_tokens so prompt_tokens + max_tokens + margin <= context_window
-            let prompt_est = history_tokens(&self.messages);
-            let margin = 64usize;
-            let remaining = self
-                .settings
-                .context_window
-                .saturating_sub(prompt_est)
-                .saturating_sub(margin);
-            let clamped_max = self.settings.max_tokens.min(remaining.max(256) as u32);
-
-            // The outgoing `messages` array is the persisted conversation plus
-            // any ephemeral system reminders for this iteration. `self.messages`
-            // is left untouched so session persistence and compaction see a clean
-            // `[system, user, assistant, tool, ...]` alternation. To avoid
-            // cloning the whole history on the common (no-reminder) path, we
-            // serialize `self.messages` directly and only clone when a reminder
-            // must be appended.
-            let body = if reminders.is_empty() {
-                json!({
-                    "model": self.settings.model,
-                    "messages": &self.messages,
-                    "tools": self.tools_value(),
-                    "tool_choice": "auto",
-                    "temperature": self.settings.temperature,
-                    "max_tokens": clamped_max,
-                    "stream": !self.settings.no_stream,
-                })
-            } else {
-                let mut request_messages: Vec<ChatMessage> = self.messages.clone();
-                for text in &reminders {
-                    request_messages.push(ChatMessage {
-                        role: "system".into(),
-                        content: Some(text.clone()),
-                        tool_calls: None,
-                        tool_call_id: None,
-                    });
-                }
-                json!({
-                    "model": self.settings.model,
-                    "messages": request_messages,
-                    "tools": self.tools_value(),
-                    "tool_choice": "auto",
-                    "temperature": self.settings.temperature,
-                    "max_tokens": clamped_max,
-                    "stream": !self.settings.no_stream,
-                })
-            };
-
-            let url = format!(
-                "{}/chat/completions",
-                self.settings.base_url.trim_end_matches('/')
-            );
-
-            // Phase timing: pre-request work (tokenization, compaction, body
-            // build, serialization) vs HTTP round-trip vs stream processing.
-            tracing::info!(
-                "iter={} pre_http_ms={} history_msgs={}",
-                iter + 1,
-                t_iter.elapsed().as_millis(),
-                self.messages.len()
-            );
-
-            // Send with retry for transient failures
-            let t_send = std::time::Instant::now();
-            #[cfg(test)]
-            let (content_buf, tool_acc) = if let Some(source) = self.completion_source.as_mut() {
-                // Offline fake-model path: pull the scripted completion body
-                // and parse it directly, bypassing HTTP entirely.
-                let raw = source(&body);
-                if self.settings.no_stream {
-                    let v: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
-                    process_non_stream_json(&v, &tx).await
-                } else {
-                    process_stream_text(&raw, &tx).await
-                }
-            } else {
-                let resp = match self.send_with_retry(&url, &body, &tx).await {
-                    Ok(r) => r,
-                    Err(e) => {
-                        let _ = tx.send(AgentEvent::Error(e.to_string())).await;
-                        return Ok(());
-                    }
-                };
-                if self.settings.no_stream {
-                    self.process_non_stream(resp, &tx).await
-                } else {
-                    self.process_stream(resp, &tx).await
-                }
-            };
-            #[cfg(not(test))]
-            let (content_buf, tool_acc) = {
-                let resp = match self.send_with_retry(&url, &body, &tx).await {
-                    Ok(r) => r,
-                    Err(e) => {
-                        let _ = tx.send(AgentEvent::Error(e.to_string())).await;
-                        return Ok(());
-                    }
-                };
-                if self.settings.no_stream {
-                    self.process_non_stream(resp, &tx).await
-                } else {
-                    self.process_stream(resp, &tx).await
-                }
-            };
-            tracing::info!(
-                "iter={} send_http_ms={} (model={})",
-                iter + 1,
-                t_send.elapsed().as_millis(),
-                self.settings.model
-            );
-
-            // Process the response (streaming or non-streaming)
-            let t_stream = std::time::Instant::now();
-            tracing::info!(
-                "iter={} stream_ms={} content_chars={} tool_calls={}",
-                iter + 1,
-                t_stream.elapsed().as_millis(),
-                content_buf.chars().count(),
-                tool_acc.len()
-            );
-
-            // Blank-response stall detection: computed before `content_buf` is
-            // moved into the assistant message below.
-            let content_blank = content_buf.trim().is_empty();
-
-            // Build assistant message
-            let assistant = ChatMessage {
-                role: "assistant".into(),
-                content: if content_buf.is_empty() {
-                    None
-                } else {
-                    Some(content_buf)
-                },
-                tool_calls: None,
-                tool_call_id: None,
-            };
-
-            if tool_acc.is_empty() {
-                if self
-                    .handle_no_tool_calls(&tx, assistant, content_blank, edited_any)
-                    .await?
-                {
-                    continue;
-                }
-                return Ok(());
-            }
-
-            // Convert accumulated tool calls
-            let mut tcs = Vec::new();
-            for (_idx, (id, name, arguments)) in tool_acc {
-                tcs.push(ToolCall {
-                    id: if id.is_empty() {
-                        format!("call_{}", tcs.len())
-                    } else {
-                        id
-                    },
-                    type_: "function".into(),
-                    function: FunctionCall { name, arguments },
-                });
-            }
-
-            self.execute_tool_calls(&tx, tcs, assistant, &mut edited, &mut edited_any)
-                .await?;
-            // Loop continues so the model can react to tool results
         }
 
-        // The iteration budget is exhausted without a final answer. Instead of
-        // failing with `AgentError::MaxIterations`, wrap up gracefully: ask the
-        // model to summarize what it has accomplished with NO further tool
-        // calls, persist that summary as an assistant turn, and emit `Done`.
-        // This keeps the conversation continuous so a later "continue"
-        // resumes from the summary rather than cold-starting the task.
+        // The iteration budget is exhausted without a final answer. Before
+        // wrapping up with a toolless summary, check whether the working tree
+        // is dirty. If it is, inject a commit nudge and give the model ONE
+        // more iteration with tools so it can commit its work. Without this
+        // guard, large tasks that exhaust the budget leave verified-but-
+        // uncommitted changes in a dirty tree — a silent correctness hazard
+        // for unattended loops (issue #127).
+        if !self.sandbox.is_working_tree_clean() {
+            self.pending_blank = Some(
+                "You have reached the iteration budget but the working tree is \
+                 NOT clean — there are uncommitted changes. Call git_commit with \
+                 a descriptive message to checkpoint your work, then provide a \
+                 final summary. Do NOT call any other tools."
+                    .to_string(),
+            );
+            for extra in 0..2 {
+                match self
+                    .run_single_iteration(
+                        &tx,
+                        self.settings.max_iterations + extra,
+                        &mut edited_any,
+                    )
+                    .await?
+                {
+                    IterationOutcome::Continue => continue,
+                    IterationOutcome::Finished => return Ok(()),
+                }
+            }
+        }
+
         self.finish_with_summary(&tx).await?;
         Ok(())
+    }
+
+    /// Run one iteration of the agent loop.
+    ///
+    /// Returns `IterationOutcome::Continue` if the loop should continue
+    /// (tool calls were dispatched, or a stall/verify recovery re-run was
+    /// triggered), or `IterationOutcome::Finished` if the turn ended
+    /// (assistant message pushed, `Done` emitted).
+    async fn run_single_iteration(
+        &mut self,
+        tx: &mpsc::Sender<AgentEvent>,
+        iter: usize,
+        edited_any: &mut bool,
+    ) -> Result<IterationOutcome> {
+        let _ = tx.send(AgentEvent::Iteration(iter + 1)).await;
+        let t_iter = std::time::Instant::now();
+        let mut edited = false;
+
+        if let Some(ref mut plan) = self.plan {
+            crate::plan::advance_step(plan, &mut self.current_step, false, false);
+            let _ = tx.send(AgentEvent::PlanProgress(plan.clone())).await;
+        }
+
+        let mut reminders = compute_reminders(&self.messages, iter);
+        if let Some(lint) = self.pending_lint.take() {
+            reminders.push(lint);
+        }
+        if let Some(v) = self.pending_verify.take() {
+            reminders.push(v);
+        }
+        if let Some(f) = self.pending_repeated_failure.take() {
+            reminders.push(f);
+        }
+        if let Some(b) = self.pending_blank.take() {
+            reminders.push(b);
+        }
+
+        let client = self.client.clone();
+        let base_url = self.settings.base_url.clone();
+        let model = self.settings.model.clone();
+        let api_key = self.settings.api_key.clone();
+        if let Some((before, after)) = compact_if_needed_llm(
+            &mut self.messages,
+            self.settings.context_window,
+            self.settings.compact_threshold,
+            move |middle| {
+                Box::pin(summarize_request(
+                    client.clone(),
+                    base_url.clone(),
+                    model.clone(),
+                    api_key.clone(),
+                    middle,
+                ))
+            },
+        )
+        .await
+        {
+            let _ = tx
+                .send(AgentEvent::Compacted {
+                    before_tokens: before,
+                    after_tokens: after,
+                })
+                .await;
+        }
+
+        let prompt_est = history_tokens(&self.messages);
+        let margin = 64usize;
+        let remaining = self
+            .settings
+            .context_window
+            .saturating_sub(prompt_est)
+            .saturating_sub(margin);
+        let clamped_max = self.settings.max_tokens.min(remaining.max(256) as u32);
+
+        let body = if reminders.is_empty() {
+            json!({
+                "model": self.settings.model,
+                "messages": &self.messages,
+                "tools": self.tools_value(),
+                "tool_choice": "auto",
+                "temperature": self.settings.temperature,
+                "max_tokens": clamped_max,
+                "stream": !self.settings.no_stream,
+            })
+        } else {
+            let mut request_messages: Vec<ChatMessage> = self.messages.clone();
+            for text in &reminders {
+                request_messages.push(ChatMessage {
+                    role: "system".into(),
+                    content: Some(text.clone()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                });
+            }
+            json!({
+                "model": self.settings.model,
+                "messages": request_messages,
+                "tools": self.tools_value(),
+                "tool_choice": "auto",
+                "temperature": self.settings.temperature,
+                "max_tokens": clamped_max,
+                "stream": !self.settings.no_stream,
+            })
+        };
+
+        let url = format!(
+            "{}/chat/completions",
+            self.settings.base_url.trim_end_matches('/')
+        );
+
+        tracing::info!(
+            "iter={} pre_http_ms={} history_msgs={}",
+            iter + 1,
+            t_iter.elapsed().as_millis(),
+            self.messages.len()
+        );
+
+        let t_send = std::time::Instant::now();
+        #[cfg(test)]
+        let (content_buf, tool_acc) = if let Some(source) = self.completion_source.as_mut() {
+            let raw = source(&body);
+            if self.settings.no_stream {
+                let v: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+                process_non_stream_json(&v, tx).await
+            } else {
+                process_stream_text(&raw, tx).await
+            }
+        } else {
+            let resp = match self.send_with_retry(&url, &body, tx).await {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = tx.send(AgentEvent::Error(e.to_string())).await;
+                    return Ok(IterationOutcome::Finished);
+                }
+            };
+            if self.settings.no_stream {
+                self.process_non_stream(resp, tx).await
+            } else {
+                self.process_stream(resp, tx).await
+            }
+        };
+        #[cfg(not(test))]
+        let (content_buf, tool_acc) = {
+            let resp = match self.send_with_retry(&url, &body, tx).await {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = tx.send(AgentEvent::Error(e.to_string())).await;
+                    return Ok(IterationOutcome::Finished);
+                }
+            };
+            if self.settings.no_stream {
+                self.process_non_stream(resp, tx).await
+            } else {
+                self.process_stream(resp, tx).await
+            }
+        };
+        tracing::info!(
+            "iter={} send_http_ms={} (model={})",
+            iter + 1,
+            t_send.elapsed().as_millis(),
+            self.settings.model
+        );
+
+        let t_stream = std::time::Instant::now();
+        tracing::info!(
+            "iter={} stream_ms={} content_chars={} tool_calls={}",
+            iter + 1,
+            t_stream.elapsed().as_millis(),
+            content_buf.chars().count(),
+            tool_acc.len()
+        );
+
+        let content_blank = content_buf.trim().is_empty();
+
+        let assistant = ChatMessage {
+            role: "assistant".into(),
+            content: if content_buf.is_empty() {
+                None
+            } else {
+                Some(content_buf)
+            },
+            tool_calls: None,
+            tool_call_id: None,
+        };
+
+        if tool_acc.is_empty() {
+            if self
+                .handle_no_tool_calls(tx, assistant, content_blank, *edited_any)
+                .await?
+            {
+                return Ok(IterationOutcome::Continue);
+            }
+            return Ok(IterationOutcome::Finished);
+        }
+
+        let mut tcs = Vec::new();
+        for (_idx, (id, name, arguments)) in tool_acc {
+            tcs.push(ToolCall {
+                id: if id.is_empty() {
+                    format!("call_{}", tcs.len())
+                } else {
+                    id
+                },
+                type_: "function".into(),
+                function: FunctionCall { name, arguments },
+            });
+        }
+
+        self.execute_tool_calls(tx, tcs, assistant, &mut edited, edited_any)
+            .await?;
+        Ok(IterationOutcome::Continue)
     }
 
     // ── HTTP helpers ───────────────────────────────────────────────────
