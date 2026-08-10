@@ -724,10 +724,8 @@ impl Sandbox {
                 {
                     use std::os::unix::process::ExitStatusExt;
                     if let Some(signal) = status.signal() {
-                        let mut out = format!(
-                            "--- run_tests ({}) killed by signal {} (sandbox denial?) ---\n",
-                            cmd, signal
-                        );
+                        let mut out =
+                            format!("--- run_tests ({cmd}) killed by signal {signal} ---\n",);
                         out.push_str(&String::from_utf8_lossy(&stdout));
                         if !stderr.is_empty() {
                             out.push_str(&String::from_utf8_lossy(&stderr));
@@ -830,10 +828,8 @@ impl Sandbox {
                 {
                     use std::os::unix::process::ExitStatusExt;
                     if let Some(signal) = status.signal() {
-                        let mut out = format!(
-                            "--- run_lint ({}) killed by signal {} (sandbox denial?) ---\n",
-                            cmd, signal
-                        );
+                        let mut out =
+                            format!("--- run_lint ({cmd}) killed by signal {signal} ---\n",);
                         out.push_str(&String::from_utf8_lossy(&stdout));
                         if !stderr.is_empty() {
                             out.push_str(&String::from_utf8_lossy(&stderr));
@@ -1423,10 +1419,7 @@ pub(crate) fn run_confined(
             {
                 use std::os::unix::process::ExitStatusExt;
                 if let Some(signal) = status.signal() {
-                    let mut out = format!(
-                        "Error: command killed by signal {} (sandbox denial?)\n",
-                        signal
-                    );
+                    let mut out = format!("Error: command killed by signal {signal}\n",);
                     out.push_str(&String::from_utf8_lossy(&stdout));
                     out.push_str(&String::from_utf8_lossy(&stderr));
                     return Ok(cap_output(out));

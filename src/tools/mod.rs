@@ -533,16 +533,18 @@ mod tests {
             )
             .unwrap();
         // The write must be capped by RLIMIT_FSIZE (64 MiB). This surfaces in
-        // one of two ways: the shell survives and reports a non-zero `EXIT`
-        // (or an EFBIG/"File too large" message), OR the confined child is
-        // killed outright by SIGXFSZ, which `run_confined` reports as
-        // `exit=-1`. Both are valid evidence the rlimit fired; the exact one
-        // depends on shell/signal timing and differs between local runs and CI.
+        // one of several ways: the shell survives and reports a non-zero
+        // `EXIT` (or an EFBIG/"File too large" message), the confined child is
+        // killed outright by SIGXFSZ (reported as `exit=-1` or
+        // `Error: command killed by signal`), or a combination. All are valid
+        // evidence the rlimit fired; the exact one depends on shell/signal
+        // timing and differs between local runs and CI.
         assert!(
             out.contains("EXIT=1")
                 || out.contains("File too large")
                 || out.contains("EFBIG")
-                || out.contains("exit=-1"),
+                || out.contains("exit=-1")
+                || out.contains("killed by signal"),
             "oversized write should be capped by RLIMIT_FSIZE: {out}"
         );
     }
