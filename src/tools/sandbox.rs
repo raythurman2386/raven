@@ -1262,10 +1262,19 @@ fn pin_build_tool_dirs(cmd: &mut Command, workspace: &std::path::Path) {
 
     cmd.env("CARGO_HOME", &cargo_home);
     cmd.env("CARGO_TARGET_DIR", &target_dir);
-    cmd.env("TMPDIR", &tmp_dir);
-    cmd.env("TEMP", &tmp_dir);
-    cmd.env("TMP", &tmp_dir);
     cmd.env("npm_config_cache", &npm_cache);
+    // Pin the temp dir only on Unix. The pinning exists to keep build caches
+    // and temp files under the workspace Landlock rule so rustc/cargo don't
+    // hardlink across Landlock hierarchies (EXDEV). Windows has no Landlock
+    // and no EXDEV, and overriding TEMP/TMP there breaks MSVC link.exe, which
+    // writes its response file to %TEMP% and misparses it as UTF-16LE when the
+    // path is redirected (link: missing operand after '\377\376').
+    #[cfg(not(windows))]
+    {
+        cmd.env("TMPDIR", &tmp_dir);
+        cmd.env("TEMP", &tmp_dir);
+        cmd.env("TMP", &tmp_dir);
+    }
     // Avoid inheriting a host sccache/RUSTC_WRAPPER that writes outside the
     // workspace rule and trips the same EXDEV class of failures.
     cmd.env_remove("RUSTC_WRAPPER");
