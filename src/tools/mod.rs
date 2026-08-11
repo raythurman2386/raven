@@ -1575,6 +1575,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn run_tests_cargo_project_compiles_under_confinement() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(
