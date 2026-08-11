@@ -42,12 +42,13 @@ That constraint is the design center, not an afterthought — it's why the featu
 | Markdown rendering in the TUI (headings, code blocks, lists, tables, links via `pulldown-cmark`) | |
 | `AGENTS.md` / `CLAUDE.md` auto-load + `--rules` session overrides | |
 | Local by default; optional Bearer auth for Ollama Cloud | |
+| Optional self-hosted SearXNG backend for `web_search` (falls back to DuckDuckGo) | |
 
 ---
 
 ## Requirements
 
-- **Rust 1.88+** (latest stable recommended; pinned in `rust-toolchain.toml`)
+- **Rust 1.88+** (MSRV; pinned to 1.97 in `rust-toolchain.toml`)
 - **Ollama** running locally (or a reachable OpenAI-compatible endpoint)
 - A coding-capable model, e.g.
 
@@ -186,6 +187,8 @@ theme = "ravenwood"
 | `RAVEN_CONTEXT_WINDOW` / `OG_CONTEXT_WINDOW` | Override context window size | inferred from model |
 | `RAVEN_COMPACT_THRESHOLD` / `OG_COMPACT_THRESHOLD` | Compaction trigger (0.0–1.0) | 0.75 |
 | `RAVEN_MAX_ITER` / `OG_MAX_ITER` | Max agent iterations per run | 30 |
+| `RAVEN_SEARXNG_URL` | Optional self-hosted SearXNG base URL for `web_search` | none |
+| `RAVEN_SEARXNG_ENGINES` | Optional comma-separated SearXNG engine list | none |
 
 ### Project instructions
 
@@ -204,12 +207,14 @@ The agent tracks token usage with a built-in token estimator (no external vocab 
 1. **Prunes old tool results** — soft-trims tool outputs older than 3 turns (keeps head + tail with a truncation marker)
 2. **Compacts the conversation** — summarizes the middle of the conversation, preserving the system message and the last ~40% of the context budget for recent messages
 
-Context window sizes are fetched from the model's actual metadata via Ollama's `/api/show` endpoint. This returns the real `context_length` from the model file (e.g. `gemma4` → 131K, `qwen3.5` → 262K, `deepseek-v4-pro:cloud` → 512K). If the API is unreachable (Ollama not running, model not found), a name-based heuristic is used as fallback:
+Context window sizes are fetched from the model's actual metadata via Ollama's `/api/show` endpoint. This returns the real `context_length` from the model file (e.g. `gemma4` → 128K, `qwen3.5` → 256K, `deepseek-v4-pro:cloud` → 512K). If the API is unreachable (Ollama not running, model not found), a name-based heuristic is used as fallback:
 
+- `glm:cloud`, `deepseek-v4-flash:cloud` → 1M
+- `deepseek-v4:cloud` (e.g. `pro`) → 512K
+- `qwen3.5` → 256K
 - `gemma4`, `gemma3`, `qwen2.5`, `qwen3`, `llama3.1`, `llama3.2`, `deepseek`, `codestral`, `glm` → 128K
-- `llama3`, `codellama` → 32K
-- `mistral` → 8K
-- `glm:cloud` → 1M
+- `llama3`, `codellama`, `"32k"` in name → 32K
+- `mistral`, `"8k"` in name → 8K
 - Unknown models → 32K (safe default)
 
 ---

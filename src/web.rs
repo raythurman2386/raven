@@ -5,8 +5,17 @@
 //! `web_search` queries DuckDuckGo's HTML endpoint and parses the result
 //! titles/URLs; `web_fetch` retrieves a page and strips markup to plain text.
 //!
+//! Optionally, `web_search` can use a self-hosted [SearXNG] instance via its
+//! JSON API when a base URL is configured (`RAVEN_SEARXNG_URL` or the
+//! `searxng_url` config key). SearXNG is tried first; on any HTTP error,
+//! empty results, or JSON parse failure the call falls back to DuckDuckGo so
+//! agents keep working when the local instance is down. No API key is needed
+//! for a typical SearXNG install.
+//!
 //! Both are read-only, capped at `MAX_TOOL_OUTPUT`, and run inside the agent's
 //! async loop (they need HTTP). They never execute downloaded content.
+//!
+//! [SearXNG]: https://docs.searxng.org/
 
 use anyhow::{Context, Result};
 use std::sync::OnceLock;
@@ -144,15 +153,62 @@ pub async fn fetch_text(url: &str) -> String {
     }
 }
 
-/// Search the web (keyless, via DuckDuckGo's HTML endpoint) and return a
-/// ranked list of `title — url` lines, capped.
+/// Configuration for an optional self-hosted SearXNG search backend.
+#[derive(Debug, Clone, Default)]
+pub struct SearxngConfig {
+    /// Base URL only, e.g. `http://127.0.0.1:8080` or `https://searx.example.com`
+    /// (no trailing `/search` path — it's appended when building the request).
+    pub base_url: Option<String>,
+    /// Optional engine list (e.g. `["google", "bing"]`). Empty leaves engine
+    /// selection to the SearXNG server defaults.
+    pub engines: Vec<String>,
+}
+
+impl SearxngConfig {
+    /// Build a config from the environment (`RAVEN_SEARXNG_URL` and
+    /// `RAVEN_SEARXNG_ENGINES`). Returns a default (all `None`/empty) config
+    /// when no SearXNG base URL is configured, which disables the SearXNG path.
+    pub fn from_env() -> Self {
+        Self {
+            base_url: crate::config::env_searxng_url(),
+            engines: crate::config::env_searxng_engines().unwrap_or_default(),
+        }
+    }
+}
+
+/// Search the web and return a ranked list of `title — url` lines, capped.
 ///
-/// `page` is 1-indexed; `None` or `Some(1)` returns the first page.
-/// Page 2+ adds the `s` (start offset) parameter: `s = (page - 1) * 10`.
-pub async fn search(query: &str, page: Option<u32>) -> String {
+/// When `searxng.base_url` is set, queries the SearXNG JSON API first and
+/// falls back to DuckDuckGo's HTML endpoint on any failure (HTTP error, empty
+/// results, or JSON parse error) so search keeps working when the local
+/// instance is down. Without a SearXNG base URL, behavior is unchanged from
+/// the keyless DuckDuckGo path.
+///
+/// `page` is 1-indexed; `None` or `Some(1)` returns the first page. Note that
+/// pagination only applies to the DuckDuckGo fallback — SearXNG ignores `page`.
+pub async fn search(query: &str, page: Option<u32>, searxng: Option<&SearxngConfig>) -> String {
     if query.trim().is_empty() {
         return "Error: empty search query".into();
     }
+
+    // Prefer SearXNG when configured; fall back to DDG on any failure so a
+    // down/broken local instance never bricks search. Empty results also fall
+    // back — DDG may have hits SearXNG's engine set didn't.
+    if let Some(cfg) = searxng {
+        if let Some(base) = cfg.base_url.as_deref() {
+            let out = searxng_search(base, &cfg.engines, query.trim()).await;
+            let failed = out.starts_with("Error:") || out == "No results found.";
+            if !failed {
+                return out;
+            }
+        }
+    }
+
+    ddg_search(query, page).await
+}
+
+/// The DuckDuckGo HTML scrape path (the default fallback backend).
+async fn ddg_search(query: &str, page: Option<u32>) -> String {
     let client = match web_client() {
         Ok(c) => c,
         Err(e) => return format!("Error: {e}"),
@@ -176,6 +232,97 @@ pub async fn search(query: &str, page: Option<u32>) -> String {
         }
         Ok(resp) => format!("Error: HTTP {} from search engine", resp.status()),
         Err(e) => format!("Error: search request failed: {e}"),
+    }
+}
+
+/// Query a SearXNG instance's JSON API and return compact `title — url` lines
+/// (with a short snippet), capped at [`MAX_RESULTS`].
+///
+/// Builds `GET {base}/search?q={query}&format=json` (plus `engines` when a
+/// non-empty list is configured). On any error — HTTP failure, empty results,
+/// or JSON parse failure — this returns an `Error:` string so the caller can
+/// fall back to DuckDuckGo.
+async fn searxng_search(base_url: &str, engines: &[String], query: &str) -> String {
+    let client = match web_client() {
+        Ok(c) => c,
+        Err(e) => return format!("Error: {e}"),
+    };
+    // Validate the base URL is http/https only, matching web_fetch's scheme
+    // discipline (rejects file://, data://, etc.).
+    let base = match validate_http_url(base_url) {
+        Ok(b) => b,
+        Err(e) => return format!("Error: invalid SearXNG base URL: {e}"),
+    };
+    let mut base = base.to_string().trim_end_matches('/').to_string();
+    base.push_str("/search");
+
+    let mut params: Vec<(&str, &str)> = vec![("q", query), ("format", "json")];
+    let engines_joined: String;
+    if !engines.is_empty() {
+        engines_joined = engines.join(",");
+        params.push(("engines", &engines_joined));
+    }
+
+    let url = match reqwest::Url::parse_with_params(&base, &params) {
+        Ok(u) => u,
+        Err(e) => return format!("Error: failed to build SearXNG search URL: {e}"),
+    };
+    match client.get(url).send().await {
+        Ok(resp) if resp.status().is_success() => {
+            let body = match resp.text().await {
+                Ok(b) => b,
+                Err(e) => return format!("Error: failed to read SearXNG response: {e}"),
+            };
+            cap_text(&parse_searxng_results(&body))
+        }
+        Ok(resp) => format!("Error: HTTP {} from SearXNG", resp.status()),
+        Err(e) => format!("Error: SearXNG request failed: {e}"),
+    }
+}
+
+/// Maximum number of results returned by SearXNG (mirrors the DDG cap).
+const MAX_RESULTS: usize = 10;
+
+/// Parse a SearXNG JSON response body into compact `title — url` lines with a
+/// short snippet, capped at [`MAX_RESULTS`] entries.
+///
+/// The JSON shape is `{"results": [{"title": "...", "url": "...", "content":
+/// "..." | "snippet": "..."}, ...]}`. Entries missing a title or URL are
+/// skipped. Returns `"No results found."` when the list is empty.
+fn parse_searxng_results(body: &str) -> String {
+    let value: serde_json::Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(e) => return format!("Error: invalid SearXNG JSON response: {e}"),
+    };
+    let Some(results) = value.get("results").and_then(|r| r.as_array()) else {
+        return "Error: SearXNG response missing 'results' array".into();
+    };
+
+    let mut lines = Vec::new();
+    for item in results.iter().take(MAX_RESULTS) {
+        let title = item.get("title").and_then(|t| t.as_str()).unwrap_or("");
+        let url = item.get("url").and_then(|u| u.as_str()).unwrap_or("");
+        if title.is_empty() || url.is_empty() {
+            continue;
+        }
+        // SearXNG uses `content` (some engines `snippet`); fall back gracefully.
+        let snippet = item
+            .get("content")
+            .or_else(|| item.get("snippet"))
+            .and_then(|s| s.as_str())
+            .unwrap_or("");
+        let snippet = snippet.trim();
+        if snippet.is_empty() {
+            lines.push(format!("{title} — {url}"));
+        } else {
+            lines.push(format!("{title} — {url}\n  {snippet}"));
+        }
+    }
+
+    if lines.is_empty() {
+        "No results found.".to_string()
+    } else {
+        lines.join("\n")
     }
 }
 
@@ -379,7 +526,7 @@ mod tests {
 
     #[tokio::test]
     async fn search_empty_query_errors() {
-        let out = search("   ", None).await;
+        let out = search("   ", None, None).await;
         assert!(out.starts_with("Error:"));
     }
 
@@ -465,5 +612,106 @@ mod tests {
     #[test]
     fn urlencoding_percent_decode_handles_percent() {
         assert_eq!(urlencoding_percent_decode("a%20b%2Fc"), "a b/c");
+    }
+
+    // ── SearXNG parsing ────────────────────────────────────────────────
+
+    fn searxng_fixture(n: usize) -> String {
+        let mut results = Vec::new();
+        for i in 0..n {
+            results.push(format!(
+                r#"{{"title": "Result {i}", "url": "https://example{i}.com/page", "content": "Snippet for result {i}"}}"#
+            ));
+        }
+        format!(r#"{{"query": "test", "results": [{}]}}"#, results.join(","))
+    }
+
+    #[test]
+    fn parse_searxng_results_formats_titles_and_urls() {
+        let out = parse_searxng_results(&searxng_fixture(2));
+        assert!(out.contains("Result 0 — https://example0.com/page"));
+        assert!(out.contains("Result 1 — https://example1.com/page"));
+        assert!(out.contains("Snippet for result 0"));
+    }
+
+    #[test]
+    fn parse_searxng_results_caps_at_max() {
+        let out = parse_searxng_results(&searxng_fixture(15));
+        // 10 results, each rendered as a title line + a snippet line.
+        assert_eq!(out.lines().count(), 20);
+        assert!(out.contains("Result 9"));
+        assert!(!out.contains("Result 14"));
+    }
+
+    #[test]
+    fn parse_searxng_results_empty_is_safe_message() {
+        assert_eq!(
+            parse_searxng_results(r#"{"query": "x", "results": []}"#),
+            "No results found."
+        );
+    }
+
+    #[test]
+    fn parse_searxng_results_missing_array_is_error() {
+        let out = parse_searxng_results(r#"{"foo": 1}"#);
+        assert!(out.starts_with("Error:"));
+    }
+
+    #[test]
+    fn parse_searxng_results_bad_json_is_error() {
+        let out = parse_searxng_results("not json");
+        assert!(out.starts_with("Error:"));
+    }
+
+    #[test]
+    fn parse_searxng_results_skips_entries_missing_title_or_url() {
+        let body = r#"{"results": [
+            {"title": "", "url": "https://example.com", "content": "no title"},
+            {"title": "No URL", "url": "", "content": "no url"},
+            {"title": "Good", "url": "https://good.com", "content": "ok"}
+        ]}"#;
+        let out = parse_searxng_results(body);
+        assert!(out.contains("Good — https://good.com"));
+        assert!(!out.contains("no title"));
+        assert!(!out.contains("No URL"));
+    }
+
+    #[test]
+    fn parse_searxng_results_uses_snippet_fallback() {
+        let body = r#"{"results": [{"title": "T", "url": "https://x.com", "snippet": "snip"}]}"#;
+        let out = parse_searxng_results(body);
+        assert!(out.contains("snip"));
+    }
+
+    #[test]
+    fn searxng_rejects_non_http_base_url() {
+        // The base URL scheme validation shares web_fetch's discipline.
+        assert!(validate_http_url("file:///etc/passwd").is_err());
+        assert!(validate_http_url("http://127.0.0.1:8080").is_ok());
+        assert!(validate_http_url("https://searx.example.com").is_ok());
+    }
+
+    #[test]
+    fn searxng_config_from_env_respects_url() {
+        let original = std::env::var("RAVEN_SEARXNG_URL").ok();
+        std::env::set_var("RAVEN_SEARXNG_URL", "http://127.0.0.1:8080");
+        let cfg = SearxngConfig::from_env();
+        assert_eq!(cfg.base_url.as_deref(), Some("http://127.0.0.1:8080"));
+        match original {
+            Some(v) => std::env::set_var("RAVEN_SEARXNG_URL", v),
+            None => std::env::remove_var("RAVEN_SEARXNG_URL"),
+        }
+    }
+
+    #[test]
+    fn searxng_config_from_env_empty_url_disables() {
+        let original = std::env::var("RAVEN_SEARXNG_URL").ok();
+        std::env::remove_var("RAVEN_SEARXNG_URL");
+        let cfg = SearxngConfig::from_env();
+        assert!(cfg.base_url.is_none());
+        match original {
+            Some(v) => std::env::set_var("RAVEN_SEARXNG_URL", v),
+            None => std::env::remove_var("RAVEN_SEARXNG_URL"),
+        }
     }
 }

@@ -238,7 +238,10 @@ impl Agent {
     /// `AGENTS.md` content + optional `--rules`. The workspace must exist.
     pub fn new(settings: Settings) -> Result<Self> {
         settings.ensure_workspace()?;
-        let sandbox = Sandbox::new(settings.workspace.clone());
+        let sandbox = Sandbox::with_extra_rw(
+            settings.workspace.clone(),
+            settings.sandbox_extra_rw.clone(),
+        );
         let messages = vec![build_system_message(&settings)];
         Ok(Self {
             settings,

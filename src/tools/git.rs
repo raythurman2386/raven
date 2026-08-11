@@ -96,7 +96,19 @@ impl Sandbox {
         worktree_path: &std::path::Path,
     ) -> Result<()> {
         let path_str = worktree_path.to_string_lossy();
-        let out = self.run_git(&["worktree", "add", "-b", branch_name, &path_str, "HEAD"])?;
+        // Grant RW on the worktree's parent dir so `git worktree add` can
+        // create the sibling — without opening up the whole temp dir (which
+        // would reopen the `06_sandbox_escape` hole when the workspace lives
+        // under the temp dir). If the parent doesn't exist yet (tempdir parent
+        // does), git needs to be able to mkdir it.
+        let parent = worktree_path
+            .parent()
+            .unwrap_or(worktree_path)
+            .to_path_buf();
+        let out = self.run_git_with_extra(
+            &["worktree", "add", "-b", branch_name, &path_str, "HEAD"],
+            &[parent],
+        )?;
         if out.contains("fatal") || out.contains("error") {
             anyhow::bail!("failed to create worktree: {}", out);
         }
@@ -122,7 +134,14 @@ impl Sandbox {
     /// Remove a git worktree, even if it has uncommitted changes.
     pub fn remove_worktree(&self, worktree_path: &std::path::Path) -> Result<()> {
         let path_str = worktree_path.to_string_lossy();
-        let _ = self.run_git(&["worktree", "remove", &path_str, "--force"])?;
+        // Like [`Self::create_worktree`], grant RW on the worktree's parent so
+        // git can delete the sibling without opening up the whole temp dir.
+        let parent = worktree_path
+            .parent()
+            .unwrap_or(worktree_path)
+            .to_path_buf();
+        let _ =
+            self.run_git_with_extra(&["worktree", "remove", &path_str, "--force"], &[parent])?;
         Ok(())
     }
 
@@ -152,7 +171,8 @@ impl Sandbox {
             .current_dir(&self.workspace)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
-        let mut confined = spawn_confined(&mut cmd, &self.workspace).context("spawn git")?;
+        let mut confined =
+            spawn_confined(&mut cmd, &self.workspace, &self.extra_rw).context("spawn git")?;
         match wait_for_child(&mut confined.child, 30) {
             Some((status, _, _)) => Ok(status.success()),
             None => Ok(false),
@@ -160,12 +180,22 @@ impl Sandbox {
     }
 
     pub(crate) fn run_git(&self, args: &[&str]) -> Result<String> {
+        self.run_git_with_extra(args, &self.extra_rw)
+    }
+
+    /// Run `git` with an extra set of Landlock RW roots for the confined child.
+    ///
+    /// Used by [`Self::create_worktree`] to let `git worktree add` create the
+    /// worktree sibling under the temp dir without granting RW on the whole
+    /// temp dir (which would reopen the `06_sandbox_escape` hole).
+    fn run_git_with_extra(&self, args: &[&str], extra_rw: &[std::path::PathBuf]) -> Result<String> {
         let mut cmd = Command::new("git");
         cmd.args(args)
             .current_dir(&self.workspace)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
-        let mut confined = spawn_confined(&mut cmd, &self.workspace).context("spawn git")?;
+        let mut confined =
+            spawn_confined(&mut cmd, &self.workspace, extra_rw).context("spawn git")?;
         match wait_for_child(&mut confined.child, 30) {
             Some((status, stdout, stderr)) => {
                 let mut out = String::new();

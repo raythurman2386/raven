@@ -39,7 +39,8 @@ use std::path::PathBuf;
 use raven::agent::{run_parallel, Agent, ChatMessage};
 use raven::config::{
     default_api_key, default_base_url, default_max_iter, default_model, env_compact_threshold,
-    env_context_window, load_config_file, load_dotenv_from, resolve_mode, Mode, Settings,
+    env_context_window, env_searxng_engines, env_searxng_url, load_config_file, load_dotenv_from,
+    resolve_mode, Mode, Settings,
 };
 use raven::context::{fetch_context_window, infer_context_window};
 use raven::runner;
@@ -233,6 +234,13 @@ async fn main() -> Result<()> {
         .unwrap_or(0.75);
     let max_tokens = Settings::derived_max_tokens(context_window);
 
+    // SearXNG: env var > config file. Precedence follows the same pattern as
+    // host/context_window — CLI flags don't expose a search backend.
+    let searxng_url = env_searxng_url().or(cfg.searxng_url);
+    let searxng_engines = env_searxng_engines()
+        .or(cfg.searxng_engines)
+        .unwrap_or_default();
+
     let max_iterations = cfg.max_iterations.unwrap_or_else(default_max_iter);
     let mode = resolve_mode(cli.mode.map(Mode::from), cfg.mode, cli.yolo);
     let temperature = cfg.temperature.unwrap_or(0.2);
@@ -257,6 +265,9 @@ async fn main() -> Result<()> {
             .theme
             .or(cfg.theme)
             .unwrap_or_else(|| "ravenwood".to_string()),
+        searxng_url,
+        searxng_engines,
+        sandbox_extra_rw: Vec::new(),
     };
 
     if let Some(tasks) = cli.parallel {

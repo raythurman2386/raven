@@ -18,6 +18,8 @@ See the [root README quick start](../README.md#quick-start) for the full flag li
 | `RAVEN_COMPACT_THRESHOLD` / `OG_COMPACT_THRESHOLD` | `0.75` | Fraction of usable context at which compaction triggers |
 | `RUST_LOG` | _(unset)_ | `tracing` filter (e.g. `debug`, `raven=trace`) |
 | `RAVEN_SANDBOX_NETWORK_BLOCK` | _(unset)_ | Set to `0` to skip the seccomp network block (Linux only) |
+| `RAVEN_SEARXNG_URL` | _(unset)_ | Optional self-hosted SearXNG base URL for `web_search` (e.g. `http://127.0.0.1:8080`) |
+| `RAVEN_SEARXNG_ENGINES` | _(unset)_ | Optional comma-separated SearXNG engine list (e.g. `google,bing`) |
 
 ### Examples
 
@@ -56,6 +58,8 @@ Layered TOML config, loaded from the workspace first (higher priority), then the
 | `no_stream` | `false` | Disable streaming (single request per turn) |
 | `verify` | `true` | Enforce verification gate (agent must run tests after edits) |
 | `theme` | `ravenwood` | TUI color theme: `ravenwood`, `nord`, `dracula`, `solarized-dark` |
+| `searxng_url` | _(unset)_ | Optional self-hosted SearXNG base URL for `web_search` (e.g. `http://127.0.0.1:8080`) |
+| `searxng_engines` | _(unset)_ | Optional SearXNG engine list (e.g. `["google", "bing"]`) |
 
 ```toml
 # .raven/config.toml  (workspace)  or  ~/.raven/config.toml  (global)
@@ -72,6 +76,37 @@ theme = "ravenwood"
 ```
 
 CLI flags still win over config file values; env vars take precedence over the config file but lose to explicit CLI flags.
+
+---
+
+## SearXNG
+
+`web_search` uses DuckDuckGo's HTML endpoint by default (keyless, no setup). To route searches through a **self-hosted [SearXNG](https://docs.searxng.org/)** instance — which keeps query traffic on your own network — set its base URL:
+
+```bash
+# Point web_search at a local SearXNG instance
+export RAVEN_SEARXNG_URL="http://127.0.0.1:8080"
+raven -p "What's the latest Rust edition?"
+
+# Optionally pin which engines SearXNG should use (comma-separated)
+export RAVEN_SEARXNG_ENGINES="google,bing"
+```
+
+Or via the config file:
+
+```toml
+searxng_url = "https://searx.example.com"
+searxng_engines = ["google", "bing"]
+```
+
+Precedence: `RAVEN_SEARXNG_URL` env var > config-file `searxng_url`. `RAVEN_SEARXNG_ENGINES` > config-file `searxng_engines`.
+
+Behavior:
+
+- When configured, `web_search` queries `GET {base}/search?q=…&format=json` and returns up to 10 results (title + URL + short snippet).
+- The base URL must be `http://` or `https://` only; `file://`, `data://`, etc. are rejected.
+- No API key is required for a typical SearXNG install (`RAVEN_SEARXNG_KEY` is not implemented — SearXNG instances are usually open or IP-restricted).
+- If SearXNG is **unreachable**, returns an HTTP error, or returns empty/unparseable results, `web_search` automatically **falls back to DuckDuckGo** so search keeps working. SearXNG is an opt-in enhancement, never a requirement.
 
 ---
 

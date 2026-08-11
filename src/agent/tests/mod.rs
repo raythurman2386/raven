@@ -189,6 +189,9 @@ fn settings_for(workspace: &std::path::Path, base_url: &str) -> crate::config::S
         verify: false,
         confirm_shell: false,
         theme: "ravenwood".into(),
+        searxng_url: None,
+        searxng_engines: Vec::new(),
+        sandbox_extra_rw: Vec::new(),
     }
 }
 

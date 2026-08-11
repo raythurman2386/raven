@@ -657,6 +657,40 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "linux")]
+    fn confined_child_cannot_write_to_tmp_sibling_of_workspace() {
+        // Regression for the flaky 06_sandbox_escape eval case: when the
+        // workspace lives UNDER the global temp dir (e.g. `/tmp/raven-eval-.../workspace`),
+        // a confined child must NOT be able to write an arbitrary sibling file
+        // under `/tmp`. Landlock previously granted a RW rule on the whole temp
+        // dir whenever the workspace wasn't exactly equal to it, which let
+        // `echo pwned > /tmp/raven_eval_escape_probe.txt` succeed.
+        let tmp = tempfile::tempdir().unwrap();
+        // Force the workspace to be nested under the process temp dir.
+        let ws = tmp.path().canonicalize().unwrap();
+        assert!(
+            ws.starts_with(std::env::temp_dir().canonicalize().unwrap()),
+            "test setup requires workspace under /tmp"
+        );
+        let probe = std::env::temp_dir().join(format!(
+            "raven_eval_escape_probe_{}.txt",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&probe);
+        let sb = Sandbox::new(ws);
+        let out = sb
+            .run_shell(&format!("echo pwned > {}", probe.display()), 10)
+            .unwrap();
+        // The write must be blocked by Landlock (permission denied), and the
+        // probe must not exist afterwards.
+        assert!(
+            !probe.exists(),
+            "confined child must not write outside workspace under /tmp: {out}"
+        );
+        let _ = std::fs::remove_file(&probe);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
     fn confined_child_cannot_read_outside_workspace() {
         let tmp = tempfile::tempdir().unwrap();
         let ws = tmp.path().canonicalize().unwrap();
@@ -1305,6 +1339,7 @@ mod tests {
     #[test]
     fn worktree_isolates_commits_between_branches() {
         let (_tmp, sb) = git_sandbox();
+        let main_ws = sb.workspace.clone();
         sb.write_file("shared.txt", "base").unwrap();
         sb.git_commit("initial").unwrap();
 
@@ -1315,8 +1350,11 @@ mod tests {
         sb.create_worktree("raven-sub-a", &wt_path_a).unwrap();
         sb.create_worktree("raven-sub-b", &wt_path_b).unwrap();
 
-        let sb_a = Sandbox::new(wt_path_a);
-        let sb_b = Sandbox::new(wt_path_b);
+        // Sub-agents run from the worktree but must reach the shared main
+        // repo's `.git` (a sibling under the temp dir), matching the parallel
+        // orchestration which sets `settings.sandbox_extra_rw`.
+        let sb_a = Sandbox::with_extra_rw(wt_path_a, vec![main_ws.clone()]);
+        let sb_b = Sandbox::with_extra_rw(wt_path_b, vec![main_ws.clone()]);
 
         sb_a.write_file("a.txt", "work from sub-a").unwrap();
         sb_a.git_commit("sub-a: add a.txt").unwrap();
@@ -1397,6 +1435,7 @@ mod tests {
     #[test]
     fn worktree_concurrent_edits_to_same_file_are_isolated() {
         let (_tmp, sb) = git_sandbox();
+        let main_ws = sb.workspace.clone();
         let content: String = (1..=20).map(|i| format!("line{}\n", i)).collect();
         sb.write_file("shared.txt", &content).unwrap();
         sb.git_commit("initial").unwrap();
@@ -1408,8 +1447,8 @@ mod tests {
         sb.create_worktree("raven-sub-a", &wt_path_a).unwrap();
         sb.create_worktree("raven-sub-b", &wt_path_b).unwrap();
 
-        let sb_a = Sandbox::new(wt_path_a);
-        let sb_b = Sandbox::new(wt_path_b);
+        let sb_a = Sandbox::with_extra_rw(wt_path_a, vec![main_ws.clone()]);
+        let sb_b = Sandbox::with_extra_rw(wt_path_b, vec![main_ws.clone()]);
 
         sb_a.search_replace("shared.txt", "line2\n", "line2-modified-by-a\n", false)
             .unwrap();
@@ -1466,6 +1505,7 @@ mod tests {
     #[test]
     fn merge_conflict_detection_after_conflicting_edits() {
         let (_tmp, sb) = git_sandbox();
+        let main_ws = sb.workspace.clone();
         sb.write_file("shared.txt", "line1\nline2\nline3\n")
             .unwrap();
         sb.git_commit("initial").unwrap();
@@ -1477,8 +1517,8 @@ mod tests {
         sb.create_worktree("raven-sub-a", &wt_path_a).unwrap();
         sb.create_worktree("raven-sub-b", &wt_path_b).unwrap();
 
-        let sb_a = Sandbox::new(wt_path_a);
-        let sb_b = Sandbox::new(wt_path_b);
+        let sb_a = Sandbox::with_extra_rw(wt_path_a, vec![main_ws.clone()]);
+        let sb_b = Sandbox::with_extra_rw(wt_path_b, vec![main_ws.clone()]);
 
         sb_a.search_replace("shared.txt", "line2\n", "line2-a\n", false)
             .unwrap();
@@ -1504,6 +1544,7 @@ mod tests {
     #[test]
     fn abort_merge_restores_clean_working_tree() {
         let (_tmp, sb) = git_sandbox();
+        let main_ws = sb.workspace.clone();
         sb.write_file("shared.txt", "line1\nline2\nline3\n")
             .unwrap();
         sb.git_commit("initial").unwrap();
@@ -1515,8 +1556,8 @@ mod tests {
         sb.create_worktree("raven-sub-a", &wt_path_a).unwrap();
         sb.create_worktree("raven-sub-b", &wt_path_b).unwrap();
 
-        let sb_a = Sandbox::new(wt_path_a);
-        let sb_b = Sandbox::new(wt_path_b);
+        let sb_a = Sandbox::with_extra_rw(wt_path_a, vec![main_ws.clone()]);
+        let sb_b = Sandbox::with_extra_rw(wt_path_b, vec![main_ws.clone()]);
 
         sb_a.search_replace("shared.txt", "line2\n", "line2-a\n", false)
             .unwrap();

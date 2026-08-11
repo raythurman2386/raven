@@ -179,7 +179,11 @@ impl Agent {
                         .unwrap_or("")
                         .to_string();
                     let page = args.get("page").and_then(|v| v.as_u64()).map(|p| p as u32);
-                    crate::web::search(&query, page).await
+                    let searxng = crate::web::SearxngConfig {
+                        base_url: self.settings.searxng_url.clone(),
+                        engines: self.settings.searxng_engines.clone(),
+                    };
+                    crate::web::search(&query, page, Some(&searxng)).await
                 } else {
                     let url = args
                         .get("url")

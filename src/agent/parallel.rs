@@ -63,6 +63,12 @@ pub async fn run_parallel(settings: &Settings, tasks: Vec<String>) -> Result<Vec
                     Ok(()) => {
                         let mut sub_settings = s.clone();
                         sub_settings.workspace = wt_path.clone();
+                        // The worktree shares the main repo's `.git`, which
+                        // lives outside the worktree (a sibling under the temp
+                        // dir). Grant the sub-agent's sandbox RW access to the
+                        // main workspace so git works across the shared repo,
+                        // without opening up the whole temp dir.
+                        sub_settings.sandbox_extra_rw = vec![s.workspace.clone()];
                         (sub_settings, Some((branch_name, wt_path, sandbox)))
                     }
                     Err(e) => {

@@ -26,7 +26,7 @@ All file paths are **relative to the workspace root** and confined to it. See [a
 | `run_tests` | Auto-detect and run project test suite | Runs `cargo test` / `npm test` / `pytest` |
 | `run_lint` | Auto-detect and run project linter/type checker | Runs `cargo clippy` / `tsc` / `eslint` / `python -m compileall` |
 | `ask_user` | Ask the user a question | Pauses agent; user response fed back as tool result |
-| `web_search` | Search the web via DuckDuckGo | Read-only; no API key needed; 10 results per page |
+| `web_search` | Search the web via DuckDuckGo (or a self-hosted SearXNG instance if configured) | Read-only; no API key needed; 10 results per page |
 | `web_fetch` | Fetch a URL and return readable text | Read-only; only http/https; strips HTML; 20s timeout |
 | `skill_search` | List skills matching a query | Read-only; searches SKILL.md files |
 | `skill_load` | Load a skill's instructions into context | Read-only; returns skill body wrapped in `<skill>` envelope |
@@ -242,7 +242,9 @@ Pauses the agent and asks the user a question. In the TUI the input box repurpos
 }
 ```
 
-Searches the web via DuckDuckGo's HTML endpoint. No API key required. Returns up to 10 results per page (title + URL). Output capped at 12 000 chars. Read-only and available during planning.
+Searches the web via DuckDuckGo's HTML endpoint by default. No API key required. Returns up to 10 results per page (title + URL). Output capped at 12 000 chars. Read-only and available during planning.
+
+When a [SearXNG](https://docs.searxng.org/) base URL is configured (`RAVEN_SEARXNG_URL` or the `searxng_url` config key), `web_search` queries the SearXNG JSON API instead and returns title + URL + a short snippet. If SearXNG is unreachable, returns an error, or returns empty results, it automatically falls back to DuckDuckGo so search never bricks. No API key is needed for a typical SearXNG install. See [configuration.md](configuration.md#searxng) for setup.
 
 ### `web_fetch`
 

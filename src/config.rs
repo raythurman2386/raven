@@ -129,6 +129,18 @@ pub struct Settings {
     /// [`crate::tui::Theme`] at TUI startup; unknown names fall back to the
     /// default.
     pub theme: String,
+    /// Optional self-hosted SearXNG base URL (e.g. `http://127.0.0.1:8080`).
+    /// When set, `web_search` queries its JSON API; otherwise it falls back to
+    /// DuckDuckGo's HTML endpoint. No API key required.
+    pub searxng_url: Option<String>,
+    /// Optional SearXNG engine list override (e.g. `["google", "bing"]`).
+    /// When empty, the server's default engines are used.
+    pub searxng_engines: Vec<String>,
+    /// Extra Landlock RW roots granted to every confined subprocess (e.g. a
+    /// git worktree sub-agent's shared main repo, which lives as a sibling
+    /// under the temp dir). Defaults to empty; only set by parallel sub-agent
+    /// orchestration. Linux-only (no effect on Windows).
+    pub sandbox_extra_rw: Vec<PathBuf>,
 }
 
 impl Settings {
@@ -313,6 +325,33 @@ pub fn env_compact_threshold() -> Option<f32> {
         .and_then(|s| s.parse().ok())
 }
 
+/// Optional SearXNG base URL from `RAVEN_SEARXNG_URL` (e.g.
+/// `http://127.0.0.1:8080` or `https://searx.example.com`). Empty/whitespace
+/// values are treated as absent, so a private install does not require it.
+pub fn env_searxng_url() -> Option<String> {
+    std::env::var("RAVEN_SEARXNG_URL")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Optional comma-separated SearXNG engine list from `RAVEN_SEARXNG_ENGINES`
+/// (e.g. `google,duckduckgo,bing`). Empty values are treated as absent, which
+/// leaves engine selection to the SearXNG server defaults.
+pub fn env_searxng_engines() -> Option<Vec<String>> {
+    let raw = std::env::var("RAVEN_SEARXNG_ENGINES").ok()?;
+    let engines: Vec<String> = raw
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if engines.is_empty() {
+        None
+    } else {
+        Some(engines)
+    }
+}
+
 // ── Config file ────────────────────────────────────────────────────────
 
 /// Config file loaded from `~/.raven/config.toml` or `.raven/config.toml`.
@@ -333,6 +372,10 @@ pub struct ConfigFile {
     pub verify: Option<bool>,
     /// Color theme name (e.g. `ravenwood`, `nord`).
     pub theme: Option<String>,
+    /// Optional self-hosted SearXNG base URL (e.g. `http://127.0.0.1:8080`).
+    pub searxng_url: Option<String>,
+    /// Optional comma-separated SearXNG engine list (e.g. `"google,bing"`).
+    pub searxng_engines: Option<Vec<String>>,
 }
 
 /// Load config from workspace `.raven/config.toml` then `~/.raven/config.toml`.
@@ -362,6 +405,8 @@ pub fn load_config_file(workspace: &std::path::Path) -> ConfigFile {
         no_stream: ws.no_stream.or(global.no_stream),
         verify: ws.verify.or(global.verify),
         theme: ws.theme.or(global.theme),
+        searxng_url: ws.searxng_url.or(global.searxng_url),
+        searxng_engines: ws.searxng_engines.or(global.searxng_engines),
     }
 }
 
@@ -680,5 +725,56 @@ max_iterations = 10
         std::fs::write(cfg_dir.join("config.toml"), "theme = \"nord\"\n").unwrap();
         let cfg = load_config_file(tmp.path());
         assert_eq!(cfg.theme.as_deref(), Some("nord"));
+    }
+
+    #[test]
+    fn config_file_parses_searxng() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg_dir = tmp.path().join(".raven");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        std::fs::write(
+            cfg_dir.join("config.toml"),
+            "searxng_url = \"http://127.0.0.1:8080\"\nsearxng_engines = [\"google\", \"bing\"]\n",
+        )
+        .unwrap();
+        let cfg = load_config_file(tmp.path());
+        assert_eq!(cfg.searxng_url.as_deref(), Some("http://127.0.0.1:8080"));
+        assert_eq!(
+            cfg.searxng_engines.as_deref(),
+            Some(&["google".into(), "bing".into()][..])
+        );
+    }
+
+    #[test]
+    fn env_searxng_url_parses() {
+        // Save any user-set value so this test never clobbers it for the run.
+        let original = std::env::var("RAVEN_SEARXNG_URL").ok();
+        std::env::set_var("RAVEN_SEARXNG_URL", "http://searx.example.com");
+        assert_eq!(
+            env_searxng_url().as_deref(),
+            Some("http://searx.example.com")
+        );
+        std::env::set_var("RAVEN_SEARXNG_URL", "  ");
+        assert!(env_searxng_url().is_none());
+        match original {
+            Some(v) => std::env::set_var("RAVEN_SEARXNG_URL", v),
+            None => std::env::remove_var("RAVEN_SEARXNG_URL"),
+        }
+    }
+
+    #[test]
+    fn env_searxng_engines_parses_list() {
+        let original = std::env::var("RAVEN_SEARXNG_ENGINES").ok();
+        std::env::set_var("RAVEN_SEARXNG_ENGINES", "google,  bing ,");
+        assert_eq!(
+            env_searxng_engines(),
+            Some(vec!["google".to_string(), "bing".to_string()])
+        );
+        std::env::set_var("RAVEN_SEARXNG_ENGINES", "  , , ");
+        assert!(env_searxng_engines().is_none());
+        match original {
+            Some(v) => std::env::set_var("RAVEN_SEARXNG_ENGINES", v),
+            None => std::env::remove_var("RAVEN_SEARXNG_ENGINES"),
+        }
     }
 }

@@ -229,7 +229,7 @@ pub fn tool_definitions() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "web_search",
-                "description": "Search the web and return a ranked list of result titles and URLs (10 per page). No API key required. Use for current, factual, or unfamiliar topics. Use the page parameter to fetch subsequent pages.",
+                "description": "Search the web and return a ranked list of result titles and URLs (10 per page). Uses a self-hosted SearXNG instance when RAVEN_SEARXNG_URL is set, otherwise DuckDuckGo. No API key required. Use for current, factual, or unfamiliar topics. Use the page parameter to fetch subsequent pages.",
                 "parameters": {
                     "type": "object",
                     "properties": {

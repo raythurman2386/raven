@@ -4,7 +4,50 @@ All notable changes to Raven are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.10] - 2026-08-11
+
+### Added
+
+- **Optional self-hosted SearXNG backend for `web_search`** — when a base URL
+  is configured (`RAVEN_SEARXNG_URL` env var or the `searxng_url` config key),
+  `web_search` queries the SearXNG JSON API (`GET {base}/search?q=…&format=json`)
+  and returns up to 10 results (title + URL + short snippet). `RAVEN_SEARXNG_ENGINES`
+  / `searxng_engines` optionally pins the engine list. The base URL must be
+  `http`/`https` only; no API key is required. On any failure (HTTP error,
+  empty results, or unparseable JSON) it **falls back to DuckDuckGo**, so a
+  down local instance never bricks search. Precedence: env var > config file.
+
+### Changed
+
+- **Sandbox temp-dir scoping** — Landlock now grants the process temp dir RW
+  **only when the workspace is not under it**. Previously a workspace nested
+  under `/tmp` (e.g. `evals/run.py`'s `raven-eval-…/workspace`) granted RW on
+  the whole temp dir, letting a confined child write arbitrary siblings under
+  `/tmp` (the `06_sandbox_escape` probe). Build caches/temps are pinned into the
+  workspace via `pin_build_tool_dirs`; callers that genuinely need a sibling
+  (git worktrees) pass it as an explicit extra RW root instead.
+- **Git worktree confinement** — `create_worktree`/`remove_worktree` grant RW
+  on just the worktree's parent dir (via a new `run_git_with_extra`), and
+  parallel sub-agents get `sandbox_extra_rw` for the shared main repo's `.git`,
+  instead of opening up the whole temp dir. `Sandbox` gained a
+  `with_extra_rw` constructor and an `extra_rw` field threaded through
+  `spawn_confined`/`run_confined`.
+
+### Fixed
+
+- **`git_commit` fails for workspaces under `$HOME`** — the Landlock sandbox
+  granted `$HOME` read-only but, in the "workspace under HOME" branch, only
+  granted RO to sibling toolchain dirs (`.rustup`, `.cargo`, `.config`), not
+  `~/.gitconfig`. Git couldn't read user identity, so `git_commit` failed with
+  "unable to access '~/.gitconfig': Permission denied". Now grants RO to
+  `~/.gitconfig` and `~/.git-credentials` (read-only, so no write-surface
+  widening). Found via stress-testing in `/home/ret/Work/raven-stress`.
+- **`install.ps1` closes the window on failure** — when piped into `iex` (the
+  documented one-liner), every error path called `exit 1`, which terminated the
+  host PowerShell session and closed the window before the user saw the error.
+  The whole install is now wrapped in a `try/catch` that prints the failure in
+  red and pauses (`Press Enter to close…`, skipped when non-interactive) before
+  exiting.
 
 ## [0.1.9] - 2026-08-10
 
@@ -303,7 +346,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Ratatui 0.30, crossterm 0.29.
 
-[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.1.9...HEAD
+[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.1.10...HEAD
+[0.1.10]: https://github.com/raythurman2386/raven/compare/v0.1.9...v0.1.10
 [0.1.9]: https://github.com/raythurman2386/raven/compare/v0.1.8...v0.1.9
 [0.1.8]: https://github.com/raythurman2386/raven/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/raythurman2386/raven/compare/v0.1.6...v0.1.7

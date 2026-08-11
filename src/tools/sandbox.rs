@@ -169,12 +169,29 @@ pub(crate) fn normalize_path(p: &Path) -> PathBuf {
 pub struct Sandbox {
     /// The workspace root; all paths are confined to this directory.
     pub workspace: PathBuf,
+    /// Extra Landlock RW roots granted to every confined child (e.g. a git
+    /// worktree's shared main repo, which lives as a sibling under the temp
+    /// dir). Defaults to empty. Never granted on Windows (no Landlock).
+    pub extra_rw: Vec<PathBuf>,
 }
 
 impl Sandbox {
     /// Create a sandbox rooted at `workspace`.
     pub fn new(workspace: PathBuf) -> Self {
-        Self { workspace }
+        Self {
+            workspace,
+            extra_rw: Vec::new(),
+        }
+    }
+
+    /// Create a sandbox rooted at `workspace` with extra Landlock RW roots
+    /// granted to every confined child. Used for git worktree sub-agents that
+    /// must reach the shared main repo (a sibling under the temp dir).
+    pub fn with_extra_rw(workspace: PathBuf, extra_rw: Vec<PathBuf>) -> Self {
+        Self {
+            workspace,
+            extra_rw,
+        }
     }
 
     /// Resolve `path` relative to the workspace, rejecting traversal and
@@ -578,7 +595,7 @@ impl Sandbox {
         cmd.stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
-        run_confined(&mut cmd, &self.workspace, timeout_secs)
+        run_confined(&mut cmd, &self.workspace, timeout_secs, &self.extra_rw)
     }
 
     /// Regex content search (Grok Build `grep` semantics, pure-Rust fallback).
@@ -728,8 +745,8 @@ impl Sandbox {
             .stderr(std::process::Stdio::piped());
         setup_shell_env(&mut command, &self.workspace);
         command.env("CI", "true");
-        let mut confined =
-            spawn_confined(&mut command, &self.workspace).context("spawn test runner")?;
+        let mut confined = spawn_confined(&mut command, &self.workspace, &self.extra_rw)
+            .context("spawn test runner")?;
         match wait_for_child(&mut confined.child, 600) {
             Some((status, stdout, stderr)) => {
                 #[cfg(unix)]
@@ -834,7 +851,8 @@ impl Sandbox {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
         setup_shell_env(&mut command, &self.workspace);
-        let mut confined = spawn_confined(&mut command, &self.workspace).context("spawn linter")?;
+        let mut confined = spawn_confined(&mut command, &self.workspace, &self.extra_rw)
+            .context("spawn linter")?;
         match wait_for_child(&mut confined.child, 600) {
             Some((status, stdout, stderr)) => {
                 #[cfg(unix)]
@@ -968,7 +986,7 @@ fn apply_rlimits() {
 /// doesn't support Landlock, we log and continue (the caller decides whether
 /// that's acceptable).
 #[cfg(target_os = "linux")]
-fn apply_landlock(workspace: &Path) {
+fn apply_landlock(workspace: &Path, extra_rw: &[PathBuf]) {
     if std::env::var("RAVEN_SANDBOX_LANDLOCK").as_deref() == Ok("0") {
         tracing::info!("landlock disabled via RAVEN_SANDBOX_LANDLOCK=0");
         return;
@@ -1005,12 +1023,28 @@ fn apply_landlock(workspace: &Path) {
     // under the workspace via [`pin_build_tool_dirs`].
     let mut rw_paths: Vec<PathBuf> = vec![ws_canon.clone()];
 
-    // Always allow the process temp dir. With ABI V3 `REFER`, nested
-    // workspace-under-/tmp rules no longer break cargo hardlinks; git
-    // worktrees and other tools still need to create siblings under /tmp.
+    // Allow the process temp dir only when the workspace is NOT under it.
+    // When the workspace lives under the temp dir (e.g. `/tmp/raven-eval-.../workspace`),
+    // granting RW on the whole temp dir would let a confined child write any
+    // sibling under `/tmp` (the `06_sandbox_escape` probe is exactly `/tmp/...`),
+    // defeating the workspace confinement. Build caches/temps are pinned into
+    // the workspace via [`pin_build_tool_dirs`]. For workspaces NOT under the
+    // temp dir, keep granting it RW so git worktrees and other tools can create
+    // siblings there. Callers that genuinely need to write to a specific
+    // sibling under the temp dir (git worktrees) pass that path as an extra RW
+    // root via [`spawn_confined`], so the escape stays closed without breaking
+    // worktrees.
     if let Ok(tmp) = std::env::temp_dir().canonicalize() {
-        if tmp != ws_canon {
+        if !ws_canon.starts_with(&tmp) {
             rw_paths.push(tmp);
+        }
+    }
+    // Explicit extra RW roots (e.g. a git worktree sibling under the temp dir).
+    for root in extra_rw {
+        if let Ok(c) = root.canonicalize() {
+            if !rw_paths.iter().any(|p| p == &c) {
+                rw_paths.push(c);
+            }
         }
     }
     // /dev needs RW so git can open `/dev/null` for reading and writing.
@@ -1036,6 +1070,22 @@ fn apply_landlock(workspace: &Path) {
                 // Workspace under HOME: grant sibling toolchain dirs RO.
                 for sub in [".rustup", ".cargo", ".config"] {
                     let p = home_canon.join(sub);
+                    if p.exists() {
+                        if let Ok(c) = p.canonicalize() {
+                            if !c.starts_with(&ws_canon) {
+                                ro_paths.push(c);
+                            }
+                        }
+                    }
+                }
+                // Git needs to read the user's identity/credentials to commit
+                // (e.g. `~/.gitconfig`, `~/.git-credentials`). These are
+                // read-only grants — git only reads them, so they don't widen
+                // the write surface. Without them, `git_commit` fails with
+                // "unable to access '~/.gitconfig': Permission denied" for any
+                // workspace under $HOME.
+                for f in [".gitconfig", ".git-credentials"] {
+                    let p = home_canon.join(f);
                     if p.exists() {
                         if let Ok(c) = p.canonicalize() {
                             if !c.starts_with(&ws_canon) {
@@ -1160,12 +1210,12 @@ fn apply_seccomp_network_block() {
 /// logs and continues on failure so a kernel that doesn't support a feature
 /// doesn't break the child.
 #[cfg(unix)]
-fn apply_os_confinement(workspace: &Path) {
+fn apply_os_confinement(workspace: &Path, extra_rw: &[PathBuf]) {
     unsafe { libc::setpgid(0, 0) };
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     apply_rlimits();
     #[cfg(target_os = "linux")]
-    apply_landlock(workspace);
+    apply_landlock(workspace, extra_rw);
     #[cfg(target_os = "linux")]
     apply_seccomp_network_block();
 }
@@ -1262,10 +1312,19 @@ fn pin_build_tool_dirs(cmd: &mut Command, workspace: &std::path::Path) {
 
     cmd.env("CARGO_HOME", &cargo_home);
     cmd.env("CARGO_TARGET_DIR", &target_dir);
-    cmd.env("TMPDIR", &tmp_dir);
-    cmd.env("TEMP", &tmp_dir);
-    cmd.env("TMP", &tmp_dir);
     cmd.env("npm_config_cache", &npm_cache);
+    // Pin the temp dir only on Unix. The pinning exists to keep build caches
+    // and temp files under the workspace Landlock rule so rustc/cargo don't
+    // hardlink across Landlock hierarchies (EXDEV). Windows has no Landlock
+    // and no EXDEV, and overriding TEMP/TMP there breaks MSVC link.exe, which
+    // writes its response file to %TEMP% and misparses it as UTF-16LE when the
+    // path is redirected (link: missing operand after '\377\376').
+    #[cfg(not(windows))]
+    {
+        cmd.env("TMPDIR", &tmp_dir);
+        cmd.env("TEMP", &tmp_dir);
+        cmd.env("TMP", &tmp_dir);
+    }
     // Avoid inheriting a host sccache/RUSTC_WRAPPER that writes outside the
     // workspace rule and trips the same EXDEV class of failures.
     cmd.env_remove("RUSTC_WRAPPER");
@@ -1470,13 +1529,15 @@ pub(crate) struct ConfinedChild {
 pub(crate) fn spawn_confined(
     cmd: &mut Command,
     #[cfg_attr(not(unix), allow(unused_variables))] workspace: &Path,
+    #[cfg_attr(not(unix), allow(unused_variables))] extra_rw: &[PathBuf],
 ) -> Result<ConfinedChild> {
     #[cfg(unix)]
     {
         let ws = workspace.to_path_buf();
+        let extra = extra_rw.to_vec();
         unsafe {
             cmd.pre_exec(move || {
-                apply_os_confinement(&ws);
+                apply_os_confinement(&ws, &extra);
                 Ok(())
             });
         }
@@ -1515,8 +1576,9 @@ pub(crate) fn run_confined(
     cmd: &mut Command,
     workspace: &Path,
     timeout_secs: u64,
+    extra_rw: &[PathBuf],
 ) -> Result<String> {
-    let mut confined = spawn_confined(cmd, workspace)?;
+    let mut confined = spawn_confined(cmd, workspace, extra_rw)?;
     match wait_for_child(&mut confined.child, timeout_secs) {
         Some((status, stdout, stderr)) => {
             #[cfg(unix)]
