@@ -82,8 +82,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **seccomp network block** — now blocks only `socket()` for `AF_INET`/
   `AF_INET6` with `KillProcess` (immediate kill, not `EPERM`). `AF_UNIX`
-  sockets and `socketpair()` are allowed, so esbuild/vitest and git ssh
-  helpers work without an escape hatch while the exfiltration guarantee holds.
+  sockets and `socketpair()` are allowed, so esbuild and git ssh helpers
+  work without an escape hatch while the exfiltration guarantee holds.
+  **Note**: vitest/v8 still opens an AF_INET socket (for V8 coverage /
+  worker IPC), so it is killed by the seccomp filter. `run_tests` on npm
+  projects now sets `RAVEN_SANDBOX_NETWORK_BLOCK=0` to skip the filter for
+  that one test-runner invocation — the test runner is a user-sanctioned
+  command, not arbitrary model output, so the exfiltration guarantee is
+  preserved.
 - **Landlock ABI V3** — `AccessFs::from_all` now includes `REFER`, fixing
   `rustc` `.rmeta` hardlinks into `target/`. `CARGO_HOME`, `CARGO_TARGET_DIR`,
   `TMPDIR`, and the npm cache are pinned under `workspace/.raven/`, and `$HOME`

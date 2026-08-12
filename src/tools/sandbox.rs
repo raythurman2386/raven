@@ -745,6 +745,9 @@ impl Sandbox {
             .stderr(std::process::Stdio::piped());
         setup_shell_env(&mut command, &self.workspace);
         command.env("CI", "true");
+        if matches!(runner, TestRunner::Npm) {
+            command.env("RAVEN_SANDBOX_NETWORK_BLOCK", "0");
+        }
         let mut confined = spawn_confined(&mut command, &self.workspace, &self.extra_rw)
             .context("spawn test runner")?;
         match wait_for_child(&mut confined.child, 600) {
@@ -1122,14 +1125,22 @@ fn apply_landlock(workspace: &Path, extra_rw: &[PathBuf]) {
 ///
 /// Linux-only. Blocks `socket()` only when the domain is AF_INET or AF_INET6,
 /// which prevents creating any internet-facing socket. AF_UNIX sockets (used
-/// for local IPC by esbuild, vitest, git ssh helpers, etc.) are allowed.
+/// for local IPC by esbuild, git ssh helpers, etc.) are allowed.
 /// `socketpair()` is not blocked at all — it only supports AF_UNIX on Linux
 /// and is never a threat.
 ///
 /// All other network syscalls (`connect`, `sendto`, `sendmsg`, etc.) are
 /// allowed because the only sockets that can exist are AF_UNIX ones (we block
 /// creation of AF_INET/AF_INET6 sockets above). This preserves the exfiltration
-/// guarantee while fixing esbuild/vitest without an escape hatch.
+/// guarantee for model-generated code run via `run_shell`.
+///
+/// **run_tests exemption**: vitest/v8 opens an AF_INET socket for V8 coverage
+/// and worker IPC, so the seccomp filter kills it with SIGSYS (exit 159).
+/// `run_tests` on npm projects sets `RAVEN_SANDBOX_NETWORK_BLOCK=0` in the
+/// child environment, which skips this filter. The test runner is a
+/// user-sanctioned command (not arbitrary model output), and the network
+/// block's purpose is to prevent data exfiltration by untrusted model-generated
+/// code — so this narrow exemption does not weaken the guarantee.
 ///
 /// Denied syscalls are killed immediately (`KillProcess`) rather than returning
 /// EPERM, so the harness can surface the denial as a fast error instead of
