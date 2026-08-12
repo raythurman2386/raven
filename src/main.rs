@@ -279,11 +279,17 @@ async fn main() -> Result<()> {
             } else {
                 format!(" [{}]", r.merge_status)
             };
+            let patch_info = r
+                .recovery_patch
+                .as_ref()
+                .map(|p| format!("\n  recovery patch: {}", p))
+                .unwrap_or_default();
             println!(
-                "\n══ Sub-agent {} ══ ({:.1}s){}\n{}\n",
+                "\n══ Sub-agent {} ══ ({:.1}s){}{}\n{}\n",
                 r.index,
                 r.elapsed.as_secs_f64(),
                 merge_info,
+                patch_info,
                 r.text
             );
         }

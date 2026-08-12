@@ -16,8 +16,11 @@ pub struct SubAgentReport {
     pub index: usize,
     pub text: String,
     pub elapsed: std::time::Duration,
-    /// "merged", "conflict", "no changes", or "error: ..."
+    /// "merged", "conflict", "no changes", "uncommitted (preserved)", or "error: ..."
     pub merge_status: String,
+    /// Path to a recovery patch file when the sub-agent's work could not be
+    /// merged but was preserved as a diff.
+    pub recovery_patch: Option<String>,
 }
 
 /// Run several focused sub-agents in parallel and return their final reports.
@@ -132,6 +135,7 @@ pub async fn run_parallel(settings: &Settings, tasks: Vec<String>) -> Result<Vec
             text: out,
             elapsed,
             merge_status: String::new(), // set during merge below
+            recovery_patch: None,
         });
         if let Some((branch_name, wt_path, sandbox)) = cleanup {
             branches_to_merge.push((i, branch_name, wt_path, sandbox));
@@ -141,7 +145,16 @@ pub async fn run_parallel(settings: &Settings, tasks: Vec<String>) -> Result<Vec
 
     if is_git {
         let mut conflicted: Vec<(usize, String)> = Vec::new();
-        for (i, branch_name, _wt_path, sandbox) in &branches_to_merge {
+        for (i, branch_name, wt_path, sandbox) in &branches_to_merge {
+            let main_ws = sandbox.workspace.clone();
+            let wt_sandbox = Sandbox::with_extra_rw(wt_path.clone(), vec![main_ws.clone()]);
+            if !wt_sandbox.is_working_tree_clean() {
+                let _ = wt_sandbox.git_commit(&format!(
+                    "checkpoint: uncommitted work from sub-agent {}",
+                    i
+                ));
+            }
+
             let merge_result = sandbox.merge_branch(branch_name);
             let status = match merge_result {
                 Ok(out) if out.contains("Already up to date") => "no changes".to_string(),
@@ -150,27 +163,68 @@ pub async fn run_parallel(settings: &Settings, tasks: Vec<String>) -> Result<Vec
                         || sandbox.has_merge_conflicts().unwrap_or(false) =>
                 {
                     let _ = sandbox.abort_merge();
+                    let patch_rel = format!(".raven/recovery-sub-{}.patch", i);
+                    match sandbox.branch_diff(branch_name) {
+                        Ok(diff) if !diff.trim().is_empty() => {
+                            let full_path = main_ws.join(&patch_rel);
+                            let _ = std::fs::create_dir_all(full_path.parent().unwrap());
+                            if let Err(e) = std::fs::write(&full_path, &diff) {
+                                tracing::warn!(
+                                    "failed to write recovery patch for sub-agent {}: {}",
+                                    i,
+                                    e
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
                     conflicted.push((*i, branch_name.clone()));
                     tracing::warn!(
-                        "merge conflict for sub-agent {} (branch {}), merge aborted",
+                        "merge conflict for sub-agent {} (branch {}), merge aborted; \
+                         recovery patch written to {}",
                         i,
-                        branch_name
+                        branch_name,
+                        patch_rel,
                     );
-                    "conflict".to_string()
+                    format!("uncommitted (preserved) → {}", patch_rel)
                 }
                 Ok(_) => "merged".to_string(),
                 Err(e) => {
+                    let patch_rel = format!(".raven/recovery-sub-{}.patch", i);
+                    match sandbox.branch_diff(branch_name) {
+                        Ok(diff) if !diff.trim().is_empty() => {
+                            let full_path = main_ws.join(&patch_rel);
+                            let _ = std::fs::create_dir_all(full_path.parent().unwrap());
+                            if let Err(write_err) = std::fs::write(&full_path, &diff) {
+                                tracing::warn!(
+                                    "failed to write recovery patch for sub-agent {}: {}",
+                                    i,
+                                    write_err
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
                     tracing::warn!(
-                        "merge error for sub-agent {} (branch {}): {}",
+                        "merge error for sub-agent {} (branch {}): {}; \
+                         recovery patch written to {}",
                         i,
                         branch_name,
-                        e
+                        e,
+                        patch_rel,
                     );
-                    format!("error: {e}")
+                    format!("uncommitted (preserved) → {}", patch_rel)
                 }
             };
-            // Find the result for this sub-agent and set its merge_status.
             if let Some(r) = results.iter_mut().find(|r| r.index == *i) {
+                let patch = if status.starts_with("uncommitted (preserved)") {
+                    status
+                        .strip_prefix("uncommitted (preserved) → ")
+                        .map(|s| s.to_string())
+                } else {
+                    None
+                };
+                r.recovery_patch = patch;
                 r.merge_status = status;
             }
         }

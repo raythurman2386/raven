@@ -151,6 +151,15 @@ impl Sandbox {
         Ok(())
     }
 
+    /// Get the diff between HEAD and a branch (three-dot: changes on the
+    /// branch since it diverged from HEAD). Used to capture a recovery patch
+    /// for a sub-agent branch that cannot be merged.
+    pub fn branch_diff(&self, branch_name: &str) -> Result<String> {
+        let spec = format!("HEAD...{}", branch_name);
+        let out = self.run_git(&["diff", &spec])?;
+        Ok(truncate_output(&out, MAX_TOOL_OUTPUT))
+    }
+
     /// Check whether the working tree has no uncommitted changes.
     ///
     /// Returns `true` when the workspace is not a git repository or when
