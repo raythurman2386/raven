@@ -257,9 +257,8 @@ fn max_tokens_clamped_to_remaining_context() {
 }
 
 #[tokio::test]
-async fn dirty_tree_guard_gives_extra_iteration_for_commit() {
+async fn dirty_tree_guard_auto_commits_on_budget_exhaustion() {
     let tmp = tempfile::tempdir().unwrap();
-    // Initialize a git repo so is_working_tree_clean() works.
     std::process::Command::new("git")
         .args(["init"])
         .current_dir(tmp.path())
@@ -278,24 +277,21 @@ async fn dirty_tree_guard_gives_extra_iteration_for_commit() {
 
     // Every iteration the model writes a file (dirtying the tree), never
     // finishing on its own. After max_iterations (2) the budget is exhausted
-    // but the tree is dirty — the guard should inject a commit nudge and
-    // give one more iteration with tools.
+    // but the tree is dirty — the harness must auto-commit directly (not
+    // rely on a model nudge), then wrap up with a toolless summary.
     let write_round = sse_tool_call(
         "call_w",
         "write_file",
         r#"{"path":"out.txt","content":"done"}"#,
     );
-    // The extra iteration: model calls git_commit, then finishes.
-    let commit_round = sse_tool_call("call_c", "git_commit", r#"{"message":"checkpoint"}"#);
-    let final_round = sse_text("All committed.");
+    let summary_round = sse_text("Budget exhausted, work auto-committed.");
 
     let mut s = settings_for(tmp.path());
     s.max_iterations = 2;
     let mut agent = Agent::new(s).unwrap().with_completion_source(scripted(vec![
         write_round.clone(),
         write_round.clone(),
-        commit_round,
-        final_round,
+        summary_round,
     ]));
     let (tx, mut rx) = mpsc::channel(64);
     agent.run("do the thing", tx).await.unwrap();
@@ -309,17 +305,9 @@ async fn dirty_tree_guard_gives_extra_iteration_for_commit() {
         !events.iter().any(|e| matches!(e, AgentEvent::Error(_))),
         "turn must not emit Error"
     );
-    // The git_commit tool must have been called in the extra iteration.
-    assert!(
-        events
-            .iter()
-            .any(|e| matches!(e, AgentEvent::ToolStart { name, .. } if name == "git_commit")),
-        "git_commit should be called in the extra iteration"
-    );
-    // The working tree should be clean after the commit.
     assert!(
         agent.sandbox.is_working_tree_clean(),
-        "working tree should be clean after commit"
+        "working tree should be clean after auto-commit"
     );
 }
 
