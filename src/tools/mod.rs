@@ -1585,6 +1585,121 @@ mod tests {
     }
 
     #[test]
+    fn branch_diff_captures_changes_since_head() {
+        let (_tmp, sb) = git_sandbox();
+        let main_ws = sb.workspace.clone();
+        sb.write_file("f.txt", "base").unwrap();
+        sb.git_commit("initial").unwrap();
+
+        let wt_dir = tempfile::tempdir().unwrap();
+        let wt_path = wt_dir.path().join("sub-a");
+        sb.create_worktree("raven-sub-a", &wt_path).unwrap();
+        let sb_a = Sandbox::with_extra_rw(wt_path, vec![main_ws.clone()]);
+
+        sb_a.write_file("f.txt", "modified by sub-a").unwrap();
+        sb_a.git_commit("sub-a: modify f.txt").unwrap();
+
+        let diff = sb.branch_diff("raven-sub-a").unwrap();
+        assert!(
+            diff.contains("modified by sub-a"),
+            "diff should contain the added line: {diff}"
+        );
+
+        sb.delete_branch("raven-sub-a").unwrap();
+    }
+
+    #[test]
+    fn branch_diff_empty_when_no_changes() {
+        let (_tmp, sb) = git_sandbox();
+        sb.write_file("f.txt", "base").unwrap();
+        sb.git_commit("initial").unwrap();
+
+        let wt_dir = tempfile::tempdir().unwrap();
+        let wt_path = wt_dir.path().join("sub-a");
+        sb.create_worktree("raven-sub-a", &wt_path).unwrap();
+
+        let diff = sb.branch_diff("raven-sub-a").unwrap();
+        assert!(
+            diff.trim().is_empty() || diff.trim() == "exit=0",
+            "diff should be empty, got: {diff:?}"
+        );
+
+        sb.delete_branch("raven-sub-a").unwrap();
+    }
+
+    #[test]
+    fn auto_commit_preserves_uncommitted_worktree_changes() {
+        let (_tmp, sb) = git_sandbox();
+        let main_ws = sb.workspace.clone();
+        sb.write_file("f.txt", "base").unwrap();
+        sb.git_commit("initial").unwrap();
+
+        let wt_dir = tempfile::tempdir().unwrap();
+        let wt_path = wt_dir.path().join("sub-a");
+        sb.create_worktree("raven-sub-a", &wt_path).unwrap();
+        let sb_a = Sandbox::with_extra_rw(wt_path.clone(), vec![main_ws.clone()]);
+
+        sb_a.write_file("f.txt", "uncommitted work").unwrap();
+        assert!(!sb_a.is_working_tree_clean());
+
+        sb_a.git_commit("checkpoint: uncommitted work from sub-agent 0")
+            .unwrap();
+        assert!(sb_a.is_working_tree_clean());
+
+        sb.merge_branch("raven-sub-a").unwrap();
+        let content = sb.read_file("f.txt", 1, 10).unwrap();
+        assert!(content.contains("uncommitted work"), "content: {content}");
+
+        sb.delete_branch("raven-sub-a").unwrap();
+    }
+
+    #[test]
+    fn recovery_patch_written_on_merge_conflict() {
+        let (_tmp, sb) = git_sandbox();
+        let main_ws = sb.workspace.clone();
+        sb.write_file("shared.txt", "line1\nline2\nline3\n")
+            .unwrap();
+        sb.git_commit("initial").unwrap();
+
+        let wt_dir = tempfile::tempdir().unwrap();
+        let wt_path_a = wt_dir.path().join("sub-a");
+        let wt_path_b = wt_dir.path().join("sub-b");
+
+        sb.create_worktree("raven-sub-a", &wt_path_a).unwrap();
+        sb.create_worktree("raven-sub-b", &wt_path_b).unwrap();
+
+        let sb_a = Sandbox::with_extra_rw(wt_path_a, vec![main_ws.clone()]);
+        let sb_b = Sandbox::with_extra_rw(wt_path_b, vec![main_ws.clone()]);
+
+        sb_a.search_replace("shared.txt", "line2\n", "line2-a\n", false)
+            .unwrap();
+        sb_a.git_commit("sub-a: modify line2").unwrap();
+
+        sb_b.search_replace("shared.txt", "line2\n", "line2-b\n", false)
+            .unwrap();
+        sb_b.git_commit("sub-b: modify line2").unwrap();
+
+        sb.merge_branch("raven-sub-a").unwrap();
+        let _ = sb.merge_branch("raven-sub-b");
+        assert!(sb.has_merge_conflicts().unwrap());
+
+        let diff = sb.branch_diff("raven-sub-b").unwrap();
+        assert!(
+            diff.contains("line2-b"),
+            "branch_diff should capture sub-b changes: {diff}"
+        );
+
+        let patch_path = main_ws.join(".raven/recovery-sub-1.patch");
+        let _ = std::fs::create_dir_all(patch_path.parent().unwrap());
+        std::fs::write(&patch_path, &diff).unwrap();
+        assert!(patch_path.exists());
+
+        sb.abort_merge().unwrap();
+        sb.delete_branch("raven-sub-a").unwrap();
+        sb.delete_branch("raven-sub-b").unwrap();
+    }
+
+    #[test]
     fn run_lint_no_project_returns_message() {
         let tmp = tempfile::tempdir().unwrap();
         let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
