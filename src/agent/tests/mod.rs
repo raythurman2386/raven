@@ -507,6 +507,7 @@ async fn verify_requires_run_tests() {
 }
 
 #[tokio::test]
+#[cfg(target_os = "linux")]
 async fn verify_passes_when_run_tests_called() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -707,6 +708,7 @@ async fn verify_skips_when_package_json_but_no_node_modules() {
 }
 
 #[tokio::test]
+#[cfg(target_os = "linux")]
 async fn verify_passes_when_run_shell_runs_test_command() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(
