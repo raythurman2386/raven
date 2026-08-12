@@ -800,6 +800,7 @@ async fn verify_still_gates_when_run_shell_is_not_test_command() {
 }
 
 #[tokio::test]
+#[cfg(target_os = "linux")]
 async fn verify_gates_when_run_tests_exits_nonzero() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -846,6 +847,7 @@ async fn verify_gates_when_run_tests_exits_nonzero() {
 }
 
 #[tokio::test]
+#[cfg(target_os = "linux")]
 async fn verify_gates_when_run_shell_test_exits_nonzero() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(
