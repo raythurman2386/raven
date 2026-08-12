@@ -731,9 +731,23 @@ impl Sandbox {
             );
         };
 
-        let (cmd, args) = match runner {
+        let (cmd, args): (&str, Vec<&str>) = match runner {
             TestRunner::Cargo => ("cargo", vec!["test"]),
-            TestRunner::Npm => ("npm", vec!["test"]),
+            TestRunner::Npm => {
+                if self.uses_vitest() {
+                    (
+                        "npx",
+                        vec![
+                            "vitest",
+                            "--run",
+                            "--pool=threads",
+                            "--poolOptions.threads.singleThread",
+                        ],
+                    )
+                } else {
+                    ("npm", vec!["test"])
+                }
+            }
             TestRunner::Pytest => ("pytest", vec![]),
         };
 
@@ -806,6 +820,17 @@ impl Sandbox {
                 .is_ok();
         }
         false
+    }
+
+    fn uses_vitest(&self) -> bool {
+        let pkg = self.workspace.join("package.json");
+        if !pkg.exists() {
+            return false;
+        }
+        std::fs::read_to_string(&pkg)
+            .ok()
+            .map(|s| s.contains("\"vitest\""))
+            .unwrap_or(false)
     }
 
     /// Whether a shell command is a test, typecheck, or lint invocation.
@@ -1404,16 +1429,14 @@ pub(crate) fn wait_for_child(
     let stdout_handle = child.stdout.take().map(|mut out| {
         let tx = stdout_tx;
         std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            let _ = std::io::Read::read_to_end(&mut out, &mut buf);
+            let buf = read_pipe_nonblocking(&mut out);
             let _ = tx.send(buf);
         })
     });
     let stderr_handle = child.stderr.take().map(|mut err| {
         let tx = stderr_tx;
         std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            let _ = std::io::Read::read_to_end(&mut err, &mut buf);
+            let buf = read_pipe_nonblocking(&mut err);
             let _ = tx.send(buf);
         })
     });
@@ -1429,7 +1452,7 @@ pub(crate) fn wait_for_child(
                     let _ = child.kill();
                     let _ = child.wait();
                     kill_process_group(pid);
-                    let _ = drain_pipes(stdout_rx, stderr_rx, start, deadline);
+                    let _ = drain_pipes(stdout_rx, stderr_rx);
                     drop(stdout_handle);
                     drop(stderr_handle);
                     return None;
@@ -1439,7 +1462,7 @@ pub(crate) fn wait_for_child(
             }
             Err(_) => {
                 kill_process_group(pid);
-                let _ = drain_pipes(stdout_rx, stderr_rx, start, deadline);
+                let _ = drain_pipes(stdout_rx, stderr_rx);
                 drop(stdout_handle);
                 drop(stderr_handle);
                 return None;
@@ -1449,23 +1472,60 @@ pub(crate) fn wait_for_child(
 
     kill_process_group(pid);
 
-    let (stdout, stderr) = drain_pipes(stdout_rx, stderr_rx, start, deadline);
+    let (stdout, stderr) = drain_pipes(stdout_rx, stderr_rx);
     drop(stdout_handle);
     drop(stderr_handle);
     Some((status, stdout, stderr))
 }
 
+#[cfg(unix)]
+fn read_pipe_nonblocking(
+    reader: &mut (impl std::io::Read + std::os::unix::io::AsRawFd),
+) -> Vec<u8> {
+    let fd = reader.as_raw_fd();
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFL, 0);
+        if flags >= 0 {
+            libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+        }
+    }
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(_) => break,
+        }
+    }
+    buf
+}
+
+#[cfg(not(unix))]
+fn read_pipe_nonblocking(reader: &mut impl std::io::Read) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let _ = std::io::Read::read_to_end(reader, &mut buf);
+    buf
+}
+
 fn drain_pipes(
     stdout_rx: std::sync::mpsc::Receiver<Vec<u8>>,
     stderr_rx: std::sync::mpsc::Receiver<Vec<u8>>,
-    start: std::time::Instant,
-    deadline: std::time::Duration,
 ) -> (Vec<u8>, Vec<u8>) {
-    let remaining = deadline.saturating_sub(start.elapsed());
-    let grace = std::time::Duration::from_millis(500);
-    let wait = remaining + grace;
-    let stdout = stdout_rx.recv_timeout(wait).unwrap_or_default();
-    let stderr = stderr_rx.recv_timeout(wait).unwrap_or_default();
+    // Bound the TOTAL drain to a single shared deadline, not 2s per pipe.
+    // Draining stdout then stderr sequentially with a full 2s each would
+    // take up to 4s after a timeout — enough to blow a 1s child timeout
+    // (wait_for_child_times_out) when a grandchild holds the pipe open.
+    let drain_timeout = std::time::Duration::from_secs(2);
+    let start = std::time::Instant::now();
+    let stdout = stdout_rx.recv_timeout(drain_timeout).unwrap_or_default();
+    let remaining = drain_timeout.saturating_sub(start.elapsed());
+    let stderr = stderr_rx.recv_timeout(remaining).unwrap_or_default();
     (stdout, stderr)
 }
 
