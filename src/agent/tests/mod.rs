@@ -514,6 +514,12 @@ async fn verify_passes_when_run_tests_called() {
         "[package]\nname = \"x\"\nversion = \"0.1.0\"\n",
     )
     .unwrap();
+    std::fs::create_dir(tmp.path().join("src")).unwrap();
+    std::fs::write(
+        tmp.path().join("src/lib.rs"),
+        "#[test]\nfn it_works() { assert_eq!(2 + 2, 4); }\n",
+    )
+    .unwrap();
     let edit_round = concat!(
         "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"write_file\",\"arguments\":\"{\\\"path\\\":\\\"a.rs\\\",\\\"content\\\":\\\"fn main() {}\\\"}\"}}]}}]}\n\n",
         "data: [DONE]\n\n",
@@ -708,6 +714,12 @@ async fn verify_passes_when_run_shell_runs_test_command() {
         "[package]\nname = \"x\"\nversion = \"0.1.0\"\n",
     )
     .unwrap();
+    std::fs::create_dir(tmp.path().join("src")).unwrap();
+    std::fs::write(
+        tmp.path().join("src/lib.rs"),
+        "#[test]\nfn it_works() { assert_eq!(2 + 2, 4); }\n",
+    )
+    .unwrap();
     let edit_round = concat!(
         "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"write_file\",\"arguments\":\"{\\\"path\\\":\\\"a.rs\\\",\\\"content\\\":\\\"fn main() {}\\\"}\"}}]}}]}\n\n",
         "data: [DONE]\n\n",
@@ -775,6 +787,107 @@ async fn verify_still_gates_when_run_shell_is_not_test_command() {
     let mut agent = Agent::new(s).unwrap();
     let (tx, mut rx) = tokio::sync::mpsc::channel(256);
     agent.run("edit and build", tx).await.unwrap();
+    let mut events = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        events.push(ev);
+    }
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, AgentEvent::VerifyRequired)));
+    assert!(events.iter().any(|e| matches!(e, AgentEvent::Done)));
+}
+
+#[tokio::test]
+async fn verify_gates_when_run_tests_exits_nonzero() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[package]\nname = \"x\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir(tmp.path().join("src")).unwrap();
+    std::fs::write(
+        tmp.path().join("src/lib.rs"),
+        "#[test]\nfn failing() { panic!(\"boom\"); }\n",
+    )
+    .unwrap();
+    let edit_round = concat!(
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"write_file\",\"arguments\":\"{\\\"path\\\":\\\"a.rs\\\",\\\"content\\\":\\\"fn main() {}\\\"}\"}}]}}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let test_round = concat!(
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_2\",\"type\":\"function\",\"function\":{\"name\":\"run_tests\",\"arguments\":\"{}\"}}]}}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let text_round = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"tests passed\"}}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let (base, _h) = spawn_mock(vec![
+        edit_round, test_round, text_round, text_round, text_round, text_round, text_round,
+    ])
+    .await;
+    let mut s = settings_for(tmp.path(), &base);
+    s.verify = true;
+    s.max_iterations = 6;
+    let mut agent = Agent::new(s).unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+    agent.run("edit and run failing tests", tx).await.unwrap();
+    let mut events = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        events.push(ev);
+    }
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, AgentEvent::VerifyRequired)));
+    assert!(events.iter().any(|e| matches!(e, AgentEvent::Done)));
+}
+
+#[tokio::test]
+async fn verify_gates_when_run_shell_test_exits_nonzero() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[package]\nname = \"x\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir(tmp.path().join("src")).unwrap();
+    std::fs::write(
+        tmp.path().join("src/lib.rs"),
+        "#[test]\nfn failing() { panic!(\"boom\"); }\n",
+    )
+    .unwrap();
+    let edit_round = concat!(
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"write_file\",\"arguments\":\"{\\\"path\\\":\\\"a.rs\\\",\\\"content\\\":\\\"fn main() {}\\\"}\"}}]}}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let shell_round = concat!(
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_2\",\"type\":\"function\",\"function\":{\"name\":\"run_shell\",\"arguments\":\"{\\\"command\\\":\\\"cargo test\\\"}\"}}]}}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let text_round = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"tests passed\"}}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let (base, _h) = spawn_mock(vec![
+        edit_round,
+        shell_round,
+        text_round,
+        text_round,
+        text_round,
+        text_round,
+        text_round,
+    ])
+    .await;
+    let mut s = settings_for(tmp.path(), &base);
+    s.verify = true;
+    s.max_iterations = 6;
+    let mut agent = Agent::new(s).unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+    agent
+        .run("edit and run failing tests via run_shell", tx)
+        .await
+        .unwrap();
     let mut events = Vec::new();
     while let Ok(ev) = rx.try_recv() {
         events.push(ev);
