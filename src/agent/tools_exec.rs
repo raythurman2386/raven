@@ -19,7 +19,7 @@ use super::core::Agent;
 use super::types::{AgentEvent, ChatMessage, ToolCall};
 
 /// Outcome of a parallel `spawn_blocking` tool dispatch.
-type ParallelToolJoin = (String, String, Result<String, ToolError>, String);
+type ParallelToolJoin = (String, String, Result<String, ToolError>, String, bool);
 
 /// Deferred tool outcome held until all calls finish so results can be
 /// appended in original `tool_calls[]` order.
@@ -28,6 +28,7 @@ struct PendingToolResult {
     name: String,
     cache_key: String,
     result: Result<String, ToolError>,
+    is_verification: bool,
 }
 
 impl PendingToolResult {
@@ -42,7 +43,13 @@ impl PendingToolResult {
             name,
             cache_key,
             result,
+            is_verification: false,
         }
+    }
+
+    fn with_verification(mut self, v: bool) -> Self {
+        self.is_verification = v;
+        self
     }
 }
 
@@ -224,17 +231,17 @@ impl Agent {
                 self.tool_cache.clear();
             }
 
-            // Track verification: the model dispatched run_tests or ran a
-            // test/typecheck/lint command via run_shell this turn.
-            if name == "run_tests" {
-                self.verified = true;
-            } else if name == "run_shell" {
-                if let Some(cmd) = args.get("command").and_then(|v| v.as_str()) {
-                    if Sandbox::is_verification_command(cmd) {
-                        self.verified = true;
-                    }
-                }
-            }
+            // Track verification intent: the model dispatched run_tests or
+            // ran a test/typecheck/lint command via run_shell this turn.
+            // The actual credit is deferred until the tool result is available
+            // so we can check the exit code and output (fail-closed, issue #136).
+            let is_verification = name == "run_tests"
+                || (name == "run_shell"
+                    && args
+                        .get("command")
+                        .and_then(|v| v.as_str())
+                        .map(Sandbox::is_verification_command)
+                        .unwrap_or(false));
 
             // Check cache for read-only tools
             let is_read_only = matches!(
@@ -278,18 +285,16 @@ impl Agent {
                     .unwrap_or_else(|e| {
                         Err(ToolError::Other(format!("Tool error: join failed: {e}")))
                     });
-                slots[idx] = Some(PendingToolResult::ready(
-                    id,
-                    name,
-                    cache_key,
-                    dispatch_result,
-                ));
+                slots[idx] = Some(
+                    PendingToolResult::ready(id, name, cache_key, dispatch_result)
+                        .with_verification(is_verification),
+                );
             } else {
                 handles.push((
                     idx,
                     tokio::task::spawn_blocking(move || {
                         let result = dispatch(&sandbox, &name, &args, read_only);
-                        (id, name, result, cache_key)
+                        (id, name, result, cache_key, is_verification)
                     }),
                 ));
             }
@@ -303,25 +308,32 @@ impl Agent {
                 .get(idx)
                 .map(|t| t.function.name.clone())
                 .unwrap_or_else(|| "unknown".into());
-            let (id, name, dispatch_result, cache_key) = h.await.unwrap_or_else(|e| {
-                (
-                    fallback_id,
-                    fallback_name,
-                    Err(ToolError::Other(format!("Tool error: join failed: {e}"))),
-                    String::new(),
-                )
-            });
-            slots[idx] = Some(PendingToolResult::ready(
-                id,
-                name,
-                cache_key,
-                dispatch_result,
-            ));
+            let (id, name, dispatch_result, cache_key, is_verification) =
+                h.await.unwrap_or_else(|e| {
+                    (
+                        fallback_id,
+                        fallback_name,
+                        Err(ToolError::Other(format!("Tool error: join failed: {e}"))),
+                        String::new(),
+                        false,
+                    )
+                });
+            slots[idx] = Some(
+                PendingToolResult::ready(id, name, cache_key, dispatch_result)
+                    .with_verification(is_verification),
+            );
         }
 
         for slot in slots.into_iter().flatten() {
-            self.record_tool_result(tx, slot.id, slot.name, slot.cache_key, slot.result)
-                .await;
+            self.record_tool_result(
+                tx,
+                slot.id,
+                slot.name,
+                slot.cache_key,
+                slot.result,
+                slot.is_verification,
+            )
+            .await;
         }
 
         // Plan progress: mark the current step Completed and advance to
@@ -362,6 +374,10 @@ impl Agent {
     /// Called for both serially-dispatched (file-mutating) tools and
     /// parallel-dispatched (read-only) tools so both paths share identical
     /// result bookkeeping.
+    ///
+    /// When `is_verification` is true, the result is inspected for exit code
+    /// and failure markers before crediting `self.verified` (fail-closed,
+    /// issue #136).
     pub(crate) async fn record_tool_result(
         &mut self,
         tx: &mpsc::Sender<AgentEvent>,
@@ -369,6 +385,7 @@ impl Agent {
         name: String,
         cache_key: String,
         dispatch_result: Result<String, ToolError>,
+        is_verification: bool,
     ) {
         let result = match dispatch_result {
             Ok(s) => {
@@ -424,6 +441,11 @@ impl Agent {
                 msg
             }
         };
+
+        if is_verification {
+            self.verified = verification_passed(&result);
+        }
+
         // Cache read-only results
         let is_read_only = matches!(
             name.as_str(),
@@ -454,5 +476,99 @@ impl Agent {
             tool_calls: None,
             tool_call_id: Some(id),
         });
+    }
+}
+
+/// Inspect a verification tool result to determine whether it represents a
+/// genuinely successful run (fail-closed, issue #136).
+///
+/// Returns `true` only when the output shows `exit=0` and contains no signal
+/// kill, timeout, or test-failure markers. A SIGSYS-killed, timed-out, or
+/// non-zero-exit "verification" does NOT count as verified.
+fn verification_passed(output: &str) -> bool {
+    if output.contains("Error: command killed by signal")
+        || output.contains("killed by signal")
+        || output.contains("timed out")
+    {
+        return false;
+    }
+
+    let has_exit_0 = output.contains("exit=0");
+    if !has_exit_0 {
+        return false;
+    }
+
+    if output.contains("FAILED")
+        || output.contains("failures:")
+        || output.contains("test result: FAILED")
+    {
+        return false;
+    }
+
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verification_passed_clean_exit() {
+        let output = "--- run_tests (cargo) exit=0 ---\ntest result: ok. 10 passed; 0 failed\n";
+        assert!(verification_passed(output));
+    }
+
+    #[test]
+    fn verification_passed_non_zero_exit() {
+        let output = "--- run_tests (cargo) exit=1 ---\ncompilation failed\n";
+        assert!(!verification_passed(output));
+    }
+
+    #[test]
+    fn verification_passed_killed_by_signal() {
+        let output = "Error: command killed by signal 31\nsome output\n";
+        assert!(!verification_passed(output));
+    }
+
+    #[test]
+    fn verification_passed_killed_by_signal_in_run_tests() {
+        let output = "--- run_tests (cargo) killed by signal 31 ---\n";
+        assert!(!verification_passed(output));
+    }
+
+    #[test]
+    fn verification_passed_timed_out() {
+        let output = "Error: test runner timed out\n";
+        assert!(!verification_passed(output));
+    }
+
+    #[test]
+    fn verification_passed_test_failures() {
+        let output = "--- run_tests (cargo) exit=0 ---\ntest result: FAILED. 5 passed; 2 failed\n";
+        assert!(!verification_passed(output));
+    }
+
+    #[test]
+    fn verification_passed_no_exit_line() {
+        let output = "No test runner detected\n";
+        assert!(!verification_passed(output));
+    }
+
+    #[test]
+    fn verification_passed_run_shell_exit_0() {
+        let output = "exit=0\nrunning tests...\nok\n";
+        assert!(verification_passed(output));
+    }
+
+    #[test]
+    fn verification_passed_run_shell_exit_nonzero() {
+        let output = "exit=2\ntests failed\n";
+        assert!(!verification_passed(output));
+    }
+
+    #[test]
+    fn verification_passed_run_shell_killed_by_signal() {
+        let output = "Error: command killed by signal 9\n";
+        assert!(!verification_passed(output));
     }
 }
