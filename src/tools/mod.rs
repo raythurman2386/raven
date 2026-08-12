@@ -2032,9 +2032,13 @@ edition = "2021"
     #[test]
     fn run_tests_npm_project_disables_network_block() {
         let tmp = tempfile::tempdir().unwrap();
+        // Use node (not shell echo) so the test is cross-platform: on Windows
+        // `npm test` runs via cmd, which uses %VAR% not $VAR, so a shell echo
+        // would print the literal "$RAVEN_SANDBOX_NETWORK_BLOCK" and the
+        // assertion would fail. node reads the env var identically on both.
         std::fs::write(
             tmp.path().join("package.json"),
-            r#"{"scripts": {"test": "echo RAVEN_SANDBOX_NETWORK_BLOCK=$RAVEN_SANDBOX_NETWORK_BLOCK"}}"#,
+            r#"{"scripts": {"test": "node -e \"console.log('RAVEN_SANDBOX_NETWORK_BLOCK=' + process.env.RAVEN_SANDBOX_NETWORK_BLOCK)\""}}"#,
         )
         .unwrap();
         let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
