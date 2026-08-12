@@ -376,32 +376,13 @@ impl Agent {
 
         // The iteration budget is exhausted without a final answer. Before
         // wrapping up with a toolless summary, check whether the working tree
-        // is dirty. If it is, inject a commit nudge and give the model ONE
-        // more iteration with tools so it can commit its work. Without this
-        // guard, large tasks that exhaust the budget leave verified-but-
-        // uncommitted changes in a dirty tree — a silent correctness hazard
-        // for unattended loops (issue #127).
+        // is dirty. If it is, force a direct git_commit so verified-but-
+        // uncommitted work is never left in a dirty tree — a silent correctness
+        // hazard for unattended loops (issue #127, #140).
         if !self.sandbox.is_working_tree_clean() {
-            self.pending_blank = Some(
-                "You have reached the iteration budget but the working tree is \
-                 NOT clean — there are uncommitted changes. Call git_commit with \
-                 a descriptive message to checkpoint your work, then provide a \
-                 final summary. Do NOT call any other tools."
-                    .to_string(),
-            );
-            for extra in 0..2 {
-                match self
-                    .run_single_iteration(
-                        &tx,
-                        self.settings.max_iterations + extra,
-                        &mut edited_any,
-                    )
-                    .await?
-                {
-                    IterationOutcome::Continue => continue,
-                    IterationOutcome::Finished => return Ok(()),
-                }
-            }
+            let _ = self
+                .sandbox
+                .git_commit("checkpoint: auto-commit before budget exhaustion");
         }
 
         self.finish_with_summary(&tx).await?;
