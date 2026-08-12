@@ -1506,9 +1506,15 @@ fn drain_pipes(
     stdout_rx: std::sync::mpsc::Receiver<Vec<u8>>,
     stderr_rx: std::sync::mpsc::Receiver<Vec<u8>>,
 ) -> (Vec<u8>, Vec<u8>) {
+    // Bound the TOTAL drain to a single shared deadline, not 2s per pipe.
+    // Draining stdout then stderr sequentially with a full 2s each would
+    // take up to 4s after a timeout — enough to blow a 1s child timeout
+    // (wait_for_child_times_out) when a grandchild holds the pipe open.
     let drain_timeout = std::time::Duration::from_secs(2);
+    let start = std::time::Instant::now();
     let stdout = stdout_rx.recv_timeout(drain_timeout).unwrap_or_default();
-    let stderr = stderr_rx.recv_timeout(drain_timeout).unwrap_or_default();
+    let remaining = drain_timeout.saturating_sub(start.elapsed());
+    let stderr = stderr_rx.recv_timeout(remaining).unwrap_or_default();
     (stdout, stderr)
 }
 
