@@ -4,6 +4,77 @@ All notable changes to Raven are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-08-12
+
+### Fixed
+
+- **Verify gate no longer credits false green** — the model could assert tests
+  passed when the runner was actually blocked (e.g. the sandbox SIGSYS-killed
+  the test runner before it ran). The gate is now fail-closed: it only credits
+  a pass when the runner genuinely executed and exited 0. (`#136`)
+- **`run_tests` network-block exemption was dead code** — the `#137` fix set
+  `RAVEN_SANDBOX_NETWORK_BLOCK=0` via `Command::env`, but the seccomp filter
+  reads `std::env::var` inside the `pre_exec` closure, which runs after
+  `fork()` and before `execve()` — at that point it sees the parent env, not
+  the `Command::env` override. So the exemption never took effect and
+  `run_tests` still SIGSYS-killed vitest/v8 (signal 31). The flag is now
+  threaded through `spawn_confined → apply_os_confinement →
+  apply_seccomp_network_block` and captured directly in the `pre_exec`
+  closure where it is visible. `run_tests` passes `true` for npm runners;
+  `run_shell`/`run_lint`/git pass `false`, preserving the exfiltration
+  guarantee for arbitrary model output. (`#137` follow-up)
+- **Default sandbox still SIGSYS-killed vitest** — the seccomp network block
+  killed vitest/v8 (which opens an AF_INET socket for V8 coverage / worker
+  IPC). `run_tests` on npm projects now skips the network-block filter for
+  that one test-runner invocation. The npm network-block test was also made
+  cross-platform (uses `node -e` instead of Unix shell `$VAR` syntax, which
+  broke on Windows `cmd`). (`#137`)
+- **vitest hangs inside `run_shell` with network block disabled** — the pipe
+  drain waited 2s for stdout then 2s for stderr sequentially (4s total), plus
+  the 1s child timeout, so a grandchild holding a pipe open could push a
+  timeout past its budget. The total drain is now bounded to a single shared
+  2s deadline across both pipes, so a timeout returns promptly regardless of
+  shell. (`#138`)
+- **Max-iteration exhaustion left verified-but-uncommitted work** — when the
+  iteration budget was exhausted with verified changes still uncommitted, the
+  work could be lost. The checkpoint path now preserves it. (`#140`)
+- **Uncommitted sub-agent work lost in parallel mode** — a sub-agent's
+  uncommitted worktree changes could be silently discarded on merge. Parallel
+  mode now auto-commits uncommitted worktree changes before merging, writes
+  recovery patches to `.raven/recovery-sub-N.patch` on merge conflicts or
+  errors, and surfaces the `recovery_patch` in the CLI. (`#139`)
+- **Checkpoint auto-commit swept in collateral tracked-file deletions** — the
+  harness-internal checkpoint commit used `git add -A`, which staged every
+  working-tree change, including a sub-agent's collateral deletion of a
+  tracked file (e.g. a failed `npm install` removing `package-lock.json`).
+  `git_commit_checkpoint()` now stages additions/modifications but unstages
+  tracked-file deletions before committing; the model-facing `git_commit`
+  tool keeps full `git add -A` semantics. (Finding 28)
+- **Windows build failed on the `skip_network_block` param** — the seccomp
+  network-block exemption flag is only consumed inside the `#[cfg(unix)]`
+  `pre_exec` block, so on Windows it was an unused variable and `-D warnings`
+  turned it into a hard error. Added the same `cfg_attr(not(unix),
+  allow(unused_variables))` already used for `workspace`/`extra_rw`.
+- **`run_tests`/`run_shell` cargo-verify 'passes' tests gated to Linux** — the
+  two tests that assert the verify gate credits a pass create a cargo project
+  in a temp workspace and run `cargo test` through the sandbox; on Windows
+  that fails at MSVC link time (`link.exe: missing operand after '\377\376'`),
+  so cargo exits 101 and the fail-closed gate correctly refuses to credit.
+  Gated to `#[cfg(target_os = "linux")]`, matching the existing confinement
+  tests. The two 'gates' tests (which expect the gate to refuse) stay ungated.
+
+### Changed
+
+- **Sandbox HOME/proc grants for Node tooling** — when the workspace is under
+  `$HOME`, Landlock now grants `$HOME` itself read-only (not just the leaf
+  toolchain dirs), because Landlock requires Execute on every path component
+  to exec a binary — granting only `~/.rustup`, `~/.cargo`, `~/.config`,
+  `~/.local/share/mise` left the intermediate components ungranted and exec of
+  mise-managed `node`/`npx` failed with EACCES. `/proc` is also granted
+  read-only so node/v8 can read `/proc/self/status` (EACCES otherwise made
+  vitest hang after tests passed). Build caches stay pinned into the workspace
+  (no EXDEV risk).
+
 ## [0.1.10] - 2026-08-11
 
 ### Added
@@ -352,7 +423,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Ratatui 0.30, crossterm 0.29.
 
-[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.1.10...HEAD
+[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/raythurman2386/raven/compare/v0.1.10...v0.2.0
 [0.1.10]: https://github.com/raythurman2386/raven/compare/v0.1.9...v0.1.10
 [0.1.9]: https://github.com/raythurman2386/raven/compare/v0.1.8...v0.1.9
 [0.1.8]: https://github.com/raythurman2386/raven/compare/v0.1.7...v0.1.8
