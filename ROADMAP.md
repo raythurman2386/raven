@@ -302,6 +302,37 @@ fmt clean.
 
 ---
 
+## Phase 11 — Named providers (Ollama / OpenRouter)
+
+**Why:** switching between local (Ollama) and cloud (OpenRouter / Ollama Cloud)
+was three independent knobs (`--model` + `--host` + `--api-key`), and `/model`
+couldn't move you to a different host mid-session. A named-provider abstraction
+bundles endpoint + auth + default model into one switchable unit, mirroring
+Grok Build / Hermes / Opencode.
+
+- New `Provider` struct (`src/config.rs`) bundling `{ name, base_url, api_key,
+  default_model }`, with built-in `ollama` and `openrouter` presets.
+- `[providers.<name>]` config table + `provider` selection key; `resolve_provider`
+  merges builtin + config + env (`--provider` > `RAVEN_PROVIDER` > config > builtin).
+- `Settings` now holds a resolved `Provider`; `model` is a per-session override
+  layered on the provider's `default_model`.
+- `/provider <name>` slash command switches provider at runtime (re-resolves
+  model + context window); `/model` switches within the current provider.
+- `fetch_context_window` threaded through the resolved provider (uses its key).
+- **Removed** (clean transition): `--host` / `--api-key` flags and the legacy
+  `RAVEN_HOST` / `OLLAMA_HOST` / `RAVEN_MODEL` / `OLLAMA_MODEL` env vars.
+  Key resolution is now provider-scoped: `RAVEN_API_KEY` (universal) →
+  `OPENROUTER_API_KEY` / `OLLAMA_API_KEY`.
+
+**Acceptance:** `cargo test` (506 tests incl. new provider + `/provider` tests),
+clippy `-D warnings`, fmt clean, `cargo check --target x86_64-pc-windows-gnu`.
+**Commit:** `feat(config): add named providers (ollama/openrouter)`.
+
+**Phase status:**
+- [x] Phase 11 — Named providers (Ollama / OpenRouter)
+
+---
+
 ## Flake fixes (found while verifying Phase 10)
 
 Two pre-existing flaky tests surfaced during Phase 10 verification:

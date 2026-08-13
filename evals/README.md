@@ -35,6 +35,10 @@ python3 evals/run.py --model x-ai/grok-4.5 --host https://openrouter.ai/api/v1
 python3 evals/run.py --case 02_single_edit
 ```
 
+The harness writes the `--host`/`--api-key` into a `[providers.eval]` table in
+each case's workspace config and invokes raven with `--provider eval` (the old
+`--host`/`--api-key` CLI flags were removed in favor of named providers).
+
 If every case fails in **<1s with `tools=0`**, the model never ran tools —
 almost always missing `RAVEN_API_KEY` or wrong host scheme/URL, not a model
 quality issue.
