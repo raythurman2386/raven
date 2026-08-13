@@ -130,7 +130,7 @@ impl Agent {
 
         let url = format!(
             "{}/chat/completions",
-            self.settings.base_url.trim_end_matches('/')
+            self.settings.base_url().trim_end_matches('/')
         );
 
         let resp = match self.send_with_retry(&url, &body, tx).await {

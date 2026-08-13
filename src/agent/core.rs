@@ -425,9 +425,9 @@ impl Agent {
         }
 
         let client = self.client.clone();
-        let base_url = self.settings.base_url.clone();
+        let base_url = self.settings.base_url().to_string();
         let model = self.settings.model.clone();
-        let api_key = self.settings.api_key.clone();
+        let api_key = self.settings.api_key().map(str::to_string);
         if let Some((before, after)) = compact_if_needed_llm(
             &mut self.messages,
             self.settings.context_window,
@@ -497,7 +497,7 @@ impl Agent {
 
         let url = format!(
             "{}/chat/completions",
-            self.settings.base_url.trim_end_matches('/')
+            self.settings.base_url().trim_end_matches('/')
         );
 
         tracing::info!(
@@ -654,8 +654,8 @@ impl Agent {
                 .client
                 .post(url)
                 .header("Content-Type", "application/json");
-            if let Some(key) = &self.settings.api_key {
-                req = req.header("Authorization", format!("Bearer {}", key));
+            if let Some(key) = self.settings.api_key() {
+                req = req.header("Authorization", format!("Bearer {key}"));
             }
             // OpenRouter optional ranking headers (harmless elsewhere).
             if url.contains("openrouter.ai") {

@@ -38,9 +38,9 @@ use std::path::PathBuf;
 
 use raven::agent::{run_parallel, Agent, ChatMessage};
 use raven::config::{
-    default_api_key, default_base_url, default_max_iter, default_model, env_compact_threshold,
-    env_context_window, env_searxng_engines, env_searxng_url, load_config_file, load_dotenv_from,
-    resolve_mode, Mode, Settings,
+    default_max_iter, env_compact_threshold, env_context_window, env_searxng_engines,
+    env_searxng_url, load_config_file, load_dotenv_from, resolve_mode, resolve_provider, Mode,
+    Settings,
 };
 use raven::context::{fetch_context_window, infer_context_window};
 use raven::runner;
@@ -83,17 +83,13 @@ struct Cli {
     #[arg(short = 'p', long)]
     prompt: Option<String>,
 
-    /// Ollama model name
-    #[arg(short, long, default_value_t = default_model())]
-    model: String,
+    /// Model name (overrides the active provider's default_model for this session)
+    #[arg(short, long)]
+    model: Option<String>,
 
-    /// Ollama OpenAI-compatible base URL
-    #[arg(long, default_value_t = default_base_url())]
-    host: String,
-
-    /// Ollama API key (prefer RAVEN_API_KEY or OLLAMA_API_KEY env var). Used for Ollama Cloud / authenticated hosts.
-    #[arg(long)]
-    api_key: Option<String>,
+    /// Named provider to use (e.g. ollama, openrouter). See config.toml [providers.*].
+    #[arg(long, env = "RAVEN_PROVIDER")]
+    provider: Option<String>,
 
     /// Working directory
     #[arg(short, long)]
@@ -187,30 +183,17 @@ async fn main() -> Result<()> {
 
     // Load config file (workspace .raven/config.toml overrides ~/.raven/config.toml)
     let cfg = load_config_file(&workspace);
+    // Clone for the TUI, which needs the full config to resolve /provider
+    // against config-declared providers after `cfg` fields are moved out below.
+    let cfg_for_tui = cfg.clone();
 
-    let api_key = cli
-        .api_key
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .or_else(default_api_key);
+    // Resolve the active provider: CLI --provider > RAVEN_PROVIDER env >
+    // config `provider` > builtin `ollama`. Endpoint + auth come from the
+    // provider (config `[providers.*]` table + provider-scoped key env vars).
+    let provider = resolve_provider(&cfg, cli.provider);
 
-    // Model: CLI > env (handled by clap default) > config file > built-in default
-    let model = if cli.model != default_model() {
-        cli.model
-    } else if let Some(m) = cfg.model {
-        m
-    } else {
-        cli.model
-    };
-
-    // Host: CLI > env (handled by clap) > config file > built-in default
-    let base_url = if cli.host != default_base_url() {
-        cli.host
-    } else if let Some(h) = cfg.host {
-        h
-    } else {
-        cli.host
-    };
+    // Model: explicit --model overrides the provider's default_model.
+    let model = cli.model.unwrap_or_else(|| provider.default_model.clone());
 
     let context_window = cli
         .context_window
@@ -218,12 +201,12 @@ async fn main() -> Result<()> {
         .or(cfg.context_window)
         .unwrap_or_else(|| infer_context_window(&model));
 
-    // If no explicit override, try the live Ollama API for the real value
+    // If no explicit override, try the live provider API for the real value
     let context_window = if cli.context_window.is_none()
         && env_context_window().is_none()
         && cfg.context_window.is_none()
     {
-        fetch_context_window(&base_url, &model).await
+        fetch_context_window(&provider, &model).await
     } else {
         context_window
     };
@@ -235,7 +218,7 @@ async fn main() -> Result<()> {
     let max_tokens = Settings::derived_max_tokens(context_window);
 
     // SearXNG: env var > config file. Precedence follows the same pattern as
-    // host/context_window — CLI flags don't expose a search backend.
+    // provider/context_window — CLI flags don't expose a search backend.
     let searxng_url = env_searxng_url().or(cfg.searxng_url);
     let searxng_engines = env_searxng_engines()
         .or(cfg.searxng_engines)
@@ -247,8 +230,7 @@ async fn main() -> Result<()> {
 
     let settings = Settings {
         model,
-        base_url,
-        api_key,
+        provider,
         workspace,
         max_iterations,
         mode,
@@ -346,7 +328,7 @@ async fn main() -> Result<()> {
 
     // Default to TUI when no task given
     if (task.is_empty() && !cli.headless) || cli.tui {
-        return raven::tui::run_tui(settings, resume_session).await;
+        return raven::tui::run_tui(settings, cfg_for_tui, resume_session).await;
     }
 
     if task.is_empty() {
@@ -374,11 +356,11 @@ async fn headless_run(
 
     println!("Raven (headless)");
     println!("Model:     {}", settings.model);
-    println!("Host:      {}", settings.base_url);
+    println!("Host:      {}", settings.base_url());
     println!(
         "Auth:      {}",
-        if settings.api_key.is_some() {
-            "RAVEN_API_KEY / OLLAMA_API_KEY set (Bearer)"
+        if settings.api_key().is_some() {
+            "provider API key set (Bearer)"
         } else {
             "none (local / unauthenticated)"
         }

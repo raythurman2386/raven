@@ -64,7 +64,8 @@ pub fn infer_context_window(model: &str) -> usize {
 /// For Ollama, uses `/api/show`. For OpenAI-compatible providers (OpenRouter,
 /// etc.), uses `/models` and reads the `context_length` field. Falls back to
 /// [`infer_context_window`] if the API call fails or the field is missing.
-pub async fn fetch_context_window(base_url: &str, model: &str) -> usize {
+pub async fn fetch_context_window(provider: &crate::config::Provider, model: &str) -> usize {
+    let base_url = &provider.base_url;
     let trimmed = base_url.trim_end_matches('/').trim_end_matches("/v1");
     let host = base_url.to_ascii_lowercase();
     let looks_cloud = [
@@ -87,7 +88,7 @@ pub async fn fetch_context_window(base_url: &str, model: &str) -> usize {
     }
 
     // Try the OpenAI-compatible /models endpoint (OpenRouter, etc.).
-    if let Some(ctx) = fetch_openai_context(base_url, model).await {
+    if let Some(ctx) = fetch_openai_context(provider, model).await {
         return ctx;
     }
 
@@ -126,8 +127,8 @@ async fn fetch_ollama_context(base_url: &str, model: &str) -> Option<usize> {
 /// Query the OpenAI-compatible `/models` endpoint for the model's context
 /// length. Works with OpenRouter and other providers that expose
 /// `context_length` in the model metadata.
-async fn fetch_openai_context(base_url: &str, model: &str) -> Option<usize> {
-    let models_url = format!("{}/models", base_url.trim_end_matches('/'));
+async fn fetch_openai_context(provider: &crate::config::Provider, model: &str) -> Option<usize> {
+    let models_url = format!("{}/models", provider.base_url.trim_end_matches('/'));
 
     let mut req = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -135,9 +136,9 @@ async fn fetch_openai_context(base_url: &str, model: &str) -> Option<usize> {
         .ok()?
         .get(&models_url);
 
-    // Pass the API key if available (same aliases as config::default_api_key).
-    if let Some(key) = crate::config::default_api_key() {
-        req = req.bearer_auth(&key);
+    // Pass the provider's API key if available.
+    if let Some(key) = &provider.api_key {
+        req = req.bearer_auth(key);
     }
 
     let resp = req.send().await.ok()?;

@@ -8,7 +8,7 @@
 
 use super::super::core::{clamp_max_tokens, Agent, CompletionSource};
 use super::super::types::AgentEvent;
-use crate::config::{Mode, Settings};
+use crate::config::{Mode, Provider, Settings};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
@@ -17,8 +17,7 @@ use tokio::sync::mpsc;
 fn settings_for(workspace: &std::path::Path) -> Settings {
     Settings {
         model: "fake-model".into(),
-        base_url: "http://127.0.0.1:1".into(), // never contacted
-        api_key: None,
+        provider: Provider::builtin("ollama").expect("ollama builtin"),
         workspace: workspace.to_path_buf(),
         max_iterations: 5,
         mode: Mode::Agent,

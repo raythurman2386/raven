@@ -115,7 +115,7 @@ impl TuiState {
             blocks: vec![
                 BlockKind::System(SystemBlock::new(format!(
                     "{app_name} · {} · {}",
-                    settings.model, settings.base_url
+                    settings.model, settings.base_url()
                 ))),
                 BlockKind::System(SystemBlock::new(format!(
                     "workspace {}",
@@ -216,7 +216,11 @@ impl TuiState {
 
 // ── Main TUI ─────────────────────────────────────────────────────────────
 
-pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) -> Result<()> {
+pub async fn run_tui(
+    mut settings: Settings,
+    config_file: crate::config::ConfigFile,
+    resume_session: Option<Session>,
+) -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = stdout();
     execute!(
@@ -528,6 +532,7 @@ pub async fn run_tui(mut settings: Settings, resume_session: Option<Session>) ->
                                     &store,
                                     &mut session,
                                     &mut compact_at,
+                                    &config_file,
                                 )
                                 .await?;
                                 continue;
@@ -1462,7 +1467,8 @@ fn reset_session(
     state.pending_question_text = None;
     state.push_system(format!(
         "{app_name} · {} · {}",
-        settings.model, settings.base_url
+        settings.model,
+        settings.base_url()
     ));
     state.push_system(format!("workspace {}", settings.workspace.display()));
     state.push_system(String::new());
@@ -1605,6 +1611,7 @@ async fn dispatch_slash_command(
     store: &SessionStore,
     session: &mut crate::session::Session,
     compact_at: &mut usize,
+    config_file: &crate::config::ConfigFile,
 ) -> Result<bool> {
     match pc.name.as_str() {
         "help" => {
@@ -1665,7 +1672,7 @@ async fn dispatch_slash_command(
                 // Match startup behaviour: prefer the live Ollama `/api/show`
                 // value, falling back to the name heuristic when unreachable.
                 settings.context_window =
-                    crate::context::fetch_context_window(&settings.base_url, &settings.model).await;
+                    crate::context::fetch_context_window(&settings.provider, &settings.model).await;
                 settings.max_tokens = Settings::derived_max_tokens(settings.context_window);
                 *compact_at = ((settings.context_window - settings.context_window / 8) as f32
                     * settings.compact_threshold) as usize;
@@ -1677,7 +1684,8 @@ async fn dispatch_slash_command(
                 if let Some(BlockKind::System(b)) = state.blocks.get_mut(0) {
                     b.set_text(format!(
                         "raven · {} · {}",
-                        settings.model, settings.base_url
+                        settings.model,
+                        settings.base_url()
                     ));
                 }
                 if let Some(BlockKind::System(b)) = state.blocks.get_mut(2) {
@@ -1691,6 +1699,62 @@ async fn dispatch_slash_command(
                 state.push_system(format!(
                     "model → {} · context {} · max_tokens {}",
                     settings.model, settings.context_window, settings.max_tokens
+                ));
+                state.log_dirty = true;
+            }
+        }
+        "provider" => {
+            let name = pc.args.trim();
+            if name.is_empty() {
+                state.push_system(format!(
+                    "current provider: {}  (try /provider <name>)",
+                    settings.provider.name
+                ));
+                state.log_dirty = true;
+            } else {
+                // Re-resolve the provider from config + env. If the current
+                // model is the old provider's default (not an explicit
+                // /model override), adopt the new provider's default model.
+                let old_default = settings.provider.default_model.clone();
+                let new_provider =
+                    crate::config::resolve_provider(config_file, Some(name.to_string()));
+                if settings.model == old_default {
+                    settings.model = new_provider.default_model.clone();
+                }
+                settings.provider = new_provider;
+                // Match startup behaviour: prefer the live provider API value,
+                // falling back to the name heuristic when unreachable.
+                settings.context_window =
+                    crate::context::fetch_context_window(&settings.provider, &settings.model).await;
+                settings.max_tokens = Settings::derived_max_tokens(settings.context_window);
+                *compact_at = ((settings.context_window - settings.context_window / 8) as f32
+                    * settings.compact_threshold) as usize;
+
+                // Persist the new model on the session so a resume shows it.
+                let _ = store.update_model(session, &settings.model);
+
+                // Refresh the static header blocks (model + context/compact).
+                if let Some(BlockKind::System(b)) = state.blocks.get_mut(0) {
+                    b.set_text(format!(
+                        "raven · {} · {}",
+                        settings.model,
+                        settings.base_url()
+                    ));
+                }
+                if let Some(BlockKind::System(b)) = state.blocks.get_mut(2) {
+                    b.set_text(format!(
+                        "context {} · compact ~{}",
+                        fmt_tokens(settings.context_window as u64),
+                        fmt_tokens(*compact_at as u64),
+                    ));
+                }
+
+                state.push_system(format!(
+                    "provider → {} · model {} · context {} · max_tokens {}",
+                    settings.provider.name,
+                    settings.model,
+                    settings.context_window,
+                    settings.max_tokens
                 ));
                 state.log_dirty = true;
             }
@@ -1738,6 +1802,7 @@ async fn dispatch_slash_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{ConfigFile, Provider};
     use crate::plan::AgentState;
     use render::prewrap_lines;
     #[test]
@@ -2310,8 +2375,7 @@ mod tests {
     fn test_settings(workspace: &std::path::Path) -> Settings {
         Settings {
             model: "gemma4:latest".into(),
-            base_url: "http://localhost:11434/v1".into(),
-            api_key: None,
+            provider: Provider::builtin("ollama").expect("ollama builtin"),
             workspace: workspace.to_path_buf(),
             max_iterations: 5,
             mode: Mode::Agent,
@@ -2342,7 +2406,8 @@ mod tests {
         state.blocks = vec![
             BlockKind::System(SystemBlock::new(format!(
                 "raven · {} · {}",
-                settings.model, settings.base_url
+                settings.model,
+                settings.base_url()
             ))),
             BlockKind::System(SystemBlock::new(format!(
                 "workspace {}",
@@ -2364,6 +2429,7 @@ mod tests {
             &store,
             &mut session,
             &mut compact_at,
+            &ConfigFile::default(),
         )
         .await
         .unwrap();
@@ -2410,6 +2476,7 @@ mod tests {
             &store,
             &mut session,
             &mut compact_at,
+            &ConfigFile::default(),
         )
         .await
         .unwrap();
@@ -2440,6 +2507,7 @@ mod tests {
             &store,
             &mut session,
             &mut compact_at,
+            &ConfigFile::default(),
         )
         .await
         .unwrap();
@@ -2455,6 +2523,7 @@ mod tests {
             &store,
             &mut session,
             &mut compact_at,
+            &ConfigFile::default(),
         )
         .await
         .unwrap();

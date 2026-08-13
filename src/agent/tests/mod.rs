@@ -172,10 +172,11 @@ async fn spawn_mock_status(
 /// Returns a `Settings` configured for tests against a mock server.
 #[allow(dead_code)]
 fn settings_for(workspace: &std::path::Path, base_url: &str) -> crate::config::Settings {
+    let mut provider = crate::config::Provider::builtin("ollama").expect("ollama builtin");
+    provider.base_url = base_url.into();
     crate::config::Settings {
         model: "mock-model".into(),
-        base_url: base_url.into(),
-        api_key: None,
+        provider,
         workspace: workspace.to_path_buf(),
         max_iterations: 5,
         mode: Mode::Agent,
