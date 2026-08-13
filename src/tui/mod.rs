@@ -33,7 +33,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Padding, Paragraph, Wrap},
+    widgets::{Block, Borders, Padding, Paragraph},
     Frame, Terminal,
 };
 use std::io::stdout;
@@ -1075,22 +1075,33 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState)
     } else {
         "❯ "
     };
-    let input_line = Line::from(vec![
-        Span::styled(
-            prompt,
-            Style::default()
-                .fg(
-                    if state.pending_question_text.is_some() || state.plan_pending {
-                        theme.plan
-                    } else {
-                        theme.accent
-                    },
-                )
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(state.input.to_string(), Style::default().fg(theme.fg)),
-    ]);
-    let input_w = Paragraph::new(input_line).wrap(Wrap { trim: false }).block(
+    let prompt_style = Style::default()
+        .fg(
+            if state.pending_question_text.is_some() || state.plan_pending {
+                theme.plan
+            } else {
+                theme.accent
+            },
+        )
+        .add_modifier(Modifier::BOLD);
+    let input_style = Style::default().fg(theme.fg);
+    let content_width = chunks[5].width.saturating_sub(2).max(1) as usize;
+    let wrapped = wrap_display_lines(&format!("{}{}", prompt, state.input), content_width);
+    let input_lines: Vec<Line> = wrapped
+        .into_iter()
+        .enumerate()
+        .map(|(i, s)| {
+            if i == 0 && s.starts_with(prompt) {
+                Line::from(vec![
+                    Span::styled(prompt.to_string(), prompt_style),
+                    Span::styled(s[prompt.len()..].to_string(), input_style),
+                ])
+            } else {
+                Line::from(Span::styled(s, input_style))
+            }
+        })
+        .collect();
+    let input_w = Paragraph::new(input_lines).block(
         Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(if state.plan_pending {
@@ -1106,105 +1117,119 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState)
     f.set_cursor_position((cx, cy));
 }
 
-/// Number of wrapped lines a string occupies at the given display width.
+/// Word-wrap `s` to `width` display cells (`trim: false`).
 ///
-/// A single `\n` forces a new line; a run of graphemes whose total display
-/// width exceeds `width` wraps to the next line. Uses `unicode-width` and
-/// `unicode-segmentation` to match ratatui's wrapping behavior exactly.
-fn wrapped_line_count(s: &str, width: usize) -> usize {
+/// Matches ratatui `Paragraph::wrap(Wrap { trim: false })`: break on
+/// whitespace when a word would overflow, otherwise hard-break. Used for
+/// both the painted input lines and the caret so they cannot drift.
+fn wrap_display_lines(s: &str, width: usize) -> Vec<String> {
+    let w = width.max(1);
+    let mut out = Vec::new();
+    for para in s.split('\n') {
+        if para.is_empty() {
+            out.push(String::new());
+            continue;
+        }
+        let mut line = String::new();
+        let mut line_w = 0usize;
+        for token in wrap_tokens(para) {
+            append_wrapped_token(&mut out, &mut line, &mut line_w, token, w);
+        }
+        out.push(line);
+    }
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
+}
+
+fn wrap_tokens(s: &str) -> Vec<&str> {
+    use unicode_segmentation::UnicodeSegmentation;
+
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    let mut prev_ws: Option<bool> = None;
+    for (i, g) in s.grapheme_indices(true) {
+        let ws = g.chars().all(char::is_whitespace);
+        if let Some(prev) = prev_ws {
+            if prev != ws {
+                out.push(&s[start..i]);
+                start = i;
+            }
+        } else {
+            start = i;
+        }
+        prev_ws = Some(ws);
+    }
+    if start < s.len() {
+        out.push(&s[start..]);
+    }
+    out
+}
+
+fn append_wrapped_token(
+    out: &mut Vec<String>,
+    line: &mut String,
+    line_w: &mut usize,
+    token: &str,
+    width: usize,
+) {
     use unicode_segmentation::UnicodeSegmentation;
     use unicode_width::UnicodeWidthStr;
 
-    if s.is_empty() {
-        return 1;
+    let tw = token.width();
+    if *line_w > 0 && *line_w + tw > width {
+        out.push(std::mem::take(line));
+        *line_w = 0;
     }
-    let w = width.max(1);
-    let mut lines = 0usize;
-    for seg in s.split('\n') {
-        if seg.is_empty() {
-            lines += 1;
-        } else {
-            // Walk graphemes, wrapping when the accumulated display width
-            // exceeds the available width — same logic ratatui's reflow uses.
-            let mut current_width = 0usize;
-            let mut seg_lines = 1usize;
-            for grapheme in seg.graphemes(true) {
-                let gw = grapheme.width();
-                if current_width + gw > w {
-                    seg_lines += 1;
-                    current_width = 0;
-                }
-                current_width += gw;
-            }
-            lines += seg_lines;
+    if tw <= width {
+        line.push_str(token);
+        *line_w += tw;
+        return;
+    }
+    for g in token.graphemes(true) {
+        let gw = g.width();
+        if *line_w > 0 && *line_w + gw > width {
+            out.push(std::mem::take(line));
+            *line_w = 0;
         }
+        line.push_str(g);
+        *line_w += gw;
     }
-    lines
 }
 
-/// The effective content width (in display cells) of the input box for a
-/// given terminal width.
-///
-/// The input box has `Borders::ALL` (2 border cols) plus a prompt glyph
-/// (e.g. `❯ `, 2 display cells). Both the wrap-width computation and the
-/// cursor position must use this same value, or the cursor will land in the
-/// wrong place once the input wraps to a second line.
-fn input_content_width(term_width: u16) -> usize {
-    let avail = term_width.saturating_sub(2).max(1) as usize; // minus 2 border cols
-    avail.saturating_sub(2).max(1) // minus prompt glyph "❯ "
+/// Number of wrapped lines a string occupies at the given display width.
+fn wrapped_line_count(s: &str, width: usize) -> usize {
+    wrap_display_lines(s, width).len()
 }
 
 /// Compute the terminal (x, y) where the cursor should sit after the input
 /// text, accounting for the prompt prefix, wrapping width, and the input box's
 /// top-left position.
-///
-/// Uses grapheme clusters and display cell width (via `unicode-width` and
-/// `unicode-segmentation`) to match ratatui's wrapping behavior exactly.
-/// This fixes cursor misalignment with CJK characters (2 cells), emoji (2
-/// cells), and combining marks (0 cells) that the old char-count approach
-/// could not handle.
 fn input_cursor_position(
     input: &str,
     prompt: &str,
     cursor: usize,
     input_rect: ratatui::layout::Rect,
 ) -> (u16, u16) {
-    use unicode_segmentation::UnicodeSegmentation;
     use unicode_width::UnicodeWidthStr;
 
-    // Ratatui wraps the prompt+input line at rect.width - 2 (borders only).
     let content_width = input_rect.width.saturating_sub(2).max(1) as usize;
-
-    // Walk the combined prompt+input up to the cursor byte offset, by
-    // grapheme cluster, accumulating display width. col starts at 0 and
-    // includes the prompt, so the wrap width is content_width for all rows.
     let prefix = format!("{}{}", prompt, &input[..cursor.min(input.len())]);
-    let mut col = 0usize;
-    let mut row = 0usize;
-
-    for grapheme in prefix.graphemes(true) {
-        let gw = grapheme.width();
-        if grapheme == "\n" {
-            row += 1;
-            col = 0;
-        } else if col + gw > content_width {
-            row += 1;
-            col = gw;
-        } else {
-            col += gw;
-        }
+    let lines = wrap_display_lines(&prefix, content_width);
+    let mut row = lines.len().saturating_sub(1);
+    let mut col = lines.last().map(|l| l.width()).unwrap_or(0);
+    if col >= content_width {
+        row += 1;
+        col = 0;
     }
 
-    // Clamp the cursor to the last visible row of the box so a long input
-    // doesn't push the cursor off-screen (the box stops growing at
-    // MAX_INPUT_BOX_HEIGHT, but the input text continues).
     let max_row = input_rect.height.saturating_sub(2).max(1) as usize;
     let row = row.min(max_row.saturating_sub(1));
     let x = input_rect.x + 1 + col as u16;
     let y = input_rect.y + 1 + row as u16;
     (x, y)
 }
-
 /// Maximum height (in rows, including borders) the input box may grow to.
 ///
 /// The box grows as the input wraps so long tasks stay visible. The cap is a
@@ -1217,6 +1242,18 @@ const MAX_INPUT_BOX_HEIGHT: u16 = 12;
 /// a multi-MB paste from growing memory or slowing per-frame re-wrap without
 /// bound.
 const MAX_INPUT_CHARS: usize = 100_000;
+
+/// The effective content width (in display cells) of the input box for a
+/// given terminal width.
+///
+/// The input box has `Borders::ALL` (2 border cols) plus a prompt glyph
+/// (e.g. `❯ `, 2 display cells). Both the wrap-width computation and the
+/// cursor position must use this same value, or the cursor will land in the
+/// wrong place once the input wraps to a second line.
+fn input_content_width(term_width: u16) -> usize {
+    let avail = term_width.saturating_sub(2).max(1) as usize; // minus 2 border cols
+    avail.saturating_sub(2).max(1) // minus prompt glyph "❯ "
+}
 
 /// Height of the input box (in rows, including borders) for a given input and
 /// terminal width. Shared by the draw path and click-hit-testing so both agree
@@ -2085,15 +2122,27 @@ mod tests {
 
     #[test]
     fn input_cursor_position_wraps_at_content_width_not_prompt_width() {
-        // Regression: the cursor must wrap at the Paragraph content width
-        // (rect.width - 2 for borders), NOT at input_content_width (which also
-        // subtracts the prompt). With rect width 10, content width is 8, so
-        // "❯ " + 6 input chars fill row 0 and the 7th input char starts row 1.
-        // A cursor at byte 7 (after "abcdefg") must be on row 1, col 1.
+        // A single long word hard-wraps at the Paragraph content width
+        // (rect.width - 2 for borders). With rect width 10, content width is 8,
+        // so the prompt "❯ " (2 cells) fills row 0 and the word "abcdefg"
+        // (7 cells) wraps to row 1. The cursor after byte 7 sits at row 1, col 7.
         let rect = ratatui::layout::Rect::new(0, 20, 10, 5);
         let (x, y) = input_cursor_position("abcdefghijkl", "❯ ", 7, rect);
         assert_eq!(y, 22, "cursor should be on the second row, got y={y}");
-        assert_eq!(x, 2, "cursor should be at col 1 inside the box, got x={x}");
+        assert_eq!(x, 8, "cursor should be at col 7 inside the box, got x={x}");
+    }
+
+    #[test]
+    fn input_cursor_position_breaks_on_word_boundaries() {
+        // Ratatui Paragraph word-wraps. Character-wrapping would put the
+        // caret after "th" on row 0; word-wrap moves "this" to row 1.
+        // content width 16: "❯ please wrap " (14) / "this…"
+        let rect = ratatui::layout::Rect::new(0, 20, 18, 5);
+        let text = "please wrap this sentence here";
+        let at = "please wrap this".len();
+        let (x, y) = input_cursor_position(text, "❯ ", at, rect);
+        assert_eq!(y, 22, "cursor should follow the wrapped word, got y={y}");
+        assert_eq!(x, 5, "cursor should sit after 'this' on row 1, got x={x}");
     }
 
     #[test]

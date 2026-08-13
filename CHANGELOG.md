@@ -31,6 +31,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   silently switching to builtin ollama.
 - **Missing-file tool errors are not retry-nudged**; HTTP error bodies
   truncate on a UTF-8 boundary instead of panicking.
+- **Multi-line input caret no longer drifts** — the box used ratatui
+  word-wrap while the caret character-wrapped, so a long prompt with
+  spaces put the cursor on the wrong cell. Input is now pre-wrapped with
+  the same word-break rules used to place the caret.
 
 ## [0.2.1] - 2026-08-13
 
