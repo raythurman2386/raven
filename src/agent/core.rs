@@ -382,7 +382,7 @@ impl Agent {
         if !self.sandbox.is_working_tree_clean() {
             let _ = self
                 .sandbox
-                .git_commit("checkpoint: auto-commit before budget exhaustion");
+                .git_commit_checkpoint("checkpoint: auto-commit before budget exhaustion");
         }
 
         self.finish_with_summary(&tx).await?;

@@ -1310,6 +1310,43 @@ mod tests {
     }
 
     #[test]
+    fn git_commit_checkpoint_preserves_additions_but_not_deletions() {
+        let (_tmp, sb) = git_sandbox();
+        // Seed a tracked file, then commit it so it's in HEAD.
+        sb.write_file("package-lock.json", "lockfile v1").unwrap();
+        sb.git_commit("seed lockfile").unwrap();
+        // Simulate a sub-agent's collateral deletion of a tracked file plus
+        // its intended code work: a new file and a modified file.
+        std::fs::remove_file(sb.workspace.join("package-lock.json")).unwrap();
+        sb.write_file("src/server.ts", "export const server = 1;")
+            .unwrap();
+        sb.write_file("src/extra.ts", "export const extra = 2;")
+            .unwrap();
+        let out = sb
+            .git_commit_checkpoint("checkpoint: uncommitted work")
+            .unwrap();
+        assert!(!out.contains("Error"), "checkpoint should succeed: {out}");
+        // The checkpoint commit must contain the code work...
+        let log = sb.git_log(5).unwrap();
+        assert!(log.contains("checkpoint: uncommitted work"), "log: {log}");
+        // ...but NOT the collateral deletion of the tracked file.
+        let head_has_lock = sb
+            .run_git(&["cat-file", "-e", "HEAD:package-lock.json"])
+            .unwrap();
+        assert!(
+            !head_has_lock.contains("fatal"),
+            "package-lock.json should still exist in HEAD after checkpoint: {head_has_lock}"
+        );
+        // The deletion should remain in the working tree (unstaged), so the
+        // model can still decide to commit it deliberately.
+        let status = sb.git_status().unwrap();
+        assert!(
+            status.contains("package-lock.json"),
+            "deletion should remain visible in status: {status}"
+        );
+    }
+
+    #[test]
     fn git_commit_in_full_toolset_not_plan_toolset() {
         let full = tool_definitions();
         let full_names: Vec<String> = full

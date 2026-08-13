@@ -149,7 +149,7 @@ pub async fn run_parallel(settings: &Settings, tasks: Vec<String>) -> Result<Vec
             let main_ws = sandbox.workspace.clone();
             let wt_sandbox = Sandbox::with_extra_rw(wt_path.clone(), vec![main_ws.clone()]);
             if !wt_sandbox.is_working_tree_clean() {
-                let _ = wt_sandbox.git_commit(&format!(
+                let _ = wt_sandbox.git_commit_checkpoint(&format!(
                     "checkpoint: uncommitted work from sub-agent {}",
                     i
                 ));

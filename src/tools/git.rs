@@ -39,6 +39,22 @@ impl Sandbox {
     /// Stage all changes and create a commit. Used by the agent to checkpoint
     /// its own work. Returns the new HEAD line.
     pub fn git_commit(&self, message: &str) -> Result<String> {
+        self.git_commit_inner(message, true)
+    }
+
+    /// Checkpoint commit used by the harness itself (budget exhaustion in
+    /// `core.rs`, uncommitted sub-agent work in `parallel.rs`). Unlike the
+    /// model-facing [`Self::git_commit`], this preserves additions and
+    /// modifications but does NOT stage deletions of tracked files — a
+    /// collateral deletion (e.g. a sub-agent's failed `npm install` removing
+    /// `package-lock.json`) must not be swept into a checkpoint commit. The
+    /// checkpoint's job is to preserve *code* work, not to ratify accidental
+    /// file removal.
+    pub fn git_commit_checkpoint(&self, message: &str) -> Result<String> {
+        self.git_commit_inner(message, false)
+    }
+
+    fn git_commit_inner(&self, message: &str, include_deletions: bool) -> Result<String> {
         let msg = message.trim();
         if msg.is_empty() {
             return Ok("Error: empty commit message".into());
@@ -59,6 +75,32 @@ impl Sandbox {
             ":!.env",
             ":!.env.*",
         ])?;
+        if !include_deletions {
+            // Unstage deletions of tracked files so a checkpoint never commits
+            // collateral file removal. `git diff --cached --name-status` lists
+            // what `git add -A` just staged; `D` entries are tracked-file
+            // deletions. Restore them to the index (keeping the working-tree
+            // deletion) so they don't enter the checkpoint commit.
+            let staged = self.run_git(&["diff", "--cached", "--name-status"])?;
+            let deleted: Vec<&str> = staged
+                .lines()
+                .filter_map(|l| {
+                    let mut it = l.splitn(2, '\t');
+                    let status = it.next().unwrap_or("").trim();
+                    let path = it.next().unwrap_or("").trim();
+                    if status == "D" && !path.is_empty() {
+                        Some(path)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if !deleted.is_empty() {
+                let mut args = vec!["restore", "--staged", "--"];
+                args.extend(deleted.iter().copied());
+                let _ = self.run_git(&args)?;
+            }
+        }
         let commit_out = self.run_git(&["commit", "-m", msg])?;
         if commit_out.contains("fatal") || commit_out.contains("Error") {
             return Ok(commit_out);
