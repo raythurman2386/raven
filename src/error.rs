@@ -14,8 +14,12 @@ pub fn cap_http_body(body: String) -> String {
     if body.len() <= MAX_HTTP_ERROR_BODY_LEN {
         return body;
     }
+    let mut end = MAX_HTTP_ERROR_BODY_LEN;
+    while end > 0 && !body.is_char_boundary(end) {
+        end -= 1;
+    }
     let mut truncated = body;
-    truncated.truncate(MAX_HTTP_ERROR_BODY_LEN);
+    truncated.truncate(end);
     truncated.push('…');
     truncated
 }
@@ -63,8 +67,7 @@ impl ToolError {
         match self {
             ToolError::Io { kind, .. } => matches!(
                 kind,
-                std::io::ErrorKind::NotFound
-                    | std::io::ErrorKind::PermissionDenied
+                std::io::ErrorKind::PermissionDenied
                     | std::io::ErrorKind::ConnectionRefused
                     | std::io::ErrorKind::ConnectionReset
                     | std::io::ErrorKind::TimedOut
@@ -173,14 +176,24 @@ mod tests {
     }
 
     #[test]
-    fn tool_error_io_not_found_is_transient() {
+    fn tool_error_io_not_found_is_not_transient() {
         let err = ToolError::io(
             "/tmp/missing",
             "read_file",
             std::io::ErrorKind::NotFound,
             "No such file",
         );
-        assert!(err.is_transient());
+        assert!(!err.is_transient());
+    }
+
+    #[test]
+    fn cap_http_body_does_not_panic_on_multibyte_boundary() {
+        let mut body = "x".repeat(MAX_HTTP_ERROR_BODY_LEN - 1);
+        body.push('é');
+        body.push_str("more");
+        let capped = cap_http_body(body);
+        assert!(capped.ends_with('…'));
+        assert!(capped.is_char_boundary(capped.len() - '…'.len_utf8()));
     }
 
     #[test]

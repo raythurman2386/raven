@@ -220,17 +220,6 @@ impl Agent {
             let cache_key = format!("{}:{}", name, tc.function.arguments);
             let read_only = self.plan_only;
 
-            // Track file-editing tools so we can auto-lint after this turn.
-            if matches!(
-                name.as_str(),
-                "write_file" | "search_replace" | "apply_patch"
-            ) {
-                *edited = true;
-                *edited_any = true;
-                self.repo_map_stale = true;
-                self.tool_cache.clear();
-            }
-
             // Track verification intent: the model dispatched run_tests or
             // ran a test/typecheck/lint command via run_shell this turn.
             // The actual credit is deferred until the tool result is available
@@ -285,6 +274,12 @@ impl Agent {
                     .unwrap_or_else(|e| {
                         Err(ToolError::Other(format!("Tool error: join failed: {e}")))
                     });
+                if mutating_tool_succeeded(&dispatch_result) {
+                    *edited = true;
+                    *edited_any = true;
+                    self.repo_map_stale = true;
+                    self.tool_cache.clear();
+                }
                 slots[idx] = Some(
                     PendingToolResult::ready(id, name, cache_key, dispatch_result)
                         .with_verification(is_verification),
@@ -357,7 +352,7 @@ impl Agent {
             // Only surface as a reflection reminder when lint found problems
             // (non-zero exit or error text), not on a clean pass.
             let has_problems =
-                (lint.contains("exit=") && !lint.contains("exit=0")) || lint.contains("Error");
+                parse_exit_code(&lint).is_some_and(|c| c != 0) || lint.contains("Error");
             if has_problems {
                 self.pending_lint = Some(format!(
                     "Lint found problems after your edits — fix them:\n{lint}"
@@ -460,7 +455,7 @@ impl Agent {
                 | "skill_load"
                 | "memory_search"
         );
-        if is_read_only && !cache_key.is_empty() {
+        if is_read_only && !cache_key.is_empty() && !is_tool_error_text(&result) {
             self.tool_cache.insert(cache_key, result.clone());
         }
         let preview: String = result.chars().take(600).collect();
@@ -493,8 +488,7 @@ fn verification_passed(output: &str) -> bool {
         return false;
     }
 
-    let has_exit_0 = output.contains("exit=0");
-    if !has_exit_0 {
+    if parse_exit_code(output) != Some(0) {
         return false;
     }
 
@@ -506,6 +500,41 @@ fn verification_passed(output: &str) -> bool {
     }
 
     true
+}
+
+/// First `exit=N` token in tool output (`--- run_tests (cargo) exit=10 ---`
+/// or a bare `exit=10\n` from `run_shell`).
+///
+/// Must not treat `exit=10` as `exit=0` via substring match.
+fn parse_exit_code(output: &str) -> Option<i32> {
+    let bytes = output.as_bytes();
+    let mut i = 0;
+    while i + 5 <= bytes.len() {
+        if &bytes[i..i + 5] == b"exit=" {
+            let rest = &output[i + 5..];
+            let end = rest
+                .find(|c: char| !c.is_ascii_digit() && c != '-')
+                .unwrap_or(rest.len());
+            if end > 0 {
+                if let Ok(n) = rest[..end].parse::<i32>() {
+                    return Some(n);
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+fn is_tool_error_text(s: &str) -> bool {
+    s.starts_with("Error:") || s.starts_with("Tool error:")
+}
+
+fn mutating_tool_succeeded(result: &Result<String, ToolError>) -> bool {
+    match result {
+        Ok(s) => !is_tool_error_text(s),
+        Err(_) => false,
+    }
 }
 
 #[cfg(test)]
@@ -570,5 +599,30 @@ mod tests {
     fn verification_passed_run_shell_killed_by_signal() {
         let output = "Error: command killed by signal 9\n";
         assert!(!verification_passed(output));
+    }
+
+    #[test]
+    fn verification_passed_exit_10_is_not_exit_0() {
+        let output = "--- run_tests (cargo) exit=10 ---\n10 tests failed\n";
+        assert!(!verification_passed(output));
+        assert_eq!(parse_exit_code(output), Some(10));
+    }
+
+    #[test]
+    fn parse_exit_code_reads_first_token() {
+        assert_eq!(parse_exit_code("exit=0\nok\n"), Some(0));
+        assert_eq!(parse_exit_code("exit=-1\n"), Some(-1));
+        assert_eq!(parse_exit_code("no status here"), None);
+    }
+
+    #[test]
+    fn mutating_tool_error_does_not_count_as_edit() {
+        assert!(!mutating_tool_succeeded(&Err(ToolError::Other(
+            "blocked".into()
+        ))));
+        assert!(!mutating_tool_succeeded(&Ok(
+            "Error: path escapes workspace".into()
+        )));
+        assert!(mutating_tool_succeeded(&Ok("wrote a.rs".into())));
     }
 }

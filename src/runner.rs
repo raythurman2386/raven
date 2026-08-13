@@ -151,7 +151,24 @@ pub async fn run_plan_flow(
                     println!("Aborted.");
                     return Ok(());
                 }
-                Approval::Yes => {}
+                Approval::Yes => {
+                    let exec_msg = ChatMessage {
+                        role: "user".into(),
+                        content: Some(plan::EXECUTE_PROMPT.into()),
+                        tool_calls: None,
+                        tool_call_id: None,
+                    };
+                    store.append_message(session, &exec_msg)?;
+                    let exec_messages = rev_messages.unwrap_or_default();
+                    let agent =
+                        Agent::with_messages(settings.clone(), exec_messages)?.with_plan(revised);
+                    let (final_messages, _) = spawn_and_drain(agent, plan::EXECUTE_PROMPT).await?;
+                    if let Some(ref msgs) = final_messages {
+                        save_session_messages(store, session, msgs, "Plan execution")?;
+                    }
+                    println!();
+                    return Ok(());
+                }
             }
         }
     }

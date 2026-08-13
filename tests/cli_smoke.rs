@@ -31,6 +31,7 @@ fn help_succeeds_and_lists_flags() {
     assert!(out.contains("raven"), "help should name the binary");
     for flag in [
         "--mode",
+        "--provider",
         "--context-window",
         "--no-stream",
         "--resume",

@@ -22,11 +22,12 @@
 //! The map is built only for non-trivial workspaces (at least
 //! `MIN_SOURCE_FILES` source files *or* `MIN_SYMBOLS` symbols), capped at
 //! `MAX_MAP_CHARS`, so small projects aren't weighed down and large ones get
-//! structure without burning turns.
+//! structure without burning turns. Walks are depth- and file-capped, and
+//! the rendered map is cached per workspace until [`invalidate`] is called.
 
 use std::collections::HashMap;
-use std::path::Path;
-use std::sync::OnceLock;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use walkdir::WalkDir;
 
 /// Build a map only when the workspace has at least this many source files.
@@ -38,6 +39,12 @@ const MIN_SYMBOLS: usize = 80;
 const MAX_MAP_CHARS: usize = 3500;
 /// Skip source files larger than this (likely generated/minified).
 const MAX_FILE_BYTES: u64 = 256 * 1024;
+/// Stop reading source files after this many. A parent folder of many repos
+/// (e.g. `~/Work`) is a valid workspace path but must not be fully scanned
+/// on every turn.
+const MAX_SOURCE_FILES_SCANNED: usize = 300;
+/// Do not descend deeper than this under the workspace root.
+const MAX_WALK_DEPTH: usize = 8;
 /// Paths at or shallower than this depth under the workspace get a bonus.
 const SHALLOW_DEPTH: usize = 3;
 
@@ -247,16 +254,23 @@ fn patterns_for(ext: &str) -> &'static [Pattern] {
         .unwrap_or(&[])
 }
 
-/// Decide whether to build a repo map for `workspace`. This is a cheap
-/// superset check (source-file count only, no extraction); `build_map` makes
-/// the final call using both file and symbol counts.
-pub fn should_build(workspace: &Path) -> bool {
-    count_source_files(workspace) >= MIN_SOURCE_FILES
+fn map_cache() -> &'static Mutex<HashMap<PathBuf, Option<String>>> {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, Option<String>>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn count_source_files(workspace: &Path) -> usize {
-    let mut n = 0usize;
-    for entry in WalkDir::new(workspace)
+fn cache_lock() -> std::sync::MutexGuard<'static, HashMap<PathBuf, Option<String>>> {
+    map_cache().lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Drop the cached map for `workspace` so the next [`build_map`] rescans.
+pub fn invalidate(workspace: &Path) {
+    cache_lock().remove(workspace);
+}
+
+fn walk_source_entries(workspace: &Path) -> impl Iterator<Item = walkdir::DirEntry> {
+    WalkDir::new(workspace)
+        .max_depth(MAX_WALK_DEPTH)
         .into_iter()
         .filter_entry(|e| {
             if e.depth() == 0 {
@@ -266,7 +280,21 @@ fn count_source_files(workspace: &Path) -> usize {
             !SKIP_DIRS.iter().any(|s| *s == name.as_ref())
         })
         .filter_map(|e| e.ok())
-    {
+}
+
+/// Decide whether to build a repo map for `workspace`. This is a cheap
+/// superset check (source-file count only, no extraction); `build_map` makes
+/// the final call using both file and symbol counts.
+pub fn should_build(workspace: &Path) -> bool {
+    if let Some(cached) = cache_lock().get(workspace) {
+        return cached.is_some();
+    }
+    count_source_files(workspace) >= MIN_SOURCE_FILES
+}
+
+fn count_source_files(workspace: &Path) -> usize {
+    let mut n = 0usize;
+    for entry in walk_source_entries(workspace) {
         if entry.file_type().is_file()
             && entry
                 .path()
@@ -279,6 +307,9 @@ fn count_source_files(workspace: &Path) -> usize {
                 continue;
             }
             n += 1;
+            if n >= MIN_SOURCE_FILES {
+                break;
+            }
         }
     }
     n
@@ -286,20 +317,22 @@ fn count_source_files(workspace: &Path) -> usize {
 
 /// Build a compact, ranked, grouped repo map string, or `None` if the
 /// workspace is too small to be worth it.
+///
+/// Results are cached per workspace path. Call [`invalidate`] after file
+/// edits so the next turn sees a fresh map.
 pub fn build_map(workspace: &Path) -> Option<String> {
+    if let Some(cached) = cache_lock().get(workspace) {
+        return cached.clone();
+    }
+    let map = build_map_uncached(workspace);
+    cache_lock().insert(workspace.to_path_buf(), map.clone());
+    map
+}
+
+fn build_map_uncached(workspace: &Path) -> Option<String> {
     let mut symbols = Vec::new();
     let mut source_files = 0usize;
-    for entry in WalkDir::new(workspace)
-        .into_iter()
-        .filter_entry(|e| {
-            if e.depth() == 0 {
-                return true;
-            }
-            let name = e.file_name().to_string_lossy();
-            !SKIP_DIRS.iter().any(|s| *s == name.as_ref())
-        })
-        .filter_map(|e| e.ok())
-    {
+    for entry in walk_source_entries(workspace) {
         if !entry.file_type().is_file() {
             continue;
         }
@@ -319,6 +352,9 @@ pub fn build_map(workspace: &Path) -> Option<String> {
             continue;
         };
         extract_symbols(&content, ext, path, &mut symbols);
+        if source_files >= MAX_SOURCE_FILES_SCANNED {
+            break;
+        }
     }
 
     if source_files < MIN_SOURCE_FILES && symbols.len() < MIN_SYMBOLS {
@@ -941,6 +977,44 @@ mod tests {
         assert!(
             build_map(tmp.path()).is_some(),
             "symbol count should trigger a map even with few files"
+        );
+    }
+
+    #[test]
+    fn build_map_is_cached_until_invalidated() {
+        let tmp = tempfile::tempdir().unwrap();
+        for f in 0..15 {
+            write_rs(tmp.path(), &format!("f{f}.rs"), "pub fn f() {}\n");
+        }
+        let first = build_map(tmp.path()).expect("map should build");
+        write_rs(
+            tmp.path(),
+            "new_unique.rs",
+            "pub fn unique_cached_symbol() {}\n",
+        );
+        let second = build_map(tmp.path()).expect("cached");
+        assert_eq!(first, second, "second call must reuse the cached map");
+        invalidate(tmp.path());
+        let third = build_map(tmp.path()).expect("rebuilt");
+        assert_ne!(first, third);
+        assert!(third.contains("unique_cached_symbol"));
+    }
+
+    #[test]
+    fn walk_skips_files_deeper_than_max_depth() {
+        let tmp = tempfile::tempdir().unwrap();
+        for f in 0..15 {
+            write_rs(tmp.path(), &format!("f{f}.rs"), "pub fn shallow() {}\n");
+        }
+        let mut deep = tmp.path().to_path_buf();
+        for i in 0..(MAX_WALK_DEPTH + 2) {
+            deep.push(format!("d{i}"));
+        }
+        write_rs(&deep, "buried.rs", "pub fn buried_unique_symbol() {}\n");
+        let map = build_map(tmp.path()).expect("map should build");
+        assert!(
+            !map.contains("buried_unique_symbol"),
+            "files deeper than MAX_WALK_DEPTH must not be scanned"
         );
     }
 }

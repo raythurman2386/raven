@@ -569,6 +569,26 @@ pub fn resolve_provider(cfg: &ConfigFile, explicit: Option<String>) -> Provider 
     };
     p.resolve_key()
 }
+
+/// Names a user can pass to `/provider` or `--provider`.
+///
+/// Built-in presets are always included; config-declared names are merged in.
+pub fn known_provider_names(cfg: &ConfigFile) -> Vec<String> {
+    let mut names: Vec<String> = cfg.providers.keys().cloned().collect();
+    for builtin in ["ollama", "openrouter"] {
+        if !names.iter().any(|n| n == builtin) {
+            names.push(builtin.to_string());
+        }
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// Whether `name` is a built-in preset or a config-declared provider.
+pub fn is_known_provider(cfg: &ConfigFile, name: &str) -> bool {
+    Provider::builtin(name).is_some() || cfg.providers.contains_key(name)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -996,6 +1016,25 @@ max_iterations = 10
         let p = resolve_provider(&cfg, Some("nope".into()));
         assert_eq!(p.name, "ollama");
         assert_eq!(p.base_url, "http://localhost:11434/v1");
+    }
+
+    #[test]
+    fn known_provider_names_includes_builtins_and_config() {
+        let mut cfg = ConfigFile::default();
+        cfg.providers.insert(
+            "acme".into(),
+            ProviderConfig {
+                base_url: Some("http://localhost:9/v1".into()),
+                ..Default::default()
+            },
+        );
+        let names = known_provider_names(&cfg);
+        assert!(names.contains(&"ollama".into()));
+        assert!(names.contains(&"openrouter".into()));
+        assert!(names.contains(&"acme".into()));
+        assert!(is_known_provider(&cfg, "acme"));
+        assert!(is_known_provider(&cfg, "ollama"));
+        assert!(!is_known_provider(&cfg, "nope"));
     }
 
     #[test]

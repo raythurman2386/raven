@@ -103,6 +103,9 @@ struct TuiState {
     pending_question_text: Option<String>,
     session_messages: Vec<ChatMessage>,
     task_handle: Option<tokio::task::JoinHandle<anyhow::Result<Vec<ChatMessage>>>>,
+    /// Receiver for the in-flight turn only. Replaced on every send so a
+    /// leftover `Done` from an aborted turn cannot join the next handle.
+    event_rx: Option<mpsc::Receiver<AgentEvent>>,
     selection: Option<Selection>,
     last_click: Option<(u64, DisplayPos)>,
     copy_status: Option<(u64, String)>,
@@ -160,6 +163,7 @@ impl TuiState {
             pending_question_text: None,
             session_messages: Vec::new(),
             task_handle: None,
+            event_rx: None,
             selection: None,
             last_click: None,
             copy_status: None,
@@ -273,8 +277,6 @@ pub async fn run_tui(
     } else {
         store.create(&settings.model)?
     };
-
-    let (tx, mut rx) = mpsc::channel::<AgentEvent>(128);
 
     // Argument-completion candidates per command. `/theme` completes from the
     // theme registry; other commands have no argument candidates.
@@ -546,40 +548,19 @@ pub async fn run_tui(
                             }
 
                             if state.running {
-                                if let Some(handle) = state.task_handle.take() {
-                                    handle.abort();
-                                }
+                                abort_current_turn(&mut state);
                                 state.push_system("⏸ interrupted — redirecting…");
                                 state.log_dirty = true;
-                                start_task(
-                                    &mut state,
-                                    &text,
-                                    &settings,
-                                    &store,
-                                    &session,
-                                    tx.clone(),
-                                )?;
+                                start_task(&mut state, &text, &settings, &store, &session)?;
                                 continue;
                             }
 
                             if state.plan_pending {
                                 handle_plan_response(
-                                    &mut state,
-                                    &text,
-                                    &settings,
-                                    &store,
-                                    &session,
-                                    tx.clone(),
+                                    &mut state, &text, &settings, &store, &session,
                                 )?;
                             } else {
-                                start_task(
-                                    &mut state,
-                                    &text,
-                                    &settings,
-                                    &store,
-                                    &session,
-                                    tx.clone(),
-                                )?;
+                                start_task(&mut state, &text, &settings, &store, &session)?;
                             }
                         }
                         KeyCode::Esc => {
@@ -634,8 +615,15 @@ pub async fn run_tui(
             }
         }
 
-        // Agent events
-        while let Ok(ev) = rx.try_recv() {
+        // Agent events for the current turn only. Drain into a vec first so
+        // the match can mutate `state` (including replacing `event_rx`).
+        let mut turn_events = Vec::new();
+        if let Some(rx) = state.event_rx.as_mut() {
+            while let Ok(ev) = rx.try_recv() {
+                turn_events.push(ev);
+            }
+        }
+        for ev in turn_events {
             match ev {
                 AgentEvent::TextDelta(t) => {
                     state.assistant_text.push_str(&t);
@@ -723,13 +711,18 @@ pub async fn run_tui(
                     if let Some(handle) = state.task_handle.take() {
                         // Prefer try_join-style: the agent task should already
                         // be finished when Done is emitted; await is then cheap.
+                        // Never persist an empty construction-failure result
+                        // over an existing session.
                         if let Ok(Ok(msgs)) = handle.await {
-                            state.session_messages = msgs;
-                            state.messages_dirty = true;
-                            let _ = store.save_all_messages(&session, &state.session_messages);
-                            let _ = store.update_summary(&mut session, None);
+                            if !msgs.is_empty() || state.session_messages.is_empty() {
+                                state.session_messages = msgs;
+                                state.messages_dirty = true;
+                                let _ = store.save_all_messages(&session, &state.session_messages);
+                                let _ = store.update_summary(&mut session, None);
+                            }
                         }
                     }
+                    state.event_rx = None;
 
                     if state.mode.plans_first() && state.agent_state == AgentState::Planning {
                         let plan = plan::parse_plan(&state.assistant_text);
@@ -764,6 +757,7 @@ pub async fn run_tui(
                 AgentEvent::Error(e) => {
                     state.pending_question = None;
                     state.pending_question_text = None;
+                    abort_current_turn(&mut state);
                     state.push_error(e);
                     state.plan_preview.clear();
                     state.status = "ready".into();
@@ -1325,8 +1319,8 @@ fn handle_mouse_event(
                 && m.row == status_y
                 && m.column >= size.width.saturating_sub(STOP_BTN.len() as u16)
             {
-                if let Some(handle) = state.task_handle.take() {
-                    handle.abort();
+                if state.task_handle.is_some() {
+                    abort_current_turn(state);
                     let _ = store.save_all_messages(session, &state.session_messages);
                     let _ = store.update_summary(session, None);
                     state.push_system("⏹ stopped (click)");
@@ -1455,9 +1449,7 @@ fn reset_session(
     app_name: &str,
     hint: &str,
 ) -> Result<()> {
-    if let Some(handle) = state.task_handle.take() {
-        handle.abort();
-    }
+    abort_current_turn(state);
     let _ = store.save_all_messages(session, &state.session_messages);
     let _ = store.update_summary(session, None);
     *session = store.create(&settings.model)?;
@@ -1498,7 +1490,6 @@ fn start_task(
     settings: &Settings,
     store: &SessionStore,
     session: &crate::session::Session,
-    tx: mpsc::Sender<AgentEvent>,
 ) -> Result<()> {
     state.running = true;
     state.status = "running…".into();
@@ -1521,15 +1512,24 @@ fn start_task(
         tool_call_id: None,
     };
     let _ = store.append_message(session, &user_msg);
+    // Keep the user line in TUI history so /stop does not wipe it, but
+    // preload the agent without it — `Agent::run` appends `prompt` itself.
+    let preload = state.session_messages.clone();
+    state.session_messages.push(user_msg);
+    state.messages_dirty = true;
 
-    let mut agent = Agent::with_messages(settings.clone(), state.session_messages.clone())?;
-    if state.mode.read_only() {
-        agent = agent.plan_only();
-    }
-    state.task_handle = Some(tokio::spawn(async move {
-        agent.run(&prompt, tx).await?;
-        Ok(agent.messages)
-    }));
+    // Construct the agent off the TUI thread. `Agent::new` still does a
+    // workspace walk + sandboxed git; a parent folder of many repos used
+    // to freeze Enter→paint. The walk is now cached/capped, and this
+    // construction must not block the next frame.
+    let read_only = state.mode.read_only();
+    begin_agent_turn(state, settings.clone(), preload, prompt, move |agent| {
+        if read_only {
+            agent.plan_only()
+        } else {
+            agent
+        }
+    });
     Ok(())
 }
 
@@ -1539,7 +1539,6 @@ fn handle_plan_response(
     settings: &Settings,
     store: &SessionStore,
     session: &crate::session::Session,
-    tx: mpsc::Sender<AgentEvent>,
 ) -> Result<()> {
     let low = text.to_lowercase();
     let approve = matches!(
@@ -1564,30 +1563,85 @@ fn handle_plan_response(
         format!("Revise the plan based on this feedback:\n{text}")
     };
 
-    let _ = store.append_message(
-        session,
-        &ChatMessage {
-            role: "user".into(),
-            content: Some(prompt.clone()),
-            tool_calls: None,
-            tool_call_id: None,
-        },
-    );
+    let user_msg = ChatMessage {
+        role: "user".into(),
+        content: Some(prompt.clone()),
+        tool_calls: None,
+        tool_call_id: None,
+    };
+    let _ = store.append_message(session, &user_msg);
+    let preload = state.session_messages.clone();
+    state.session_messages.push(user_msg);
+    state.messages_dirty = true;
 
     state.assistant_text.clear();
-    let mut agent = Agent::with_messages(settings.clone(), state.session_messages.clone())?;
-    if approve {
-        if let Some(plan) = state.active_plan.take() {
-            agent = agent.with_plan(plan);
-        }
+    let plan = if approve {
+        state.active_plan.take()
     } else {
-        agent = agent.plan_only();
+        None
+    };
+    begin_agent_turn(state, settings.clone(), preload, prompt, move |agent| {
+        if let Some(plan) = plan {
+            agent.with_plan(plan)
+        } else {
+            agent.plan_only()
+        }
+    });
+    Ok(())
+}
+
+/// Abort the in-flight turn and drop its event receiver.
+///
+/// Dropping `event_rx` is what closes the leftover-`Done` race: the aborted
+/// task may still send, but nothing is listening.
+fn abort_current_turn(state: &mut TuiState) {
+    if let Some(handle) = state.task_handle.take() {
+        handle.abort();
     }
-    state.task_handle = Some(tokio::spawn(async move {
+    state.event_rx = None;
+}
+
+/// Bind a fresh channel to this turn and spawn the agent off the TUI thread.
+fn begin_agent_turn(
+    state: &mut TuiState,
+    settings: Settings,
+    messages: Vec<ChatMessage>,
+    prompt: String,
+    configure: impl FnOnce(Agent) -> Agent + Send + 'static,
+) {
+    let (tx, rx) = mpsc::channel::<AgentEvent>(128);
+    state.event_rx = Some(rx);
+    state.task_handle = Some(spawn_agent_turn(settings, messages, prompt, tx, configure));
+}
+/// Spawn one agent turn, building the [`Agent`] off the TUI thread.
+///
+/// The user bubble is already in the log; this must return immediately so
+/// the next frame can paint it. Construction failures are reported as
+/// [`AgentEvent::Error`] rather than blocking Enter.
+fn spawn_agent_turn(
+    settings: Settings,
+    messages: Vec<ChatMessage>,
+    prompt: String,
+    tx: mpsc::Sender<AgentEvent>,
+    configure: impl FnOnce(Agent) -> Agent + Send + 'static,
+) -> tokio::task::JoinHandle<anyhow::Result<Vec<ChatMessage>>> {
+    tokio::spawn(async move {
+        let constructed =
+            tokio::task::spawn_blocking(move || Agent::with_messages(settings, messages))
+                .await
+                .unwrap_or_else(|e| Err(anyhow::anyhow!("agent construction cancelled: {e}")));
+        let mut agent = match constructed {
+            Ok(agent) => configure(agent),
+            Err(e) => {
+                let _ = tx
+                    .send(AgentEvent::Error(format!("failed to start agent: {e}")))
+                    .await;
+                return Err(e);
+            }
+        };
         agent.run(&prompt, tx).await?;
         Ok(agent.messages)
-    }));
-    Ok(())
+    })
 }
 
 /// The canonical name of a theme, for display in `/theme` output.
@@ -1639,8 +1693,8 @@ async fn dispatch_slash_command(
             state.log_dirty = true;
         }
         "stop" => {
-            if let Some(handle) = state.task_handle.take() {
-                handle.abort();
+            if state.task_handle.is_some() {
+                abort_current_turn(state);
                 let _ = store.save_all_messages(session, &state.session_messages);
                 let _ = store.update_summary(session, None);
                 state.push_system("⏹ stopped (partial turn saved)");
@@ -1706,10 +1760,15 @@ async fn dispatch_slash_command(
         "provider" => {
             let name = pc.args.trim();
             if name.is_empty() {
+                let names = crate::config::known_provider_names(config_file);
                 state.push_system(format!(
-                    "current provider: {}  (try /provider <name>)",
-                    settings.provider.name
+                    "current provider: {}\navailable: {}",
+                    settings.provider.name,
+                    names.join(", ")
                 ));
+                state.log_dirty = true;
+            } else if !crate::config::is_known_provider(config_file, name) {
+                state.push_system(format!("unknown provider {name:?} — try /provider to list"));
                 state.log_dirty = true;
             } else {
                 // Re-resolve the provider from config + env. If the current
@@ -2311,11 +2370,50 @@ mod tests {
             pending_question_text: None,
             session_messages: Vec::new(),
             task_handle: None,
+            event_rx: None,
             selection: None,
             last_click: None,
             copy_status: None,
             theme: Theme::RAVENWOOD,
         }
+    }
+
+    #[test]
+    fn abort_current_turn_drops_stale_events() {
+        let mut state = dummy_state();
+        let (tx, rx) = mpsc::channel::<AgentEvent>(8);
+        state.event_rx = Some(rx);
+        tx.try_send(AgentEvent::Done).unwrap();
+        tx.try_send(AgentEvent::TextDelta("stale".into())).unwrap();
+        abort_current_turn(&mut state);
+        assert!(state.event_rx.is_none());
+        assert!(state.task_handle.is_none());
+        // The sender is still alive; those events must not be readable from
+        // the (now dropped) turn receiver.
+        assert!(tx.try_send(AgentEvent::Error("late".into())).is_err());
+    }
+
+    #[tokio::test]
+    async fn begin_agent_turn_replaces_receiver() {
+        let mut state = dummy_state();
+        let (old_tx, old_rx) = mpsc::channel::<AgentEvent>(8);
+        state.event_rx = Some(old_rx);
+        old_tx.try_send(AgentEvent::Done).unwrap();
+
+        let tmp = tempfile::tempdir().unwrap();
+        begin_agent_turn(
+            &mut state,
+            test_settings(tmp.path()),
+            Vec::new(),
+            "hi".into(),
+            |agent| agent,
+        );
+        assert!(state.event_rx.is_some());
+        assert!(state.task_handle.is_some());
+        // Stale Done on the old channel is gone with old_rx.
+        let rx = state.event_rx.as_mut().unwrap();
+        assert!(rx.try_recv().is_err());
+        abort_current_turn(&mut state);
     }
 
     #[test]

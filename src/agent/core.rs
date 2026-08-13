@@ -31,6 +31,19 @@ enum IterationOutcome {
 }
 
 static TOOL_DEFS: OnceLock<serde_json::Value> = OnceLock::new();
+static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+/// Shared HTTP client so each TUI send does not re-init TLS.
+fn shared_http_client() -> Result<reqwest::Client> {
+    if let Some(client) = HTTP_CLIENT.get() {
+        return Ok(client.clone());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .build()
+        .context("build HTTP client")?;
+    Ok(HTTP_CLIENT.get_or_init(|| client.clone()).clone())
+}
 
 /// Test-only completion source: a closure that returns the raw completion
 /// body (SSE text, or JSON when `no_stream`) for a given outgoing request
@@ -263,10 +276,7 @@ impl Agent {
             current_step: 0,
             #[cfg(test)]
             completion_source: None,
-            client: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(300))
-                .build()
-                .context("build HTTP client")?,
+            client: shared_http_client()?,
         })
     }
 
@@ -358,6 +368,7 @@ impl Agent {
         // a map. The stale flag is always cleared so it doesn't persist
         // forever in small workspaces that never had a map.
         if self.repo_map_stale {
+            crate::repomap::invalidate(&self.settings.workspace);
             if crate::repomap::should_build(&self.settings.workspace) {
                 self.messages[0] = build_system_message(&self.settings);
             }

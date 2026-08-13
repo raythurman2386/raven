@@ -1,7 +1,7 @@
 ---
 name: raven
 description: "Use when developing the Raven coding-agent harness — a privacy-first local coding-agent CLI in Rust for Ollama / OpenAI-compatible endpoints. Provides architecture, module map, conventions, verify commands, and the enforced-verification gate."
-version: 1.0.0
+version: 1.1.0
 author: Hermes Agent
 license: MIT
 metadata:
@@ -33,15 +33,16 @@ Don't use for: porting the Ravenwood palette to other apps — use the
 
 ```
 CLI (main.rs)
-  └─ Settings (config.rs) ── context window inference, defaults
-  └─ Agent (agent.rs)
-       ├─ system prompt (SYSTEM_BASE + AGENTS.md + --rules)
-       ├─ streaming loop ── POST /v1/chat/completions (Ollama)
+  └─ Settings (config.rs) ── named providers, context-window inference
+  └─ Agent (src/agent/)
+       ├─ system prompt (SYSTEM_BASE + AGENTS.md + repo map + --rules)
+       ├─ streaming loop ── POST /v1/chat/completions (Ollama / OpenRouter / …)
        ├─ compaction (context.rs) ── estimate tokens, summarize middle
-       ├─ tool dispatch (tools/) ── parallel via spawn_blocking
-       └─ events (mpsc) ── TextDelta, ToolStart/End, Iteration, Compacted, Done, Error
+       ├─ tool dispatch (tools/) ── mutators serial; others spawn_blocking
+       └─ events (mpsc) ── TextDelta, ToolStart/End, Iteration, Compacted,
+                           VerifyRequired, AskUser, PlanProgress, Done, Error
   └─ TUI (tui/)  ── ratatui event loop, drains agent events
-  └─ run_parallel ── N independent Agent tasks on tokio tasks
+  └─ run_parallel ── N independent Agent tasks on git worktrees
 ```
 
 ### Module Layout
@@ -50,19 +51,19 @@ CLI (main.rs)
 |------|---------|
 | `src/main.rs` | CLI entry, headless runner, session management |
 | `src/lib.rs` | Library crate re-exports for benchmarks/integration tests |
-| `src/agent.rs` | Streaming agent loop, `AgentEvent`, parallel sub-agents, enforced-verify gate |
+| `src/agent/` | Streaming loop (`core.rs`), stream parse, tool exec, loop control, parallel sub-agents |
 | `src/commands.rs` | Slash-command registry + parsing for the TUI |
-| `src/config.rs` | `Settings`, config.toml loading, context-window inference, AGENTS.md loader |
+| `src/config.rs` | `Settings`, `Provider`, config.toml, AGENTS.md loader |
 | `src/context.rs` | Token estimation, compaction strategy, tool-result pruning |
-| `src/error.rs` | Typed `AgentError` enum with retry classification |
+| `src/error.rs` | Typed `AgentError` / `ToolError` |
 | `src/memory.rs` | Cross-session project memory (`.raven/MEMORY.md`) |
 | `src/plan.rs` | Structured plan mode, `parse_plan`, `format_plan` |
-| `src/repomap.rs` | Lightweight repo symbol map (`<repo_map>` for large workspaces) |
+| `src/repomap.rs` | Cached, walk-capped repo symbol map (`<repo_map>`) |
 | `src/runner.rs` | Shared event-draining and plan-approval flow |
-| `src/session.rs` | JSONL session persistence, resume, list |
+| `src/session.rs` | JSONL session persistence, resume, list (atomic writes) |
 | `src/skills.rs` | `SKILL.md` discovery + `skill_search`/`skill_load` |
 | `src/tokenizer.rs` | Pure-Rust BPE token estimator (no external vocab) |
-| `src/tools/` | 22 tools + workspace sandbox (path confinement, shell filter) — split into `mod.rs`, `definitions.rs`, `dispatch.rs`, `sandbox.rs`, `document.rs`, `git.rs`, `patch.rs` |
+| `src/tools/` | 22 tools + sandbox — `mod.rs`, `definitions.rs`, `dispatch.rs`, `sandbox.rs`, `document.rs`, `git.rs`, `patch.rs`, `windows.rs` |
 | `src/tui/` | ratatui TUI with status bar, streaming, scrollback, /commands |
 | `src/web.rs` | Web tools (`web_search`, `web_fetch`) |
 
@@ -70,7 +71,7 @@ CLI (main.rs)
 
 ### Rust
 
-- **Rust 2021 edition.** Target MSRV: 1.88+ (pinned in `rust-toolchain.toml`).
+- **Rust 2021 edition.** Target MSRV: 1.97 (pinned in `rust-toolchain.toml`).
 - Keep the binary small and dependency-light. No MCP, no telemetry.
 - Every public struct, enum, and fn should have a doc comment.
 - `cargo doc --no-deps` must build with no warnings.
@@ -80,17 +81,17 @@ CLI (main.rs)
 
 ### File Organization
 
-- Modules are declared in `src/main.rs` and re-exported via `src/lib.rs` (so
+- Modules are declared in `src/lib.rs` and consumed by `src/main.rs` (so
   benchmarks and integration tests can import them).
 - Tests live in `#[cfg(test)] mod tests` blocks at the bottom of each source
-  file, plus black-box integration tests in `tests/`.
+  file (agent tests under `src/agent/tests/`), plus black-box tests in `tests/`.
 
 ## Build, Lint, Test
 
 ```bash
 cargo build                    # debug build, must be warning-free
 cargo build --release          # LTO + strip
-cargo test                     # 348 tests, all offline (no Ollama needed)
+cargo test                     # 520+ tests, all offline (no Ollama needed)
 cargo clippy --all-targets -- -D warnings   # must be zero warnings
 cargo fmt --all --check        # formatting check
 cargo doc --no-deps            # docs must build with no warnings
@@ -110,10 +111,12 @@ before finishing, the harness injects a recovery reminder and re-runs the turn
 
 - `AgentEvent::VerifyRequired` is emitted when the gate re-runs.
 - The gate is skipped when the workspace has no detectable test runner
-  (`has_test_runner` checks for `Cargo.toml`, `package.json`, `pytest.ini`,
-  `pyproject.toml`, `setup.py`).
-- `run_tests` auto-detects the runner: `cargo test` for Rust, `npm test` for
-  Node, `pytest` for Python.
+  (`has_test_runner`: `Cargo.toml`; `package.json` **and** `node_modules`;
+  Python only if `pytest` is spawnable).
+- Credit is fail-closed: `run_tests` **or** `run_shell` with
+  `is_verification_command` counts, and only when `parse_exit_code` is `0`
+  (do not use `contains("exit=0")` — `exit=10` must fail).
+- Failed / sandbox-rejected edits must not arm the gate.
 
 When implementing a fix, **always run the real verification commands** (`cargo
 test`, `cargo clippy`, `cargo fmt`) — do not rely on the agent's simulated
@@ -131,12 +134,29 @@ test`, `cargo clippy`, `cargo fmt`) — do not rely on the agent's simulated
 4. **Sandbox** — all file paths are relative to the workspace root and confined
    to it. `run_shell` blocks dangerous patterns and strips known secret env
    vars. The blocklist is a denylist (best-effort), not an allowlist (issue #14).
-5. **Session IDs** — currently the ISO timestamp string; can collide within a
-   second (issue #10). Don't assume uniqueness.
-6. **Repo map is static** — built once in `Agent::new`; not invalidated when
-   files change mid-session (issue #15).
-7. **`append_message` is not atomic** — a crash mid-write can leave a partial
-   JSONL line (issue #19).
+5. **Session IDs** — `{iso}-{pid}-{counter}` (issue #10 is fixed). Still
+   don't invent a different scheme without updating `generate_session_id`.
+6. **Repo map is cached** per workspace path until `repomap::invalidate`
+   (called when `repo_map_stale` after a successful file edit). Walks are
+   capped (`MAX_WALK_DEPTH` / `MAX_SOURCE_FILES_SCANNED`) so a parent folder
+   of many repos is not a full-tree scan. Cache key is the raw `Path`, not
+   canonical — keep `settings.workspace` consistent.
+7. **Session writes are atomic** (`write_atomic` temp+rename) for both
+   `append_message` and `save_all_messages`. Do not reintroduce in-place
+   truncate.
+8. **TUI `Agent::new` is off-thread** — never construct an `Agent` on the
+   event-loop thread. Each turn owns its own `mpsc` pair (`begin_agent_turn`).
+   Interrupt/`/stop`/`/new` must `abort_current_turn` (abort handle **and**
+   drop `event_rx`) so a leftover `Done` cannot join the next handle. Do not
+   share one session-long channel.
+9. **Named providers** — `Provider` bundles endpoint + auth + default model.
+   Resolution: `--provider` > `RAVEN_PROVIDER` > config `provider` > builtin
+   `ollama`. `/provider` with no args lists names; unknown names must not
+   silently become ollama. Session summary stores `model` only — resume can
+   pair a stored OpenRouter model with the default Ollama provider.
+10. **Headless plan revise** — after `[r]evise` + approve, execute the
+    *revised* plan and *revised* message list (`run_plan_flow`), not the first
+    proposal.
 
 ## Verification Checklist
 

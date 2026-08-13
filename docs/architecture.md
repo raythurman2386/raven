@@ -6,15 +6,16 @@ Design overview for **Raven**. See the [project layout](../README.md#project-lay
 
 ```
 CLI (main.rs)
-  └─ Settings (config.rs) ── context window inference, defaults
+  └─ Settings (config.rs) ── named providers, context-window inference
   └─ Agent (agent/)
-       ├─ system prompt (SYSTEM_BASE + AGENTS.md + --rules)
-       ├─ streaming loop ── POST /v1/chat/completions (Ollama)
+       ├─ system prompt (SYSTEM_BASE + AGENTS.md + repo map + --rules)
+       ├─ streaming loop ── POST /v1/chat/completions (Ollama / OpenRouter / …)
        ├─ compaction (context.rs) ── estimate tokens, summarize middle
-       ├─ tool dispatch (tools/) ── parallel via spawn_blocking
-       └─ events (mpsc) ── TextDelta, ToolStart/End, Iteration, Compacted, Done, Error
+       ├─ tool dispatch (tools/) ── mutators serial; others spawn_blocking
+       └─ events (mpsc) ── TextDelta, ToolStart/End, Iteration, Compacted,
+                           VerifyRequired, AskUser, PlanProgress, Done, Error
   └─ TUI (tui/)  ── ratatui event loop, drains agent events
-  └─ run_parallel ── N independent Agent tasks on tokio tasks
+  └─ run_parallel ── N independent Agent tasks on git worktrees
 ```
 
 ### Step-by-step
@@ -53,7 +54,7 @@ CLI (main.rs)
 │         dispatch(sandbox, name, args)            │
 │         messages.push(tool result)               │
 │       loop ───────────────────────────────────── │
-│   emit Error("max iterations")                   │
+│   finish_with_summary + Done                     │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -132,7 +133,9 @@ The sandbox confines the agent's subprocesses at the OS level (Landlock, seccomp
 
 ## Parallel tool execution
 
-When the model returns multiple tool calls in one turn, they are executed concurrently:
+When the model returns multiple tool calls in one turn, file-mutating tools
+(`write_file`, `search_replace`, `apply_patch`) run serially in call order
+(issue #111). Other tools may run concurrently:
 
 ```rust
 for tc in &tcs {

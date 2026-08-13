@@ -9,7 +9,6 @@
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::agent::ChatMessage;
@@ -172,17 +171,12 @@ impl SessionStore {
     /// Replace all messages in a session (used after a turn completes).
     pub fn save_all_messages(&self, session: &Session, messages: &[ChatMessage]) -> Result<()> {
         let path = self.session_dir(&session.summary.id).join(MESSAGES_FILE);
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&path)?;
+        let mut buf = String::new();
         for msg in messages {
-            let line = serde_json::to_string(msg)?;
-            file.write_all(line.as_bytes())?;
-            file.write_all(b"\n")?;
+            buf.push_str(&serde_json::to_string(msg)?);
+            buf.push('\n');
         }
-        Ok(())
+        write_atomic(&path, buf.as_bytes())
     }
 
     /// Update the session's summary (title, updated_at).
@@ -414,6 +408,40 @@ mod tests {
             leftovers.is_empty(),
             "no temp files should remain: {leftovers:?}"
         );
+    }
+
+    #[test]
+    fn save_all_messages_replaces_file_atomically() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = SessionStore::for_workspace(tmp.path()).unwrap();
+        let session = store.create("test-model").unwrap();
+        store
+            .append_message(
+                &session,
+                &ChatMessage {
+                    role: "user".into(),
+                    content: Some("old".into()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+            )
+            .unwrap();
+        let replacement = vec![ChatMessage {
+            role: "assistant".into(),
+            content: Some("new".into()),
+            tool_calls: None,
+            tool_call_id: None,
+        }];
+        store.save_all_messages(&session, &replacement).unwrap();
+        let loaded = store.load(&session.summary.id).unwrap();
+        assert_eq!(loaded.messages.len(), 1);
+        assert_eq!(loaded.messages[0].content.as_deref(), Some("new"));
+        let leftovers: Vec<_> = std::fs::read_dir(store.session_dir(&session.summary.id))
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "no temp files should remain");
     }
 
     #[test]

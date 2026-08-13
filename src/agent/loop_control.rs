@@ -70,7 +70,13 @@ impl Agent {
         // emit_summary so the turn ends with a visible canned line
         // rather than an empty assistant message.
         if content_blank {
-            self.emit_summary(tx, None).await?;
+            self.emit_summary(
+                tx,
+                Some(
+                    "I received several empty replies and could not produce a final answer.".into(),
+                ),
+            )
+            .await?;
             return Ok(false);
         }
         self.messages.push(assistant);

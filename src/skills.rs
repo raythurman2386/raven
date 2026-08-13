@@ -164,7 +164,7 @@ pub fn discover(workspace: &Path) -> Vec<Skill> {
     let fingerprint = skill_fingerprint(workspace);
 
     {
-        let cache = DISCOVER_CACHE.lock().unwrap();
+        let cache = DISCOVER_CACHE.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = cache.get(workspace) {
             if entry.fingerprint == fingerprint {
                 return entry.skills.clone();
@@ -201,7 +201,7 @@ pub fn discover(workspace: &Path) -> Vec<Skill> {
 
     skills.sort_by(|a, b| a.name.cmp(&b.name));
 
-    let mut cache = DISCOVER_CACHE.lock().unwrap();
+    let mut cache = DISCOVER_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     cache.insert(
         workspace.to_path_buf(),
         CacheEntry {
