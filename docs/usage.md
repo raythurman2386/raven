@@ -318,16 +318,23 @@ Rules are appended under a `--- Session rules ---` header, after any `AGENTS.md`
 ## Remote / cloud Ollama
 
 ```bash
-# Point at a GPU box on the LAN
-raven --host http://gpu-box:11434/v1 -p "Explain this repo"
+# Point the ollama provider at a GPU box on the LAN (via config.toml)
+#   [providers.ollama]
+#   base_url = "http://gpu-box:11434/v1"
+raven -p "Explain this repo"
 
 # Ollama Cloud (authenticated)
-export RAVEN_API_KEY="your-key"
-export RAVEN_HOST="https://ollama.com/v1"
+export OLLAMA_API_KEY="your-key"
+#   [providers.ollama]
+#   base_url = "https://ollama.com/v1"
 raven -m llama3.1 -p "Explain this repo"
+
+# Or switch to the openrouter provider entirely
+export OPENROUTER_API_KEY="sk-or-..."
+raven --provider openrouter -p "Explain this repo"
 ```
 
-See [configuration.md](configuration.md#api-keys) for security notes.
+See [configuration.md](configuration.md#providers) for the full provider model.
 
 ---
 

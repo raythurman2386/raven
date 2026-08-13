@@ -15,6 +15,9 @@ Thumbs.db
 
 # Session storage (per-workspace)
 .raven/sessions/
+.raven/cargo-home/
+.raven/npm-cache/
+.raven/tmp/
 .ollama-grok/sessions/
 .hermes/
 # Environment / secrets

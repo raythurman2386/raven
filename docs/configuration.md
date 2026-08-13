@@ -10,9 +10,10 @@ See the [root README quick start](../README.md#quick-start) for the full flag li
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `RAVEN_MODEL` / `OLLAMA_MODEL` | `gemma4:latest` | Default model (overridden by `-m`) |
-| `RAVEN_HOST` / `OLLAMA_HOST` | `http://localhost:11434/v1` | OpenAI-compatible base URL (overridden by `--host`) |
-| `RAVEN_API_KEY` / `OLLAMA_API_KEY` | _(unset)_ | Bearer token for Ollama Cloud or any authenticated host |
+| `RAVEN_PROVIDER` | `ollama` | Active provider name (overridden by `--provider`) |
+| `RAVEN_API_KEY` | _(unset)_ | Universal Bearer token override for the active provider |
+| `OPENROUTER_API_KEY` | _(unset)_ | Bearer token for the `openrouter` provider |
+| `OLLAMA_API_KEY` | _(unset)_ | Bearer token for the `ollama` provider (Ollama Cloud / authenticated hosts) |
 | `RAVEN_MAX_ITER` / `OG_MAX_ITER` | `30` | Max agent iterations per run |
 | `RAVEN_CONTEXT_WINDOW` / `OG_CONTEXT_WINDOW` | _(inferred)_ | Override the model's context window size (tokens) |
 | `RAVEN_COMPACT_THRESHOLD` / `OG_COMPACT_THRESHOLD` | `0.75` | Fraction of usable context at which compaction triggers |
@@ -24,12 +25,12 @@ See the [root README quick start](../README.md#quick-start) for the full flag li
 ### Examples
 
 ```bash
-# Use a bigger model
-export RAVEN_MODEL=qwen2.5-coder:14b
+# Use the openrouter provider (endpoint + default model from config)
+export RAVEN_PROVIDER=openrouter
 raven -p "Explain this repo"
 
-# Point at a remote Ollama
-export RAVEN_HOST=http://gpu-box:11434/v1
+# Point the ollama provider at a remote GPU box
+# (via config.toml [providers.ollama] base_url, or RAVEN_API_KEY for auth)
 raven -p "Explain this repo"
 
 # Allow more iterations for a big task
@@ -42,14 +43,129 @@ RUST_LOG=raven=debug raven -p "..."
 
 ---
 
+## Providers
+
+Raven talks to any OpenAI-compatible `/v1/chat/completions` endpoint through a
+**named provider**. A provider bundles the endpoint, auth, and default model so
+switching between local (Ollama) and cloud (OpenRouter / Ollama Cloud) is a
+single unit — `--provider`, `/provider`, or the `provider` config key.
+
+### Built-in presets
+
+Two providers ship built in (no config needed):
+
+| Name | Base URL | Default model |
+|---|---|---|
+| `ollama` | `http://localhost:11434/v1` | `gemma4:latest` |
+| `openrouter` | `https://openrouter.ai/api/v1` | `deepseek-v4-flash:cloud` |
+
+### Declaring providers
+
+Add a `[providers.<name>]` table to `config.toml` to override a preset or add
+your own:
+
+```toml
+# ~/.raven/config.toml
+provider = "ollama"   # active provider
+
+[providers.ollama]
+base_url = "http://gpu-box:11434/v1"
+default_model = "qwen2.5-coder:14b"
+
+[providers.openrouter]
+base_url = "https://openrouter.ai/api/v1"
+default_model = "deepseek-v4-pro:cloud"
+# api_key = "sk-..."   # prefer an env var (see below)
+```
+
+Each provider table supports:
+
+| Key | Meaning |
+|---|---|
+| `base_url` | OpenAI-compatible `/v1` endpoint. |
+| `default_model` | Model used when no `--model` / `/model` override is set. |
+| `api_key` | Literal key in the config file. **Prefer `api_key_env`** so the secret stays out of the file. |
+| `api_key_env` | **Name** of the env var holding this provider's key (e.g. `GROQ_API_KEY`). Only the name is stored in config — the secret itself lives in the environment. |
+
+Adding a brand-new provider is a pure config change — no code edit needed.
+The endpoint **must** speak OpenAI-compatible `/v1/chat/completions` (native
+provider APIs that use a different wire format need a proxy/gateway first):
+
+```toml
+[providers.groq]
+base_url = "https://api.groq.com/openai/v1"
+api_key_env = "GROQ_API_KEY"
+default_model = "llama-3.3-70b-versatile"
+```
+
+If `api_key_env` is omitted, raven falls back to the built-in mapping for
+known providers (`OPENROUTER_API_KEY` / `OLLAMA_API_KEY`), then a conventional
+`{NAME}_API_KEY` (e.g. `GROQ_API_KEY` for a provider named `groq`).
+
+### Selecting the active provider
+
+Precedence (highest wins): **`--provider` flag > `RAVEN_PROVIDER` env > config `provider` key > built-in `ollama`**.
+
+```bash
+# CLI flag
+raven --provider openrouter -p "..."
+
+# Env var
+export RAVEN_PROVIDER=openrouter
+raven -p "..."
+```
+
+### Switching at runtime
+
+- `/provider <name>` switches the provider for subsequent turns (re-resolves
+  the model + context window). `/provider` with no args shows the current one.
+- `/model <name>` switches the model **within the current provider**. To use a
+  model on a different provider, switch providers first with `/provider`.
+
+### API keys
+
+Keys are resolved per provider, first non-empty wins:
+
+1. Config-file `api_key` on that provider (if set — **not** overridden by env)
+2. `RAVEN_API_KEY` (universal override)
+3. The provider's declared `api_key_env` (or built-in mapping, e.g.
+   `OPENROUTER_API_KEY` / `OLLAMA_API_KEY`)
+
+Prefer the provider-scoped env var over a config-file `api_key` so the secret
+doesn't land in a committed file. Once a literal `api_key` is present in TOML,
+it wins for that provider.
+
+```bash
+# OpenRouter
+export OPENROUTER_API_KEY="sk-or-..."
+raven --provider openrouter -p "..."
+
+# Ollama Cloud / remote
+export OLLAMA_API_KEY="your-key-here"
+raven -p "..."
+
+# Any custom provider declared with api_key_env
+export GROQ_API_KEY="gsk_..."
+raven --provider groq -p "..."
+```
+
+### Removed legacy surface
+
+The old flat `--host` / `--api-key` flags and the `RAVEN_HOST` / `OLLAMA_HOST` /
+`RAVEN_MODEL` / `OLLAMA_MODEL` env vars are **removed**. Endpoint + auth now
+come from `[providers.*]` config and provider-scoped key env vars. `--model`
+remains as a per-session override of the active provider's `default_model`.
+
+---
+
 ## Config file
 
 Layered TOML config, loaded from the workspace first (higher priority), then the global file. Both are optional; missing keys fall through to env vars / CLI flags / built-in defaults.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `model` | `gemma4:latest` | Default model (overridden by `-m`) |
-| `host` | `http://localhost:11434/v1` | OpenAI-compatible base URL (overridden by `--host`) |
+| `provider` | `ollama` | Active provider name (overridden by `--provider`) |
+| `[providers.<name>]` | _(built-in presets)_ | Named provider definitions: `base_url`, `api_key`, `default_model` |
 | `context_window` | inferred from model | Override the model's context window size (tokens) |
 | `compact_threshold` | `0.75` | Fraction of usable context at which compaction triggers |
 | `max_iterations` | `30` | Max agent iterations per run |
@@ -63,8 +179,12 @@ Layered TOML config, loaded from the workspace first (higher priority), then the
 
 ```toml
 # .raven/config.toml  (workspace)  or  ~/.raven/config.toml  (global)
-model = "qwen2.5-coder:14b"
-host = "http://localhost:11434/v1"
+provider = "ollama"
+
+[providers.ollama]
+base_url = "http://localhost:11434/v1"
+default_model = "qwen2.5-coder:14b"
+
 context_window = 131072
 compact_threshold = 0.75
 max_iterations = 30
@@ -150,7 +270,7 @@ See [architecture.md#compaction](architecture.md#compaction) for the algorithm.
 
 ### Local (default)
 
-Leave `RAVEN_API_KEY` / `OLLAMA_API_KEY` unset and keep the host on `localhost` — no `Authorization` header is sent.
+Leave `OLLAMA_API_KEY` unset and keep the `ollama` provider on `localhost` — no `Authorization` header is sent.
 
 ```bash
 raven -p "Explain this repo"
@@ -159,23 +279,27 @@ raven -p "Explain this repo"
 ### Ollama Cloud / remote
 
 ```bash
-export RAVEN_API_KEY="your-key-here"
-export RAVEN_HOST="https://ollama.com/v1"
+export OLLAMA_API_KEY="your-key-here"
+# point the ollama provider at the cloud endpoint in config.toml:
+#   [providers.ollama]
+#   base_url = "https://ollama.com/v1"
 raven -m llama3.1 -p "Explain this repo"
 ```
 
-Or via flags (less secure — lands in shell history):
+### OpenRouter
 
 ```bash
-raven --api-key "your-key" --host https://ollama.com/v1 -m llama3.1 -p "..."
+export OPENROUTER_API_KEY="sk-or-..."
+raven --provider openrouter -p "..."
 ```
 
 ### Security notes
 
-- **Prefer the env var over `--api-key`** so the secret does not land in shell history.
+- **Prefer the provider-scoped env var** (`OLLAMA_API_KEY` / `OPENROUTER_API_KEY`) over a config-file `api_key` so the secret does not land in a committed file or shell history.
 - The sandboxed `run_shell` tool strips these env vars from child processes:
   - `RAVEN_API_KEY`
   - `OLLAMA_API_KEY`
+  - `OPENROUTER_API_KEY`
   - `OPENAI_API_KEY`
   - `XAI_API_KEY`
   - `ANTHROPIC_API_KEY`

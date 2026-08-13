@@ -5,19 +5,22 @@
 //!
 //! # Environment variable precedence
 //!
-//! `RAVEN_*` vars take priority over legacy `OLLAMA_*` / `OG_*` fallbacks:
-//! - `RAVEN_MODEL` > `OLLAMA_MODEL`
-//! - `RAVEN_HOST` > `OLLAMA_HOST`
-//! - `RAVEN_API_KEY` > `OLLAMA_API_KEY` > `OPENROUTER_API_KEY` > `XAI_API_KEY` > `OPENAI_API_KEY`
+//! `RAVEN_*` vars take priority over legacy `OG_*` fallbacks:
 //! - `RAVEN_MAX_ITER` > `OG_MAX_ITER`
 //! - `RAVEN_CONTEXT_WINDOW` > `OG_CONTEXT_WINDOW`
 //! - `RAVEN_COMPACT_THRESHOLD` > `OG_COMPACT_THRESHOLD`
+//!
+//! Provider API keys are resolved per provider: config-file `api_key` (if set)
+//! → `RAVEN_API_KEY` (universal override) → the provider's declared
+//! `api_key_env` (or built-in mapping, e.g. `OPENROUTER_API_KEY` /
+//! `OLLAMA_API_KEY`).
 //!
 //! A repo-root or CWD `.env` file is loaded early by the binary (see
 //! [`load_dotenv`]) without overriding already-exported shell variables.
 
 use anyhow::Result;
 use serde::Deserialize;
+use std::borrow::Cow;
 use std::path::PathBuf;
 
 /// The user-facing interaction mode for a session.
@@ -101,10 +104,8 @@ pub fn resolve_mode(explicit_mode: Option<Mode>, config_mode: Option<Mode>, yolo
 #[derive(Debug, Clone)]
 pub struct Settings {
     pub model: String,
-    pub base_url: String,
-    /// Optional API key for Ollama Cloud (or any OpenAI-compatible host that requires auth).
-    /// Prefer setting via OLLAMA_API_KEY env var rather than CLI flags that end up in shell history.
-    pub api_key: Option<String>,
+    /// The resolved provider (endpoint + auth + default model).
+    pub provider: Provider,
     pub workspace: PathBuf,
     pub max_iterations: usize,
     pub mode: Mode,
@@ -144,6 +145,16 @@ pub struct Settings {
 }
 
 impl Settings {
+    /// The provider's base URL (OpenAI-compatible `/v1/chat/completions`).
+    pub fn base_url(&self) -> &str {
+        &self.provider.base_url
+    }
+
+    /// The provider's API key, if any.
+    pub fn api_key(&self) -> Option<&str> {
+        self.provider.api_key.as_deref()
+    }
+
     /// Verify the workspace directory exists; bail with a path message if not.
     pub fn ensure_workspace(&self) -> Result<()> {
         if !self.workspace.is_dir() {
@@ -180,6 +191,93 @@ impl Settings {
     }
 }
 
+/// A named model endpoint (Ollama, OpenRouter, Ollama Cloud, …).
+///
+/// Bundles everything needed to talk to one provider so switching is a
+/// single unit (`--provider`, `/provider`, `provider = "…"` in config).
+#[derive(Debug, Clone)]
+pub struct Provider {
+    pub name: String,
+    pub base_url: String,
+    /// Optional Bearer token. Prefer provider-scoped env vars over
+    /// config-file secrets (see [`Provider::resolve_key`]).
+    pub api_key: Option<String>,
+    /// Name of the env var that holds this provider's API key (e.g.
+    /// `OPENROUTER_API_KEY`). Declared in `[providers.<name>]` via
+    /// `api_key_env`; falls back to the built-in mapping. Only the *name* is
+    /// stored here — never the secret itself.
+    pub api_key_env: Option<String>,
+    /// Model used when no explicit `--model` / `/model` override is set.
+    pub default_model: String,
+}
+
+impl Provider {
+    /// Built-in presets. `api_key` is intentionally left `None` here — it is
+    /// resolved from env/config at construction (see [`Provider::resolve_key`]).
+    pub fn builtin(name: &str) -> Option<Provider> {
+        match name {
+            "ollama" => Some(Provider {
+                name: name.into(),
+                base_url: "http://localhost:11434/v1".into(),
+                api_key: None,
+                api_key_env: Some("OLLAMA_API_KEY".into()),
+                default_model: "gemma4:latest".into(),
+            }),
+            "openrouter" => Some(Provider {
+                name: name.into(),
+                base_url: "https://openrouter.ai/api/v1".into(),
+                api_key: None,
+                api_key_env: Some("OPENROUTER_API_KEY".into()),
+                default_model: "deepseek-v4-flash:cloud".into(),
+            }),
+            _ => None,
+        }
+    }
+
+    /// The provider-scoped API-key env var (e.g. `OPENROUTER_API_KEY`).
+    ///
+    /// Prefers a config-declared `api_key_env`; falls back to the built-in
+    /// mapping for known providers, then a conventional `{NAME}_API_KEY`.
+    fn key_env_var(&self) -> Cow<'_, str> {
+        if let Some(env) = &self.api_key_env {
+            return Cow::Borrowed(env.as_str());
+        }
+        match self.name.as_str() {
+            "openrouter" => Cow::Borrowed("OPENROUTER_API_KEY"),
+            "ollama" => Cow::Borrowed("OLLAMA_API_KEY"),
+            other => Cow::Owned(format!("{}_API_KEY", other.to_uppercase())),
+        }
+    }
+
+    /// Fill `api_key` from env if unset.
+    ///
+    /// Precedence (first non-empty wins):
+    /// 1. Config-file `api_key` already on `self` — **not** overridden by env
+    /// 2. `RAVEN_API_KEY` (universal override)
+    /// 3. Provider-scoped var (`api_key_env` or built-in / conventional name)
+    ///
+    /// Empty/whitespace env values are treated as absent — an empty
+    /// `RAVEN_API_KEY` must NOT shadow the provider-scoped var. Prefer env vars
+    /// over a committed config `api_key` so secrets stay out of the file; once
+    /// a literal `api_key` is set in TOML it wins for that provider.
+    pub fn resolve_key(mut self) -> Provider {
+        if self.api_key.is_none() {
+            let universal = std::env::var("RAVEN_API_KEY").ok();
+            let scoped = std::env::var(self.key_env_var().as_ref()).ok();
+            self.api_key = Self::pick_key(universal, scoped);
+        }
+        self
+    }
+
+    /// Pure key-selection helper (no env access) so it is trivially testable
+    /// without mutating process-global env vars. `universal` wins unless it is
+    /// empty/whitespace, in which case `scoped` is used. Both are trimmed.
+    fn pick_key(universal: Option<String>, scoped: Option<String>) -> Option<String> {
+        let clean = |s: Option<String>| s.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+        clean(universal).or_else(|| clean(scoped))
+    }
+}
+
 /// Maximum number of characters read from an AGENTS.md-style file.
 const MAX_AGENTS_MD_CHARS: usize = 8000;
 
@@ -212,43 +310,6 @@ fn truncate_agents_md(content: &str) -> String {
     } else {
         content.to_string()
     }
-}
-
-/// Default model name: `RAVEN_MODEL` env var, else `OLLAMA_MODEL`, else `gemma4:latest`.
-pub fn default_model() -> String {
-    std::env::var("RAVEN_MODEL")
-        .or_else(|_| std::env::var("OLLAMA_MODEL"))
-        .unwrap_or_else(|_| "gemma4:latest".into())
-}
-
-/// Default OpenAI-compatible base URL: `RAVEN_HOST` env var, else `OLLAMA_HOST`, else `http://localhost:11434/v1`.
-pub fn default_base_url() -> String {
-    std::env::var("RAVEN_HOST")
-        .or_else(|_| std::env::var("OLLAMA_HOST"))
-        .unwrap_or_else(|_| "http://localhost:11434/v1".into())
-}
-
-/// Read the API key from common env vars. Empty/whitespace strings are treated as absent.
-///
-/// Order: `RAVEN_API_KEY` → `OLLAMA_API_KEY` → `OPENROUTER_API_KEY` →
-/// `XAI_API_KEY` → `OPENAI_API_KEY`.
-pub fn default_api_key() -> Option<String> {
-    const KEYS: &[&str] = &[
-        "RAVEN_API_KEY",
-        "OLLAMA_API_KEY",
-        "OPENROUTER_API_KEY",
-        "XAI_API_KEY",
-        "OPENAI_API_KEY",
-    ];
-    for name in KEYS {
-        if let Ok(s) = std::env::var(name) {
-            let t = s.trim().to_string();
-            if !t.is_empty() {
-                return Some(t);
-            }
-        }
-    }
-    None
 }
 
 /// Load `KEY=VALUE` pairs from a `.env` file into the process environment.
@@ -354,13 +415,44 @@ pub fn env_searxng_engines() -> Option<Vec<String>> {
 
 // ── Config file ────────────────────────────────────────────────────────
 
+/// TOML-declared provider definition (the `[providers.<name>]` table).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ProviderConfig {
+    pub base_url: Option<String>,
+    pub api_key: Option<String>,
+    /// Name of the env var holding this provider's API key (e.g.
+    /// `OPENROUTER_API_KEY`). Only the name is stored in config — the secret
+    /// itself stays in the environment.
+    pub api_key_env: Option<String>,
+    pub default_model: Option<String>,
+}
+
+impl ProviderConfig {
+    /// Field-wise merge: each `Some` field on `overlay` replaces the base;
+    /// `None` leaves the base value. Used when workspace config overlays
+    /// global `[providers.<name>]` tables so a partial workspace entry does
+    /// not wipe global `api_key_env` / `default_model` / etc.
+    fn merge(self, overlay: ProviderConfig) -> ProviderConfig {
+        ProviderConfig {
+            base_url: overlay.base_url.or(self.base_url),
+            api_key: overlay.api_key.or(self.api_key),
+            api_key_env: overlay.api_key_env.or(self.api_key_env),
+            default_model: overlay.default_model.or(self.default_model),
+        }
+    }
+}
+
 /// Config file loaded from `~/.raven/config.toml` or `.raven/config.toml`.
 ///
 /// All fields optional — only overrides built-in defaults when present.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ConfigFile {
-    pub model: Option<String>,
-    pub host: Option<String>,
+    /// Active provider name (e.g. `ollama`, `openrouter`). Resolved against
+    /// `providers` or the built-in presets.
+    pub provider: Option<String>,
+    /// Named provider definitions. Keys are provider names.
+    #[serde(default)]
+    pub providers: std::collections::HashMap<String, ProviderConfig>,
     pub context_window: Option<usize>,
     pub compact_threshold: Option<f32>,
     pub max_iterations: Option<usize>,
@@ -393,10 +485,25 @@ pub fn load_config_file(workspace: &std::path::Path) -> ConfigFile {
         .map(|p| load_toml_file(&p))
         .unwrap_or_default();
 
-    // Merge: workspace overrides global
+    // Merge: workspace overrides global. Provider tables merge field-wise so a
+    // workspace entry that only sets `base_url` keeps global `api_key_env` /
+    // `default_model` rather than wiping them with `None`.
     ConfigFile {
-        model: ws.model.or(global.model),
-        host: ws.host.or(global.host),
+        provider: ws.provider.or(global.provider),
+        providers: {
+            let mut m = global.providers;
+            for (k, overlay) in ws.providers {
+                match m.remove(&k) {
+                    Some(base) => {
+                        m.insert(k, base.merge(overlay));
+                    }
+                    None => {
+                        m.insert(k, overlay);
+                    }
+                }
+            }
+            m
+        },
         context_window: ws.context_window.or(global.context_window),
         compact_threshold: ws.compact_threshold.or(global.compact_threshold),
         max_iterations: ws.max_iterations.or(global.max_iterations),
@@ -418,6 +525,49 @@ fn load_toml_file(path: &std::path::Path) -> ConfigFile {
         }),
         Err(_) => ConfigFile::default(),
     }
+}
+
+/// Resolve the active provider from an explicit CLI name, the config file,
+/// and env. Precedence: `explicit` (CLI) > `RAVEN_PROVIDER` env >
+/// `cfg.provider` > built-in default `ollama`.
+///
+/// The named provider is looked up in `cfg.providers` first, then the
+/// built-in presets. Unknown names fall back to the built-in `ollama` with a
+/// warning (never a hard error — a bad name shouldn't brick the session).
+pub fn resolve_provider(cfg: &ConfigFile, explicit: Option<String>) -> Provider {
+    let name = explicit
+        .or_else(|| std::env::var("RAVEN_PROVIDER").ok())
+        .or_else(|| cfg.provider.clone())
+        .unwrap_or_else(|| "ollama".into());
+
+    let p = match cfg.providers.get(&name) {
+        Some(pc) => Provider {
+            name: name.clone(),
+            base_url: pc.base_url.clone().unwrap_or_else(|| {
+                Provider::builtin(&name)
+                    .map(|b| b.base_url)
+                    .unwrap_or_else(|| "http://localhost:11434/v1".into())
+            }),
+            api_key: pc.api_key.clone(),
+            api_key_env: pc
+                .api_key_env
+                .clone()
+                .or_else(|| Provider::builtin(&name).and_then(|b| b.api_key_env)),
+            default_model: pc.default_model.clone().unwrap_or_else(|| {
+                Provider::builtin(&name)
+                    .map(|b| b.default_model)
+                    .unwrap_or_else(|| "gemma4:latest".into())
+            }),
+        },
+        None => match Provider::builtin(&name) {
+            Some(b) => b,
+            None => {
+                tracing::warn!("unknown provider {name:?}; falling back to builtin ollama");
+                Provider::builtin("ollama").expect("ollama builtin exists")
+            }
+        },
+    };
+    p.resolve_key()
 }
 #[cfg(test)]
 mod tests {
@@ -623,22 +773,6 @@ mod tests {
     }
 
     #[test]
-    fn default_api_key_empty_is_none() {
-        let key: Option<String> = Some("".to_string())
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
-        assert!(key.is_none());
-    }
-
-    #[test]
-    fn default_api_key_whitespace_is_none() {
-        let key: Option<String> = Some("   \t ".to_string())
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
-        assert!(key.is_none());
-    }
-
-    #[test]
     fn load_dotenv_sets_missing_keys_only() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join(".env");
@@ -676,14 +810,14 @@ mod tests {
         std::fs::create_dir_all(&cfg_dir).unwrap();
         std::fs::write(
             cfg_dir.join("config.toml"),
-            r#"model = "test-model"
+            r#"provider = "openrouter"
 compact_threshold = 0.5
 max_iterations = 10
 "#,
         )
         .unwrap();
         let cfg = load_config_file(tmp.path());
-        assert_eq!(cfg.model.as_deref(), Some("test-model"));
+        assert_eq!(cfg.provider.as_deref(), Some("openrouter"));
         assert_eq!(cfg.compact_threshold, Some(0.5));
         assert_eq!(cfg.max_iterations, Some(10));
     }
@@ -713,8 +847,8 @@ max_iterations = 10
             Some(h) => std::env::set_var("HOME", h),
             None => std::env::remove_var("HOME"),
         }
-        assert!(cfg.model.is_none());
-        assert!(cfg.host.is_none());
+        assert!(cfg.provider.is_none());
+        assert!(cfg.providers.is_empty());
     }
 
     #[test]
@@ -776,5 +910,268 @@ max_iterations = 10
             Some(v) => std::env::set_var("RAVEN_SEARXNG_ENGINES", v),
             None => std::env::remove_var("RAVEN_SEARXNG_ENGINES"),
         }
+    }
+
+    #[test]
+    fn builtin_providers_have_expected_defaults() {
+        let ollama = Provider::builtin("ollama").expect("ollama builtin");
+        assert_eq!(ollama.base_url, "http://localhost:11434/v1");
+        assert_eq!(ollama.default_model, "gemma4:latest");
+        assert!(ollama.api_key.is_none());
+
+        let or = Provider::builtin("openrouter").expect("openrouter builtin");
+        assert_eq!(or.base_url, "https://openrouter.ai/api/v1");
+        assert_eq!(or.default_model, "deepseek-v4-flash:cloud");
+        assert!(
+            or.api_key.is_none(),
+            "key comes from env/config, not the preset"
+        );
+    }
+
+    #[test]
+    fn unknown_builtin_provider_is_none() {
+        assert!(Provider::builtin("nope").is_none());
+    }
+
+    #[test]
+    fn config_file_parses_providers_table() {
+        let toml_str = r#"
+            provider = "openrouter"
+            [providers.ollama]
+            base_url = "http://gpu-box:11434/v1"
+            default_model = "qwen2.5-coder:14b"
+            [providers.openrouter]
+            base_url = "https://openrouter.ai/api/v1"
+            default_model = "deepseek-v4-pro:cloud"
+        "#;
+        let cfg: ConfigFile = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.provider.as_deref(), Some("openrouter"));
+        let ollama = cfg.providers.get("ollama").unwrap();
+        assert_eq!(ollama.base_url.as_deref(), Some("http://gpu-box:11434/v1"));
+        assert_eq!(ollama.default_model.as_deref(), Some("qwen2.5-coder:14b"));
+    }
+
+    #[test]
+    fn resolve_provider_merges_config_over_builtin() {
+        let mut cfg = ConfigFile {
+            provider: Some("ollama".into()),
+            ..Default::default()
+        };
+        cfg.providers.insert(
+            "ollama".into(),
+            ProviderConfig {
+                base_url: Some("http://gpu-box:11434/v1".into()),
+                default_model: Some("qwen2.5-coder:14b".into()),
+                ..Default::default()
+            },
+        );
+        let p = resolve_provider(&cfg, None);
+        assert_eq!(p.name, "ollama");
+        assert_eq!(p.base_url, "http://gpu-box:11434/v1");
+        assert_eq!(p.default_model, "qwen2.5-coder:14b");
+    }
+
+    #[test]
+    fn resolve_provider_falls_back_to_builtin_default() {
+        let cfg = ConfigFile::default();
+        let p = resolve_provider(&cfg, None);
+        assert_eq!(p.name, "ollama");
+        assert_eq!(p.base_url, "http://localhost:11434/v1");
+    }
+
+    #[test]
+    fn resolve_provider_explicit_wins_over_config() {
+        let cfg = ConfigFile {
+            provider: Some("ollama".into()),
+            ..Default::default()
+        };
+        let p = resolve_provider(&cfg, Some("openrouter".into()));
+        assert_eq!(p.name, "openrouter");
+        assert_eq!(p.base_url, "https://openrouter.ai/api/v1");
+    }
+
+    #[test]
+    fn resolve_provider_unknown_falls_back_to_ollama() {
+        let cfg = ConfigFile::default();
+        let p = resolve_provider(&cfg, Some("nope".into()));
+        assert_eq!(p.name, "ollama");
+        assert_eq!(p.base_url, "http://localhost:11434/v1");
+    }
+
+    #[test]
+    fn pick_key_universal_wins_over_provider_scoped() {
+        assert_eq!(
+            Provider::pick_key(Some("sk-universal".into()), Some("sk-or".into())),
+            Some("sk-universal".into())
+        );
+    }
+
+    #[test]
+    fn pick_key_empty_universal_does_not_shadow_provider_scoped() {
+        // An empty/whitespace RAVEN_API_KEY must NOT block the provider-scoped
+        // var from being used.
+        assert_eq!(
+            Provider::pick_key(Some("   ".into()), Some("sk-or".into())),
+            Some("sk-or".into())
+        );
+    }
+
+    #[test]
+    fn pick_key_trims_and_drops_empty() {
+        assert_eq!(Provider::pick_key(Some("  ".into()), None), None);
+        assert_eq!(
+            Provider::pick_key(None, Some("  sk-or  ".into())),
+            Some("sk-or".into())
+        );
+        assert_eq!(Provider::pick_key(None, None), None);
+    }
+
+    #[test]
+    fn builtin_providers_declare_key_env() {
+        let ollama = Provider::builtin("ollama").expect("ollama builtin");
+        assert_eq!(ollama.api_key_env.as_deref(), Some("OLLAMA_API_KEY"));
+        let or = Provider::builtin("openrouter").expect("openrouter builtin");
+        assert_eq!(or.api_key_env.as_deref(), Some("OPENROUTER_API_KEY"));
+    }
+
+    #[test]
+    fn config_api_key_env_overrides_builtin_mapping() {
+        // A config-declared api_key_env must win over the built-in mapping.
+        let mut cfg = ConfigFile {
+            provider: Some("openrouter".into()),
+            ..Default::default()
+        };
+        cfg.providers.insert(
+            "openrouter".into(),
+            ProviderConfig {
+                api_key_env: Some("MY_OR_KEY".into()),
+                ..Default::default()
+            },
+        );
+        let p = resolve_provider(&cfg, None);
+        assert_eq!(p.api_key_env.as_deref(), Some("MY_OR_KEY"));
+    }
+
+    #[test]
+    fn config_api_key_env_falls_back_to_builtin_when_unset() {
+        // No api_key_env in config → the built-in mapping is used.
+        let mut cfg = ConfigFile {
+            provider: Some("openrouter".into()),
+            ..Default::default()
+        };
+        cfg.providers.insert(
+            "openrouter".into(),
+            ProviderConfig {
+                base_url: Some("https://openrouter.ai/api/v1".into()),
+                ..Default::default()
+            },
+        );
+        let p = resolve_provider(&cfg, None);
+        assert_eq!(p.api_key_env.as_deref(), Some("OPENROUTER_API_KEY"));
+    }
+
+    #[test]
+    fn unknown_provider_key_env_uses_conventional_name() {
+        // A brand-new provider with no builtin and no api_key_env falls back to
+        // the conventional {NAME}_API_KEY so it still works without a code edit.
+        let p = Provider {
+            name: "groq".into(),
+            base_url: "https://api.groq.com/openai/v1".into(),
+            api_key: None,
+            api_key_env: None,
+            default_model: "llama-3.3-70b-versatile".into(),
+        };
+        assert_eq!(p.key_env_var().as_ref(), "GROQ_API_KEY");
+    }
+
+    #[test]
+    fn resolve_key_uses_declared_api_key_env() {
+        // The declared api_key_env must be the var read for the key.
+        let p = Provider {
+            name: "custom".into(),
+            base_url: "https://example.com/v1".into(),
+            api_key: None,
+            api_key_env: Some("CUSTOM_API_KEY".into()),
+            default_model: "m".into(),
+        };
+        // No env var set → no key (proves it reads CUSTOM_API_KEY, not a
+        // hardcoded one). The pick_key tests cover the selection logic.
+        assert_eq!(p.resolve_key().api_key, None);
+    }
+
+    #[test]
+    fn provider_config_merge_overlay_wins_per_field() {
+        let base = ProviderConfig {
+            base_url: Some("http://global:11434/v1".into()),
+            api_key: None,
+            api_key_env: Some("OLLAMA_API_KEY".into()),
+            default_model: Some("gemma4:latest".into()),
+        };
+        let overlay = ProviderConfig {
+            base_url: Some("http://workspace:11434/v1".into()),
+            ..Default::default()
+        };
+        let merged = base.merge(overlay);
+        assert_eq!(
+            merged.base_url.as_deref(),
+            Some("http://workspace:11434/v1")
+        );
+        assert_eq!(merged.api_key_env.as_deref(), Some("OLLAMA_API_KEY"));
+        assert_eq!(merged.default_model.as_deref(), Some("gemma4:latest"));
+        assert!(merged.api_key.is_none());
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn load_config_file_merges_provider_tables_fieldwise() {
+        // Workspace only overrides base_url; global api_key_env + default_model
+        // must survive (not wiped by a full HashMap replace).
+        //
+        // Isolate HOME so a real user global config doesn't leak in. This test
+        // is Unix-only: `dirs::home_dir()` reads `HOME` on Unix but a different
+        // set of vars on Windows, so the home-dir redirection is not portable.
+        // The merge logic itself is covered cross-platform by
+        // `provider_config_merge_overlay_wins_per_field`.
+        let original_home = std::env::var_os("HOME");
+        let home = tempfile::tempdir().unwrap();
+        std::env::set_var("HOME", home.path());
+        let global_dir = home.path().join(".raven");
+        std::fs::create_dir_all(&global_dir).unwrap();
+        std::fs::write(
+            global_dir.join("config.toml"),
+            r#"
+[providers.ollama]
+base_url = "http://global:11434/v1"
+api_key_env = "OLLAMA_API_KEY"
+default_model = "gemma4:latest"
+"#,
+        )
+        .unwrap();
+
+        let ws = tempfile::tempdir().unwrap();
+        let ws_dir = ws.path().join(".raven");
+        std::fs::create_dir_all(&ws_dir).unwrap();
+        std::fs::write(
+            ws_dir.join("config.toml"),
+            r#"
+[providers.ollama]
+base_url = "http://workspace:11434/v1"
+"#,
+        )
+        .unwrap();
+
+        let cfg = load_config_file(ws.path());
+        match original_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+
+        let ollama = cfg.providers.get("ollama").expect("ollama provider");
+        assert_eq!(
+            ollama.base_url.as_deref(),
+            Some("http://workspace:11434/v1")
+        );
+        assert_eq!(ollama.api_key_env.as_deref(), Some("OLLAMA_API_KEY"));
+        assert_eq!(ollama.default_model.as_deref(), Some("gemma4:latest"));
     }
 }

@@ -78,12 +78,22 @@ fn session_persistence_roundtrip() {
 
     // Point at an unreachable host so the run fails fast but still persists
     // the session metadata. Force agent mode to keep the run single-turn.
+    // The provider's base_url comes from the workspace config (the old
+    // --host flag was removed in favor of named providers).
+    let cfg_dir = ws.path().join(".raven");
+    std::fs::create_dir_all(&cfg_dir).unwrap();
+    std::fs::write(
+        cfg_dir.join("config.toml"),
+        "[providers.unreachable]\nbase_url = \"http://127.0.0.1:1/v1\"\n",
+    )
+    .unwrap();
+
     let (out, _, _) = run(&[
         "--headless",
         "--mode",
         "agent",
-        "--host",
-        "http://127.0.0.1:1/v1",
+        "--provider",
+        "unreachable",
         "-w",
         ws_path,
         "-p",

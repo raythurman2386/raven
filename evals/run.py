@@ -294,6 +294,21 @@ def run_case(
         stdout_path = Path(tmp) / "stdout.txt"
         stderr_path = Path(tmp) / "stderr.txt"
 
+        # The raven CLI no longer takes --host/--api-key. Declare the eval
+        # endpoint as a named provider in the workspace config and select it
+        # with --provider eval. The API key is passed via env (RAVEN_API_KEY).
+        cfg_dir = work / ".raven"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        cfg_lines = [
+            'provider = "eval"',
+            "",
+            "[providers.eval]",
+            f'base_url = "{host}"',
+        ]
+        if api_key:
+            cfg_lines.append(f'api_key = "{api_key}"')
+        (cfg_dir / "config.toml").write_text("\n".join(cfg_lines) + "\n", encoding="utf-8")
+
         cmd = [
             str(raven),
             "--headless",
@@ -301,8 +316,8 @@ def run_case(
             str(work),
             "--model",
             model,
-            "--host",
-            host,
+            "--provider",
+            "eval",
             "--mode",
             meta.mode,
             "-p",

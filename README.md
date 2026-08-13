@@ -157,15 +157,19 @@ raven --no-stream -p "Hello"
 Layered config, highest priority wins:
 
 1. **CLI flags** (highest)
-2. **Environment variables** (`RAVEN_*` prefix, with `OLLAMA_*` / `OG_*` fallbacks)
+2. **Environment variables** (`RAVEN_*` prefix, with `OG_*` fallbacks)
 3. **Workspace config** (`.raven/config.toml`)
 4. **Global config** (`~/.raven/config.toml`)
 5. **Built-in defaults** (lowest)
 
 ```toml
 # ~/.raven/config.toml or .raven/config.toml
-model = "gemma4:latest"
-host = "http://localhost:11434/v1"
+provider = "ollama"
+
+[providers.ollama]
+base_url = "http://localhost:11434/v1"
+default_model = "gemma4:latest"
+
 context_window = 131072
 compact_threshold = 0.75
 max_iterations = 30
@@ -177,13 +181,14 @@ theme = "ravenwood"
 
 ### Environment variables
 
-`RAVEN_*` vars take priority; legacy `OLLAMA_*` / `OG_*` vars are accepted as fallbacks.
+`RAVEN_*` vars take priority; legacy `OG_*` vars are accepted as fallbacks.
 
 | Variable | Description | Default |
 |---|---|---|
-| `RAVEN_MODEL` / `OLLAMA_MODEL` | Default model name | `gemma4:latest` |
-| `RAVEN_HOST` / `OLLAMA_HOST` | API endpoint | `http://localhost:11434/v1` |
-| `RAVEN_API_KEY` / `OLLAMA_API_KEY` | Bearer token for authenticated hosts | none |
+| `RAVEN_PROVIDER` | Active provider name | `ollama` |
+| `RAVEN_API_KEY` | Universal Bearer token override for the active provider | none |
+| `OPENROUTER_API_KEY` | Bearer token for the `openrouter` provider | none |
+| `OLLAMA_API_KEY` | Bearer token for the `ollama` provider | none |
 | `RAVEN_CONTEXT_WINDOW` / `OG_CONTEXT_WINDOW` | Override context window size | inferred from model |
 | `RAVEN_COMPACT_THRESHOLD` / `OG_COMPACT_THRESHOLD` | Compaction trigger (0.0–1.0) | 0.75 |
 | `RAVEN_MAX_ITER` / `OG_MAX_ITER` | Max agent iterations per run | 30 |

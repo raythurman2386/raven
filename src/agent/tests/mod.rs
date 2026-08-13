@@ -77,7 +77,7 @@ fn extract_content_length(headers: &str) -> Option<usize> {
 /// each time, until the connection closes. Once the scripted responses are
 /// exhausted, serve a benign empty fallback so an extra request (a verify
 /// retry, a timing shift) never hits a connection-refused → retry →
-/// `OllamaUnreachable` path.
+/// `ProviderUnreachable` path.
 async fn serve_mock(
     listener: &tokio::net::TcpListener,
     responses: Vec<(u16, &'static str, &'static str)>,
@@ -172,10 +172,11 @@ async fn spawn_mock_status(
 /// Returns a `Settings` configured for tests against a mock server.
 #[allow(dead_code)]
 fn settings_for(workspace: &std::path::Path, base_url: &str) -> crate::config::Settings {
+    let mut provider = crate::config::Provider::builtin("ollama").expect("ollama builtin");
+    provider.base_url = base_url.into();
     crate::config::Settings {
         model: "mock-model".into(),
-        base_url: base_url.into(),
-        api_key: None,
+        provider,
         workspace: workspace.to_path_buf(),
         max_iterations: 5,
         mode: Mode::Agent,

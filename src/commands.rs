@@ -71,6 +71,13 @@ pub fn commands() -> Vec<CommandSpec> {
             arg_help: Some("<model>"),
         },
         CommandSpec {
+            name: "provider",
+            aliases: &["p"],
+            summary:
+                "Switch the provider for subsequent turns: /provider <name> (or /provider to list)",
+            arg_help: Some("[name]"),
+        },
+        CommandSpec {
             name: "quit",
             aliases: &["q", "exit"],
             summary: "Quit Raven",
@@ -218,6 +225,21 @@ mod tests {
         assert_eq!(parse("/stop").unwrap().name, "stop");
         assert_eq!(parse("/s").unwrap().name, "stop");
         assert!(help_text().contains("/stop"), "help should list /stop");
+    }
+
+    #[test]
+    fn provider_command_registered() {
+        let pc = parse("/provider openrouter").unwrap();
+        assert_eq!(pc.name, "provider");
+        assert_eq!(pc.args, "openrouter");
+        // /p is an alias for /provider
+        assert_eq!(parse("/p").unwrap().name, "provider");
+        assert!(
+            help_text().contains("/provider"),
+            "help should list /provider"
+        );
+        let h = command_help("provider").expect("/provider has help");
+        assert!(h.contains("Switch the provider"), "help text: {h}");
     }
 
     #[test]
