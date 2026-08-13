@@ -4,6 +4,34 @@ All notable changes to Raven are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-08-13
+
+### Fixed
+
+- **Interrupted TUI turns can no longer steal the next turn's handle** —
+  the session used one shared event channel, so a leftover `Done` from an
+  aborted send could `await` the successor and wipe session history. Each
+  turn now owns its own channel; abort drops the old receiver.
+- **Enter no longer freezes the TUI before the user bubble paints** — each
+  send constructed a new `Agent` on the UI thread, which rebuilt the repo
+  map by walking the whole workspace. A typical crate was cheap; opening
+  Raven on a parent folder of many repos (e.g. `~/Work`) stalled every
+  submit. Construction now runs off-thread, the HTTP client is reused, and
+  the repo map is cached (and the walk is capped) until a file edit
+  invalidates it.
+- **`exit=10` no longer counts as a passing test** — verify/lint used
+  `contains("exit=0")`, so exit codes 10/20/30 were treated as success.
+- **`save_all_messages` is atomic** — it used in-place truncate; a crash
+  mid-write could leave a partial JSONL. It now uses the same temp+rename
+  path as `append_message`.
+- **Headless plan revise actually executes the revised plan** — after
+  `[r]evise` + approve, execution still used the first plan and first
+  message list.
+- **`/provider` lists known names** and rejects unknown names instead of
+  silently switching to builtin ollama.
+- **Missing-file tool errors are not retry-nudged**; HTTP error bodies
+  truncate on a UTF-8 boundary instead of panicking.
+
 ## [0.2.1] - 2026-08-13
 
 ### Added
@@ -462,7 +490,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Ratatui 0.30, crossterm 0.29.
 
-[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/raythurman2386/raven/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/raythurman2386/raven/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/raythurman2386/raven/compare/v0.1.10...v0.2.0
 [0.1.10]: https://github.com/raythurman2386/raven/compare/v0.1.9...v0.1.10
