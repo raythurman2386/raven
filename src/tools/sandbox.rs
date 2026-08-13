@@ -1611,7 +1611,7 @@ pub(crate) fn spawn_confined(
     cmd: &mut Command,
     #[cfg_attr(not(unix), allow(unused_variables))] workspace: &Path,
     #[cfg_attr(not(unix), allow(unused_variables))] extra_rw: &[PathBuf],
-    skip_network_block: bool,
+    #[cfg_attr(not(unix), allow(unused_variables))] skip_network_block: bool,
 ) -> Result<ConfinedChild> {
     #[cfg(unix)]
     {
