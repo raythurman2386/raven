@@ -675,10 +675,12 @@ impl Agent {
                         // Check if this looks like a model-not-found error
                         if text.contains("model") && text.to_lowercase().contains("not found") {
                             return Err(AgentError::ModelNotFound {
+                                provider: self.settings.provider.name.clone(),
                                 model: self.settings.model.clone(),
                             });
                         }
                         return Err(AgentError::HttpError {
+                            provider: self.settings.provider.name.clone(),
                             status,
                             body: cap_http_body(text),
                         });
@@ -699,6 +701,7 @@ impl Agent {
                     // Other 4xx = don't retry
                     let text = resp.text().await.unwrap_or_default();
                     return Err(AgentError::HttpError {
+                        provider: self.settings.provider.name.clone(),
                         status,
                         body: cap_http_body(text),
                     });
@@ -715,13 +718,15 @@ impl Agent {
                         delay *= 2;
                         continue;
                     }
-                    return Err(AgentError::OllamaUnreachable {
+                    return Err(AgentError::ProviderUnreachable {
+                        provider: self.settings.provider.name.clone(),
                         url: url.to_string(),
                         source: e,
                     });
                 }
                 Err(e) => {
-                    return Err(AgentError::OllamaUnreachable {
+                    return Err(AgentError::ProviderUnreachable {
+                        provider: self.settings.provider.name.clone(),
                         url: url.to_string(),
                         source: e,
                     });
@@ -730,6 +735,7 @@ impl Agent {
         }
         // All retries exhausted without a definitive success or error.
         Err(AgentError::HttpError {
+            provider: self.settings.provider.name.clone(),
             status: 503,
             body: "retries exhausted — all attempts failed with transient errors".into(),
         })

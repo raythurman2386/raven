@@ -77,7 +77,7 @@ fn extract_content_length(headers: &str) -> Option<usize> {
 /// each time, until the connection closes. Once the scripted responses are
 /// exhausted, serve a benign empty fallback so an extra request (a verify
 /// retry, a timing shift) never hits a connection-refused → retry →
-/// `OllamaUnreachable` path.
+/// `ProviderUnreachable` path.
 async fn serve_mock(
     listener: &tokio::net::TcpListener,
     responses: Vec<(u16, &'static str, &'static str)>,

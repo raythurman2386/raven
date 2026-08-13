@@ -79,21 +79,29 @@ impl ToolError {
 /// Errors that can occur during the agent loop.
 #[derive(Debug, Error)]
 pub enum AgentError {
-    /// Could not connect to the Ollama endpoint (it may not be running).
-    #[error("Ollama unreachable at {url}: {source}")]
-    OllamaUnreachable {
+    /// Could not connect to the provider endpoint (it may not be running).
+    #[error("{provider} unreachable at {url}: {source}")]
+    ProviderUnreachable {
+        provider: String,
         url: String,
         #[source]
         source: reqwest::Error,
     },
 
-    /// The model name was not found on the server. The user should pull it.
-    #[error("Model '{model}' not found. Pull it with: ollama pull {model}")]
-    ModelNotFound { model: String },
+    /// The model name was not found on the server.
+    ///
+    /// Display text is provider-aware: local Ollama gets an `ollama pull`
+    /// hint; every other provider gets a generic check-the-model-id message.
+    #[error("{}", model_not_found_msg(.provider, .model))]
+    ModelNotFound { provider: String, model: String },
 
     /// A non-retryable HTTP error (4xx other than 429).
-    #[error("HTTP {status} from Ollama: {body}")]
-    HttpError { status: u16, body: String },
+    #[error("HTTP {status} from {provider}: {body}")]
+    HttpError {
+        provider: String,
+        status: u16,
+        body: String,
+    },
 
     /// The agent exhausted its iteration budget without finishing.
     ///
@@ -102,6 +110,14 @@ pub enum AgentError {
     /// enum variant for external callers that may still construct it.
     #[error("Max iterations ({0}) reached without completion")]
     MaxIterations(usize),
+}
+
+fn model_not_found_msg(provider: &str, model: &str) -> String {
+    if provider == "ollama" {
+        format!("Model '{model}' not found on ollama. Pull it with: ollama pull {model}")
+    } else {
+        format!("Model '{model}' not found on {provider}. Check the model id for this provider.")
+    }
 }
 
 #[cfg(test)]
@@ -176,5 +192,51 @@ mod tests {
             "Broken pipe",
         );
         assert!(!err.is_transient());
+    }
+
+    #[test]
+    fn model_not_found_ollama_suggests_pull() {
+        let err = AgentError::ModelNotFound {
+            provider: "ollama".into(),
+            model: "gemma4:latest".into(),
+        };
+        let s = err.to_string();
+        assert!(s.contains("ollama"), "{s}");
+        assert!(s.contains("gemma4:latest"), "{s}");
+        assert!(s.contains("ollama pull gemma4:latest"), "{s}");
+    }
+
+    #[test]
+    fn model_not_found_other_provider_has_no_ollama_hint() {
+        let err = AgentError::ModelNotFound {
+            provider: "openrouter".into(),
+            model: "deepseek-v4-flash:cloud".into(),
+        };
+        let s = err.to_string();
+        assert!(s.contains("openrouter"), "{s}");
+        assert!(s.contains("deepseek-v4-flash:cloud"), "{s}");
+        assert!(!s.contains("ollama pull"), "{s}");
+        assert!(s.contains("Check the model id"), "{s}");
+    }
+
+    #[test]
+    fn provider_unreachable_display_includes_provider_and_url() {
+        // Obtain a real `reqwest::Error` without hitting the network: build()
+        // rejects an invalid URL at request-construction time.
+        let err = reqwest::Client::new()
+            .get("://not-a-valid-url")
+            .build()
+            .expect_err("invalid URL must fail at build");
+        let agent_err = AgentError::ProviderUnreachable {
+            provider: "openrouter".into(),
+            url: "https://openrouter.ai/api/v1/chat/completions".into(),
+            source: err,
+        };
+        let s = agent_err.to_string();
+        assert!(s.starts_with("openrouter unreachable at "), "{s}");
+        assert!(
+            s.contains("https://openrouter.ai/api/v1/chat/completions"),
+            "{s}"
+        );
     }
 }
