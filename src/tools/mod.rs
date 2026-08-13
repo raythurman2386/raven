@@ -696,14 +696,23 @@ mod tests {
         let ws = tmp.path().canonicalize().unwrap();
         let sb = Sandbox::new(ws.clone());
         // A confined child (via run_shell) must not be able to read a file
-        // outside the Landlock allowlist. `/proc/version` is world-readable
-        // normally but is NOT in the allowlist (workspace, temp, HOME, /dev,
-        // /usr, /bin, /lib, /lib64, /etc), so Landlock should block it.
-        let out = sb.run_shell("cat /proc/version", 10).unwrap();
+        // outside the Landlock allowlist. `/proc` is now a legitimate RO grant
+        // (node/v8 reads /proc/self/status), so use a probe file in a sibling
+        // directory of the workspace instead — that is genuinely outside the
+        // allowlist (workspace, temp, HOME, /dev, /usr, /bin, /lib, /lib64,
+        // /etc, /proc).
+        let sibling = tmp.path().parent().unwrap().join("raven-probe-outside");
+        std::fs::create_dir_all(&sibling).unwrap();
+        let probe = sibling.join("secret.txt");
+        std::fs::write(&probe, "TOP SECRET").unwrap();
+        let out = sb
+            .run_shell(&format!("cat {}", probe.display()), 10)
+            .unwrap();
         assert!(
-            !out.contains("Linux version"),
+            !out.contains("TOP SECRET"),
             "confined child must not read outside Landlock allowlist: {out}"
         );
+        let _ = std::fs::remove_dir_all(&sibling);
     }
 
     #[test]
@@ -2145,22 +2154,33 @@ edition = "2021"
     }
 
     #[test]
-    fn run_tests_npm_project_disables_network_block() {
+    #[cfg(target_os = "linux")]
+    fn run_tests_npm_project_skips_seccomp_network_block() {
+        // Regression for Finding 26: the previous #137 fix set the exemption via
+        // `command.env(...)`, which a `pre_exec` closure cannot see (it reads the
+        // parent env before execve). So `run_tests` still SIGSYS-killed vitest/v8,
+        // which opens an AF_INET socket for coverage + worker IPC.
+        //
+        // This test genuinely exercises the seccomp path: an npm `test` script
+        // that binds an AF_INET socket (127.0.0.1) must SUCCEED under `run_tests`.
+        // With the block active the child is killed by SIGSYS (exit 159 / signal 31)
+        // and the output would contain "killed by signal"; with the exemption it
+        // prints OK and exits 0.
         let tmp = tempfile::tempdir().unwrap();
-        // Use node (not shell echo) so the test is cross-platform: on Windows
-        // `npm test` runs via cmd, which uses %VAR% not $VAR, so a shell echo
-        // would print the literal "$RAVEN_SANDBOX_NETWORK_BLOCK" and the
-        // assertion would fail. node reads the env var identically on both.
         std::fs::write(
             tmp.path().join("package.json"),
-            r#"{"scripts": {"test": "node -e \"console.log('RAVEN_SANDBOX_NETWORK_BLOCK=' + process.env.RAVEN_SANDBOX_NETWORK_BLOCK)\""}}"#,
+            r#"{"scripts": {"test": "node -e \"require('net').createServer(()=>{}).listen(0,'127.0.0.1',()=>{console.log('BIND_OK');process.exit(0)})\""}}"#,
         )
         .unwrap();
         let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
         let out = sb.run_tests().unwrap();
         assert!(
-            out.contains("RAVEN_SANDBOX_NETWORK_BLOCK=0"),
-            "npm run_tests must set RAVEN_SANDBOX_NETWORK_BLOCK=0: {out}"
+            !out.contains("killed by signal"),
+            "npm run_tests must skip the seccomp network block so vitest/v8 can bind an AF_INET socket, got: {out}"
+        );
+        assert!(
+            out.contains("BIND_OK"),
+            "npm run_tests must let the child bind an AF_INET socket, got: {out}"
         );
     }
 }

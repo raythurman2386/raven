@@ -595,7 +595,13 @@ impl Sandbox {
         cmd.stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
-        run_confined(&mut cmd, &self.workspace, timeout_secs, &self.extra_rw)
+        run_confined(
+            &mut cmd,
+            &self.workspace,
+            timeout_secs,
+            &self.extra_rw,
+            false,
+        )
     }
 
     /// Regex content search (Grok Build `grep` semantics, pure-Rust fallback).
@@ -759,11 +765,21 @@ impl Sandbox {
             .stderr(std::process::Stdio::piped());
         setup_shell_env(&mut command, &self.workspace);
         command.env("CI", "true");
-        if matches!(runner, TestRunner::Npm) {
-            command.env("RAVEN_SANDBOX_NETWORK_BLOCK", "0");
-        }
-        let mut confined = spawn_confined(&mut command, &self.workspace, &self.extra_rw)
-            .context("spawn test runner")?;
+        // Sanctioned test runner: skip the seccomp network block for npm
+        // projects. vitest/v8 opens an AF_INET socket for V8 coverage + worker
+        // IPC, which the block SIGSYS-kills. This is a user-sanctioned command
+        // (not arbitrary model output), so the exemption does not weaken the
+        // exfiltration guarantee. The flag is threaded into the pre_exec
+        // closure — setting it via `command.env` alone is dead code because
+        // pre_exec reads the parent env, not the Command::env override.
+        let skip_network_block = matches!(runner, TestRunner::Npm);
+        let mut confined = spawn_confined(
+            &mut command,
+            &self.workspace,
+            &self.extra_rw,
+            skip_network_block,
+        )
+        .context("spawn test runner")?;
         match wait_for_child(&mut confined.child, 600) {
             Some((status, stdout, stderr)) => {
                 #[cfg(unix)]
@@ -879,7 +895,7 @@ impl Sandbox {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
         setup_shell_env(&mut command, &self.workspace);
-        let mut confined = spawn_confined(&mut command, &self.workspace, &self.extra_rw)
+        let mut confined = spawn_confined(&mut command, &self.workspace, &self.extra_rw, false)
             .context("spawn linter")?;
         match wait_for_child(&mut confined.child, 600) {
             Some((status, stdout, stderr)) => {
@@ -1084,7 +1100,7 @@ fn apply_landlock(workspace: &Path, extra_rw: &[PathBuf]) {
     // is a separate RO hierarchy. Package *caches* that would hardlink from
     // `~/.cargo` into `target/` are pinned under the workspace instead
     // ([`pin_build_tool_dirs`]).
-    let mut ro_paths: Vec<PathBuf> = vec!["/usr", "/bin", "/lib", "/lib64", "/etc"]
+    let mut ro_paths: Vec<PathBuf> = vec!["/usr", "/bin", "/lib", "/lib64", "/etc", "/proc"]
         .into_iter()
         .map(PathBuf::from)
         .collect();
@@ -1095,33 +1111,17 @@ fn apply_landlock(workspace: &Path, extra_rw: &[PathBuf]) {
             if home_canon != ws_canon && !ws_canon.starts_with(&home_canon) {
                 ro_paths.push(home_canon);
             } else if ws_canon.starts_with(&home_canon) {
-                // Workspace under HOME: grant sibling toolchain dirs RO.
-                for sub in [".rustup", ".cargo", ".config"] {
-                    let p = home_canon.join(sub);
-                    if p.exists() {
-                        if let Ok(c) = p.canonicalize() {
-                            if !c.starts_with(&ws_canon) {
-                                ro_paths.push(c);
-                            }
-                        }
-                    }
-                }
-                // Git needs to read the user's identity/credentials to commit
-                // (e.g. `~/.gitconfig`, `~/.git-credentials`). These are
-                // read-only grants — git only reads them, so they don't widen
-                // the write surface. Without them, `git_commit` fails with
-                // "unable to access '~/.gitconfig': Permission denied" for any
-                // workspace under $HOME.
-                for f in [".gitconfig", ".git-credentials"] {
-                    let p = home_canon.join(f);
-                    if p.exists() {
-                        if let Ok(c) = p.canonicalize() {
-                            if !c.starts_with(&ws_canon) {
-                                ro_paths.push(c);
-                            }
-                        }
-                    }
-                }
+                // Workspace under HOME: grant HOME itself RO. This covers the
+                // FULL path chain needed to exec toolchain binaries (e.g.
+                // ~/.local/share/mise/.../node). Landlock requires Execute on
+                // EVERY path component to exec a binary, so granting only the
+                // leaf toolchain dirs (as this branch previously did) left the
+                // intermediate components (~, ~/.local, ~/.local/share) ungranted
+                // and exec failed with EACCES. Granting HOME RO is read-only
+                // (no write-surface widening) and matches the non-HOME-workspace
+                // branch above. Build caches are pinned into the workspace via
+                // pin_build_tool_dirs, so no cross-hierarchy hardlink EXDEV risk.
+                ro_paths.push(home_canon);
             }
         }
     }
@@ -1174,12 +1174,22 @@ fn apply_landlock(workspace: &Path, extra_rw: &[PathBuf]) {
 /// Set `RAVEN_SANDBOX_NETWORK_BLOCK=0` to skip the filter entirely.
 /// Best-effort: if the arch is unsupported, we log and continue.
 #[cfg(target_os = "linux")]
-fn apply_seccomp_network_block() {
+fn apply_seccomp_network_block(skip_network_block: bool) {
     use seccompiler::{
         BpfProgram, SeccompAction, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition, SeccompFilter,
         SeccompRule,
     };
     use std::convert::TryInto;
+
+    // The exemption for sanctioned test runners (npm/vitest/v8 opens an AF_INET
+    // socket for V8 coverage + worker IPC) is passed in as a captured flag from
+    // the `pre_exec` closure. It CANNOT be read from `std::env::var` here — the
+    // closure runs after fork() but before execve(), so it sees the parent env,
+    // not any `Command::env()` override (which is only applied at execve).
+    if skip_network_block {
+        tracing::info!("seccomp: network block skipped for sanctioned test runner");
+        return;
+    }
 
     if std::env::var("RAVEN_SANDBOX_NETWORK_BLOCK").as_deref() == Ok("0") {
         tracing::info!("seccomp: network block disabled via RAVEN_SANDBOX_NETWORK_BLOCK=0");
@@ -1246,14 +1256,14 @@ fn apply_seccomp_network_block() {
 /// logs and continues on failure so a kernel that doesn't support a feature
 /// doesn't break the child.
 #[cfg(unix)]
-fn apply_os_confinement(workspace: &Path, extra_rw: &[PathBuf]) {
+fn apply_os_confinement(workspace: &Path, extra_rw: &[PathBuf], skip_network_block: bool) {
     unsafe { libc::setpgid(0, 0) };
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     apply_rlimits();
     #[cfg(target_os = "linux")]
     apply_landlock(workspace, extra_rw);
     #[cfg(target_os = "linux")]
-    apply_seccomp_network_block();
+    apply_seccomp_network_block(skip_network_block);
 }
 
 /// Build a platform-aware shell command.
@@ -1601,6 +1611,7 @@ pub(crate) fn spawn_confined(
     cmd: &mut Command,
     #[cfg_attr(not(unix), allow(unused_variables))] workspace: &Path,
     #[cfg_attr(not(unix), allow(unused_variables))] extra_rw: &[PathBuf],
+    skip_network_block: bool,
 ) -> Result<ConfinedChild> {
     #[cfg(unix)]
     {
@@ -1608,7 +1619,7 @@ pub(crate) fn spawn_confined(
         let extra = extra_rw.to_vec();
         unsafe {
             cmd.pre_exec(move || {
-                apply_os_confinement(&ws, &extra);
+                apply_os_confinement(&ws, &extra, skip_network_block);
                 Ok(())
             });
         }
@@ -1648,8 +1659,9 @@ pub(crate) fn run_confined(
     workspace: &Path,
     timeout_secs: u64,
     extra_rw: &[PathBuf],
+    skip_network_block: bool,
 ) -> Result<String> {
-    let mut confined = spawn_confined(cmd, workspace, extra_rw)?;
+    let mut confined = spawn_confined(cmd, workspace, extra_rw, skip_network_block)?;
     match wait_for_child(&mut confined.child, timeout_secs) {
         Some((status, stdout, stderr)) => {
             #[cfg(unix)]

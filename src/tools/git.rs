@@ -180,8 +180,8 @@ impl Sandbox {
             .current_dir(&self.workspace)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
-        let mut confined =
-            spawn_confined(&mut cmd, &self.workspace, &self.extra_rw).context("spawn git")?;
+        let mut confined = spawn_confined(&mut cmd, &self.workspace, &self.extra_rw, false)
+            .context("spawn git")?;
         match wait_for_child(&mut confined.child, 30) {
             Some((status, _, _)) => Ok(status.success()),
             None => Ok(false),
@@ -204,7 +204,7 @@ impl Sandbox {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
         let mut confined =
-            spawn_confined(&mut cmd, &self.workspace, extra_rw).context("spawn git")?;
+            spawn_confined(&mut cmd, &self.workspace, extra_rw, false).context("spawn git")?;
         match wait_for_child(&mut confined.child, 30) {
             Some((status, stdout, stderr)) => {
                 let mut out = String::new();
