@@ -4,11 +4,12 @@
 //! OpenAI-compatible `/chat/completions` response, normalizing the tool-call
 //! `arguments` field to a string via [`args_to_string`].
 //!
-//! The core parsing lives in [`process_stream_text`] and
-//! [`process_non_stream_json`], which operate on a raw SSE body string and a
-//! parsed JSON value respectively. The HTTP-facing [`Agent::process_stream`]
-//! and [`Agent::process_non_stream`] read a `reqwest::Response` and delegate
-//! to those, so the same parsing is exercised by the offline fake-model tests.
+//! Live HTTP streaming goes through [`StreamAccumulator`]: bytes are fed via
+//! [`push_chunk`] (newline-delimited), each complete line is parsed, and
+//! `TextDelta` events are emitted as tokens arrive. [`Agent::process_stream`]
+//! is the HTTP entry point; [`process_stream_text`] is a test-only helper that
+//! feeds a full SSE body line-by-line. Non-streaming responses use
+//! [`process_non_stream_json`].
 
 use futures_util::StreamExt;
 use serde_json::{json, Value};
@@ -29,22 +30,60 @@ pub(crate) struct ParsedCompletion {
     pub error: Option<String>,
 }
 
+/// Feed raw bytes into an SSE line buffer, parsing complete lines as `\n`
+/// boundaries are reached. Multi-byte UTF-8 is only decoded at line boundaries,
+/// so a character split across TCP chunks is never lossy-decoded mid-sequence.
+pub(crate) async fn push_chunk(
+    line_buf: &mut Vec<u8>,
+    chunk: &[u8],
+    acc: &mut StreamAccumulator,
+    tx: &mpsc::Sender<AgentEvent>,
+) {
+    for &b in chunk {
+        if b == b'\n' {
+            let line = String::from_utf8_lossy(line_buf);
+            acc.feed_line(&line, tx).await;
+            line_buf.clear();
+        } else {
+            line_buf.push(b);
+        }
+    }
+}
+
+/// Flush a trailing partial line (no final newline) into the accumulator.
+pub(crate) async fn flush_line_buf(
+    line_buf: &mut Vec<u8>,
+    acc: &mut StreamAccumulator,
+    tx: &mpsc::Sender<AgentEvent>,
+) {
+    if !line_buf.is_empty() {
+        let line = String::from_utf8_lossy(line_buf);
+        acc.feed_line(&line, tx).await;
+        line_buf.clear();
+    }
+}
+
 impl Agent {
     /// Process a streaming SSE response, accumulating content and tool calls.
     ///
-    /// Bytes are buffered first so multi-byte UTF-8 sequences split across
-    /// TCP chunks are never lossy-decoded mid-character.
+    /// Lines are parsed and emitted **incrementally** as bytes arrive, so the
+    /// consumer sees `TextDelta` events token-by-token rather than a single
+    /// burst at the end. Bytes are buffered only up to the next newline so a
+    /// multi-byte UTF-8 sequence split across TCP chunks is never lossy-decoded
+    /// mid-character.
     pub(crate) async fn process_stream(
         &self,
         resp: reqwest::Response,
         tx: &mpsc::Sender<AgentEvent>,
     ) -> ParsedCompletion {
         let mut stream = resp.bytes_stream();
-        let mut raw = Vec::new();
+        let mut acc = StreamAccumulator::default();
+        let mut line_buf: Vec<u8> = Vec::new();
         let mut stream_err: Option<String> = None;
+
         while let Some(item) = stream.next().await {
             match item {
-                Ok(c) => raw.extend_from_slice(&c),
+                Ok(c) => push_chunk(&mut line_buf, &c, &mut acc, tx).await,
                 Err(e) => {
                     let msg = format!("Stream error: {e}");
                     let _ = tx.send(AgentEvent::Error(msg.clone())).await;
@@ -53,8 +92,9 @@ impl Agent {
                 }
             }
         }
-        let body = String::from_utf8_lossy(&raw);
-        let mut parsed = process_stream_text(&body, tx).await;
+        flush_line_buf(&mut line_buf, &mut acc, tx).await;
+
+        let mut parsed = acc.finish();
         if parsed.error.is_none() {
             if let Some(e) = stream_err {
                 parsed.error = Some(e);
@@ -102,52 +142,59 @@ fn extract_api_error(v: &Value) -> Option<String> {
     Some(err.to_string())
 }
 
-/// Parse a full SSE body string, accumulating content and tool calls.
-pub(crate) async fn process_stream_text(
-    body: &str,
-    tx: &mpsc::Sender<AgentEvent>,
-) -> ParsedCompletion {
-    let mut content_buf = String::new();
-    let mut tool_acc: BTreeMap<u32, (String, String, String)> = BTreeMap::new();
-    let mut finish_reason: Option<String> = None;
-    let mut error: Option<String> = None;
+/// Incremental SSE accumulator. Feed one line at a time via [`feed_line`];
+/// call [`finish`] to get the final result. Emits `TextDelta` events as each
+/// line is parsed, so streaming consumers see tokens as they arrive.
+///
+/// [`feed_line`]: StreamAccumulator::feed_line
+/// [`finish`]: StreamAccumulator::finish
+#[derive(Default)]
+pub(crate) struct StreamAccumulator {
+    content_buf: String,
+    tool_acc: BTreeMap<u32, (String, String, String)>,
+    finish_reason: Option<String>,
+    error: Option<String>,
+}
 
-    for line in body.lines() {
+impl StreamAccumulator {
+    /// Parse a single SSE line and accumulate its content/tool-call deltas.
+    /// Emits a `TextDelta` event for any content chunk in this line.
+    pub(crate) async fn feed_line(&mut self, line: &str, tx: &mpsc::Sender<AgentEvent>) {
         let line = line.trim();
         let Some(data) = sse_data_payload(line) else {
-            continue;
+            return;
         };
         if data == "[DONE]" {
-            continue;
+            return;
         }
         let Ok(v) = serde_json::from_str::<Value>(data) else {
-            continue;
+            return;
         };
         if let Some(err) = extract_api_error(&v) {
-            error = Some(err);
-            continue;
+            self.error = Some(err);
+            return;
         }
         let Some(choices) = v.get("choices").and_then(|c| c.as_array()) else {
-            continue;
+            return;
         };
         let Some(choice) = choices.first() else {
-            continue;
+            return;
         };
-        // Streaming path: await TextDelta so slow consumers still get every chunk.
         if let Some(fr) = choice.get("finish_reason").and_then(|f| f.as_str()) {
             if fr != "null" && !fr.is_empty() {
-                finish_reason = Some(fr.to_string());
+                self.finish_reason = Some(fr.to_string());
             }
         }
         let delta = choice.get("delta").cloned().unwrap_or(json!({}));
         if let Some(c) = delta.get("content").and_then(|c| c.as_str()) {
-            content_buf.push_str(c);
+            self.content_buf.push_str(c);
             let _ = tx.send(AgentEvent::TextDelta(c.to_string())).await;
         }
         if let Some(tcs) = delta.get("tool_calls").and_then(|t| t.as_array()) {
             for tc in tcs {
                 let idx = tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as u32;
-                let entry = tool_acc
+                let entry = self
+                    .tool_acc
                     .entry(idx)
                     .or_insert_with(|| (String::new(), String::new(), String::new()));
                 if let Some(id) = tc.get("id").and_then(|i| i.as_str()) {
@@ -169,18 +216,36 @@ pub(crate) async fn process_stream_text(
         }
     }
 
-    if let Some(ref fr) = finish_reason {
-        if fr == "content_filter" && error.is_none() {
-            error = Some("Completion blocked by content filter".into());
+    /// Finalize the accumulated stream into a [`ParsedCompletion`].
+    pub(crate) fn finish(mut self) -> ParsedCompletion {
+        if let Some(ref fr) = self.finish_reason {
+            if fr == "content_filter" && self.error.is_none() {
+                self.error = Some("Completion blocked by content filter".into());
+            }
+        }
+        ParsedCompletion {
+            content: self.content_buf,
+            tool_acc: self.tool_acc,
+            finish_reason: self.finish_reason,
+            error: self.error,
         }
     }
+}
 
-    ParsedCompletion {
-        content: content_buf,
-        tool_acc,
-        finish_reason,
-        error,
+/// Parse a full SSE body string, accumulating content and tool calls.
+///
+/// Only used by the offline fake-model test path and unit tests; the live
+/// HTTP path streams line-by-line via [`StreamAccumulator`].
+#[cfg(test)]
+pub(crate) async fn process_stream_text(
+    body: &str,
+    tx: &mpsc::Sender<AgentEvent>,
+) -> ParsedCompletion {
+    let mut acc = StreamAccumulator::default();
+    for line in body.lines() {
+        acc.feed_line(line, tx).await;
     }
+    acc.finish()
 }
 
 /// Parse a non-streaming JSON response value, accumulating content and tool
@@ -321,6 +386,114 @@ data: [DONE]
         let v = json!({"error": {"message": "Invalid API key"}});
         let parsed = process_non_stream_json(&v, &tx).await;
         assert!(parsed.error.unwrap().contains("Invalid API key"));
+    }
+
+    #[tokio::test]
+    async fn stream_accumulator_emits_deltas_incrementally() {
+        // Regression: streaming must emit TextDelta events as each line is fed,
+        // not buffer the whole body and burst at the end.
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut acc = StreamAccumulator::default();
+
+        acc.feed_line(r#"data: {"choices":[{"delta":{"content":"Hel"}}]}"#, &tx)
+            .await;
+        // First delta should be immediately available.
+        let first = rx.try_recv().expect("first delta emitted immediately");
+        match first {
+            AgentEvent::TextDelta(t) => assert_eq!(t, "Hel"),
+            _ => panic!("expected TextDelta, got a different event"),
+        }
+
+        acc.feed_line(r#"data: {"choices":[{"delta":{"content":"lo"}}]}"#, &tx)
+            .await;
+        let second = rx.try_recv().expect("second delta emitted immediately");
+        match second {
+            AgentEvent::TextDelta(t) => assert_eq!(t, "lo"),
+            _ => panic!("expected TextDelta, got a different event"),
+        }
+
+        let parsed = acc.finish();
+        assert_eq!(parsed.content, "Hello");
+        assert!(rx.try_recv().is_err(), "no more events after finish");
+    }
+
+    #[tokio::test]
+    async fn push_chunk_splits_one_sse_line_across_byte_chunks() {
+        // Regression: one complete `data:` line arriving as multiple TCP
+        // chunks must parse once the final `\n` arrives, and TextDelta must
+        // fire then — not only after the whole body is buffered.
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut acc = StreamAccumulator::default();
+        let mut line_buf = Vec::new();
+
+        let full = b"data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n";
+        // Split mid-payload (after "data: {\"cho").
+        let (a, rest) = full.split_at(12);
+        let (b, c) = rest.split_at(10);
+        push_chunk(&mut line_buf, a, &mut acc, &tx).await;
+        assert!(rx.try_recv().is_err(), "no event before newline");
+        push_chunk(&mut line_buf, b, &mut acc, &tx).await;
+        assert!(rx.try_recv().is_err(), "still no event before newline");
+        push_chunk(&mut line_buf, c, &mut acc, &tx).await;
+
+        let ev = rx.try_recv().expect("delta after complete line");
+        match ev {
+            AgentEvent::TextDelta(t) => assert_eq!(t, "Hi"),
+            _ => panic!("expected TextDelta"),
+        }
+        let parsed = acc.finish();
+        assert_eq!(parsed.content, "Hi");
+        assert!(line_buf.is_empty());
+    }
+
+    #[tokio::test]
+    async fn push_chunk_preserves_utf8_split_across_chunks() {
+        // "é" is 0xC3 0xA9. Split those two bytes across chunk boundaries
+        // inside one SSE line; decoding must wait until the line completes.
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut acc = StreamAccumulator::default();
+        let mut line_buf = Vec::new();
+
+        // Build: data: {"choices":[{"delta":{"content":"é"}}]}\n
+        // with the two bytes of é in separate chunks.
+        let prefix = br#"data: {"choices":[{"delta":{"content":""#;
+        let suffix = br#""}}]}"#;
+        push_chunk(&mut line_buf, prefix, &mut acc, &tx).await;
+        push_chunk(&mut line_buf, &[0xC3], &mut acc, &tx).await; // first byte of é
+        push_chunk(&mut line_buf, &[0xA9], &mut acc, &tx).await; // second byte
+        push_chunk(&mut line_buf, suffix, &mut acc, &tx).await;
+        assert!(rx.try_recv().is_err(), "no event before newline");
+        push_chunk(&mut line_buf, b"\n", &mut acc, &tx).await;
+
+        let ev = rx.try_recv().expect("delta after complete line");
+        match ev {
+            AgentEvent::TextDelta(t) => assert_eq!(t, "é"),
+            _ => panic!("expected TextDelta"),
+        }
+        let parsed = acc.finish();
+        assert_eq!(parsed.content, "é");
+    }
+
+    #[tokio::test]
+    async fn flush_line_buf_emits_trailing_line_without_newline() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut acc = StreamAccumulator::default();
+        let mut line_buf = Vec::new();
+        push_chunk(
+            &mut line_buf,
+            br#"data: {"choices":[{"delta":{"content":"end"}}]}"#,
+            &mut acc,
+            &tx,
+        )
+        .await;
+        assert!(rx.try_recv().is_err());
+        flush_line_buf(&mut line_buf, &mut acc, &tx).await;
+        let ev = rx.try_recv().expect("flushed trailing line");
+        match ev {
+            AgentEvent::TextDelta(t) => assert_eq!(t, "end"),
+            _ => panic!("expected TextDelta"),
+        }
+        assert_eq!(acc.finish().content, "end");
     }
 
     #[test]
