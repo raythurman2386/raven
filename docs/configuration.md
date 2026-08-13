@@ -75,8 +75,32 @@ default_model = "qwen2.5-coder:14b"
 [providers.openrouter]
 base_url = "https://openrouter.ai/api/v1"
 default_model = "deepseek-v4-pro:cloud"
-# api_key = "sk-..."   # prefer OPENROUTER_API_KEY env var
+# api_key = "sk-..."   # prefer an env var (see below)
 ```
+
+Each provider table supports:
+
+| Key | Meaning |
+|---|---|
+| `base_url` | OpenAI-compatible `/v1` endpoint. |
+| `default_model` | Model used when no `--model` / `/model` override is set. |
+| `api_key` | Literal key in the config file. **Prefer `api_key_env`** so the secret stays out of the file. |
+| `api_key_env` | **Name** of the env var holding this provider's key (e.g. `GROQ_API_KEY`). Only the name is stored in config — the secret itself lives in the environment. |
+
+Adding a brand-new provider is a pure config change — no code edit needed.
+The endpoint **must** speak OpenAI-compatible `/v1/chat/completions` (native
+provider APIs that use a different wire format need a proxy/gateway first):
+
+```toml
+[providers.groq]
+base_url = "https://api.groq.com/openai/v1"
+api_key_env = "GROQ_API_KEY"
+default_model = "llama-3.3-70b-versatile"
+```
+
+If `api_key_env` is omitted, raven falls back to the built-in mapping for
+known providers (`OPENROUTER_API_KEY` / `OLLAMA_API_KEY`), then a conventional
+`{NAME}_API_KEY` (e.g. `GROQ_API_KEY` for a provider named `groq`).
 
 ### Selecting the active provider
 
@@ -100,10 +124,16 @@ raven -p "..."
 
 ### API keys
 
-Keys are resolved per provider: `RAVEN_API_KEY` (universal override) →
-provider-scoped var (`OPENROUTER_API_KEY` / `OLLAMA_API_KEY`). Prefer the
-provider-scoped env var over a config-file `api_key` so the secret doesn't
-land in a committed file.
+Keys are resolved per provider, first non-empty wins:
+
+1. Config-file `api_key` on that provider (if set — **not** overridden by env)
+2. `RAVEN_API_KEY` (universal override)
+3. The provider's declared `api_key_env` (or built-in mapping, e.g.
+   `OPENROUTER_API_KEY` / `OLLAMA_API_KEY`)
+
+Prefer the provider-scoped env var over a config-file `api_key` so the secret
+doesn't land in a committed file. Once a literal `api_key` is present in TOML,
+it wins for that provider.
 
 ```bash
 # OpenRouter
@@ -113,6 +143,10 @@ raven --provider openrouter -p "..."
 # Ollama Cloud / remote
 export OLLAMA_API_KEY="your-key-here"
 raven -p "..."
+
+# Any custom provider declared with api_key_env
+export GROQ_API_KEY="gsk_..."
+raven --provider groq -p "..."
 ```
 
 ### Removed legacy surface
