@@ -4,6 +4,45 @@ All notable changes to Raven are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-08-13
+
+### Added
+
+- **Named providers (Ollama / OpenRouter)** — a `Provider` abstraction bundles
+  endpoint + auth + default model so switching between local and cloud is a
+  single unit, mirroring Grok Build / Hermes / Opencode. Built-in `ollama` and
+  `openrouter` presets, a `[providers.<name>]` config table, a `/provider`
+  slash command for runtime switching, and a resolution order of
+  `--provider` > `RAVEN_PROVIDER` env > config `provider` > builtin. `model`
+  stays a per-session override layered on the provider's default.
+- **Per-provider `api_key_env`** — a provider's key env var is declared in
+  config (e.g. `api_key_env = "ANTHROPIC_API_KEY"`), so adding a new provider
+  is a pure config change with no code edit. Unknown providers fall back to a
+  conventional `{NAME}_API_KEY`. Only the var *name* is stored in config — the
+  secret stays in the environment.
+- **Field-wise provider table merge** — workspace `[providers.<name>]` tables
+  overlay global ones per field, so a partial workspace entry (e.g. only
+  `base_url`) no longer wipes global `api_key_env` / `default_model`.
+
+### Changed
+
+- **Streaming is now truly incremental** — SSE lines are parsed and emitted
+  token-by-token as bytes arrive instead of buffering the whole response and
+  bursting at the end. Multi-byte UTF-8 split across TCP chunks is still never
+  lossy-decoded.
+- **Provider-aware errors** — `OllamaUnreachable` renamed to
+  `ProviderUnreachable`, and `ModelNotFound` / `HttpError` now carry the
+  provider name. Error text adapts: local Ollama gets an `ollama pull` hint,
+  other providers get a check-the-model-id message.
+
+### Fixed
+
+- **Tracing no longer corrupts the TUI on tool error** — `tracing` was writing
+  to stdout (which the TUI owns in raw mode + alternate screen), so a `WARN
+  Transient tool error` line from a failed tool call overlapped the input bar
+  and knocked out the status bar. Logs now go to stderr, out of the alternate
+  screen.
+
 ## [0.2.0] - 2026-08-12
 
 ### Fixed
@@ -423,7 +462,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Ratatui 0.30, crossterm 0.29.
 
-[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/raythurman2386/raven/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/raythurman2386/raven/compare/v0.1.10...v0.2.0
 [0.1.10]: https://github.com/raythurman2386/raven/compare/v0.1.9...v0.1.10
 [0.1.9]: https://github.com/raythurman2386/raven/compare/v0.1.8...v0.1.9
