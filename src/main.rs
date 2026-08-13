@@ -165,8 +165,13 @@ async fn main() -> Result<()> {
     // missing, which silently dropped config-parse and session warnings.
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
+    // Write to stderr, NOT stdout. The TUI owns stdout (raw mode + alternate
+    // screen); a tracing line written to stdout mid-session corrupts the
+    // display and overlaps the input bar (e.g. a `WARN Transient tool error`
+    // from a failed tool call). stderr stays out of the alternate screen.
     tracing_subscriber::fmt()
         .with_env_filter(filter)
+        .with_writer(std::io::stderr)
         .with_target(false)
         .compact()
         .init();
