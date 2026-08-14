@@ -278,6 +278,29 @@ pub fn load(workspace: &Path, name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex as StdMutex, MutexGuard};
+
+    /// Serializes HOME override across the discovery tests (tests run in
+    /// parallel threads in one process). Other tests use `contains`
+    /// assertions, so an empty HOME during their scan is harmless.
+    static HOME_LOCK: StdMutex<()> = StdMutex::new(());
+
+    /// Run `f` with HOME pointed at an empty temp dir, so the home-dir skill
+    /// scan (`~/.raven/skills/`) contributes nothing. `discover` merges
+    /// workspace + home skills, so exact-count assertions are otherwise
+    /// environment-dependent (fail on any machine with real home skills).
+    fn with_hermetic_home<R>(f: impl FnOnce() -> R) -> R {
+        let _guard: MutexGuard<'_, ()> = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = std::env::var_os("HOME");
+        std::env::set_var("HOME", tmp.path());
+        let r = f();
+        match prev {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        r
+    }
 
     fn write_skill(dir: &Path, sub: &str, name: &str, desc: &str, body: &str) {
         let d = dir.join(".raven").join("skills").join(sub);
@@ -291,27 +314,31 @@ mod tests {
 
     #[test]
     fn discover_finds_skills_and_parses_frontmatter() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_skill(
-            tmp.path(),
-            "review",
-            "code-review",
-            "Do a code review",
-            "Review the diff.\n",
-        );
-        let skills = discover(tmp.path());
-        assert_eq!(skills.len(), 1);
-        assert_eq!(skills[0].name, "code-review");
-        assert_eq!(skills[0].description, "Do a code review");
+        with_hermetic_home(|| {
+            let tmp = tempfile::tempdir().unwrap();
+            write_skill(
+                tmp.path(),
+                "review",
+                "code-review",
+                "Do a code review",
+                "Review the diff.\n",
+            );
+            let skills = discover(tmp.path());
+            assert_eq!(skills.len(), 1);
+            assert_eq!(skills[0].name, "code-review");
+            assert_eq!(skills[0].description, "Do a code review");
+        });
     }
 
     #[test]
     fn discover_skips_skill_without_name() {
-        let tmp = tempfile::tempdir().unwrap();
-        let d = tmp.path().join(".raven").join("skills").join("nope");
-        std::fs::create_dir_all(&d).unwrap();
-        std::fs::write(d.join("SKILL.md"), "no frontmatter here").unwrap();
-        assert!(discover(tmp.path()).is_empty());
+        with_hermetic_home(|| {
+            let tmp = tempfile::tempdir().unwrap();
+            let d = tmp.path().join(".raven").join("skills").join("nope");
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("SKILL.md"), "no frontmatter here").unwrap();
+            assert!(discover(tmp.path()).is_empty());
+        });
     }
 
     #[test]
@@ -376,26 +403,30 @@ mod tests {
 
     #[test]
     fn discover_cache_returns_same_result_on_repeat_call() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_skill(tmp.path(), "a", "cache-test", "Cache test skill", "body");
-        let first = discover(tmp.path());
-        assert_eq!(first.len(), 1);
-        assert_eq!(first[0].name, "cache-test");
-        let second = discover(tmp.path());
-        assert_eq!(second.len(), 1);
-        assert_eq!(second[0].name, "cache-test");
+        with_hermetic_home(|| {
+            let tmp = tempfile::tempdir().unwrap();
+            write_skill(tmp.path(), "a", "cache-test", "Cache test skill", "body");
+            let first = discover(tmp.path());
+            assert_eq!(first.len(), 1);
+            assert_eq!(first[0].name, "cache-test");
+            let second = discover(tmp.path());
+            assert_eq!(second.len(), 1);
+            assert_eq!(second[0].name, "cache-test");
+        });
     }
 
     #[test]
     fn discover_cache_invalidates_on_new_skill() {
-        let tmp = tempfile::tempdir().unwrap();
-        write_skill(tmp.path(), "a", "first-skill", "First", "body");
-        let first = discover(tmp.path());
-        assert_eq!(first.len(), 1);
-        assert_eq!(first[0].name, "first-skill");
-        write_skill(tmp.path(), "b", "second-skill", "Second", "body");
-        let second = discover(tmp.path());
-        assert_eq!(second.len(), 2);
+        with_hermetic_home(|| {
+            let tmp = tempfile::tempdir().unwrap();
+            write_skill(tmp.path(), "a", "first-skill", "First", "body");
+            let first = discover(tmp.path());
+            assert_eq!(first.len(), 1);
+            assert_eq!(first[0].name, "first-skill");
+            write_skill(tmp.path(), "b", "second-skill", "Second", "body");
+            let second = discover(tmp.path());
+            assert_eq!(second.len(), 2);
+        });
     }
 
     #[test]
