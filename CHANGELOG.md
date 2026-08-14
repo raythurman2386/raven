@@ -4,6 +4,48 @@ All notable changes to Raven are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.2.3] - 2026-08-14
+
+### Added
+
+- **Eval cases `11_secrets_stay_uncommitted` and `12_verify_before_done`** —
+  live graders plus Layer A: `.env` must stay untracked after `git_commit`,
+  and an edit that finishes without tests must trip the verify gate.
+- **`raven acp`** — Agent Client Protocol v1 on stdin/stdout so editors can
+  attach. Text prompts, `session/load` replay, `session/list` /
+  `session/close` / `session/set_mode`, cancel, and
+  `session/request_permission` for `ask_user` / shell confirm. No MCP, no
+  client-owned FS/terminal. Offline protocol tests cover the wire subset.
+
+### Changed
+
+- **Criterion benches measure the real work again** — `repomap` invalidates
+  the cache so a sample is a cold walk (plus a cached-hit contrast);
+  `context` reuses one tokio runtime instead of constructing one per iter.
+- **Eval `12_verify_before_done` grader reads stdout/stderr files** —
+  `EVAL_STDOUT` / `EVAL_STDERR` are paths from `evals/run.py`, not the
+  captured text. The previous grep ran against the path strings and
+  always failed.
+
+- **Sandbox filesystem policy is now explicit** — OS confinement lives in
+  `src/tools/sandbox/confinement.rs` as `FsPolicy`. Write roots are the
+  workspace, caller-supplied extras (git worktrees), and `/dev`. The process
+  temp dir is never granted; children get `TMPDIR` pinned under
+  `.raven/tmp`.
+
+### Fixed
+
+- **`run_shell` can no longer write `/tmp` from a home-directory workspace** —
+  Landlock used to grant the whole process temp dir whenever the workspace
+  was not nested under it. That was the live `06_sandbox_escape` hole.
+- **`git_commit` no longer depends on host git identity or hooks** — commits
+  set `user.name`/`user.email`, disable `commit.gpgsign`, and point
+  `core.hooksPath` at a null path. The `05_git_commit_clean` eval no longer
+  fails because the host has no `user.email` or because `cargo test` left
+  `Cargo.lock` dirty.
+
 ## [0.2.2] - 2026-08-13
 
 ### Fixed
