@@ -50,6 +50,7 @@ fn build_history(n: usize, tool_heavy: bool) -> Vec<ChatMessage> {
 }
 
 fn bench(c: &mut Criterion) {
+    let rt = tokio::runtime::Runtime::new().unwrap();
     let mut g = c.benchmark_group("context");
 
     g.bench_function("compact_plain_200_turns", |b| {
@@ -57,11 +58,9 @@ fn bench(c: &mut Criterion) {
         b.iter_batched(
             || msgs.clone(),
             |mut m| {
-                tokio::runtime::Runtime::new()
-                    .unwrap()
-                    .block_on(compact_if_needed_llm(&mut m, 8192, 0.1, |_| {
-                        Box::pin(async { None })
-                    }))
+                rt.block_on(compact_if_needed_llm(&mut m, 8192, 0.1, |_| {
+                    Box::pin(async { None })
+                }))
             },
             criterion::BatchSize::SmallInput,
         );
@@ -72,11 +71,9 @@ fn bench(c: &mut Criterion) {
         b.iter_batched(
             || msgs.clone(),
             |mut m| {
-                tokio::runtime::Runtime::new()
-                    .unwrap()
-                    .block_on(compact_if_needed_llm(&mut m, 8192, 0.1, |_| {
-                        Box::pin(async { None })
-                    }))
+                rt.block_on(compact_if_needed_llm(&mut m, 8192, 0.1, |_| {
+                    Box::pin(async { None })
+                }))
             },
             criterion::BatchSize::SmallInput,
         );
@@ -87,11 +84,9 @@ fn bench(c: &mut Criterion) {
         b.iter_batched(
             || msgs.clone(),
             |mut m| {
-                tokio::runtime::Runtime::new()
-                    .unwrap()
-                    .block_on(compact_if_needed_llm(&mut m, 128_000, 0.75, |_| {
-                        Box::pin(async { None })
-                    }))
+                rt.block_on(compact_if_needed_llm(&mut m, 128_000, 0.75, |_| {
+                    Box::pin(async { None })
+                }))
             },
             criterion::BatchSize::SmallInput,
         );

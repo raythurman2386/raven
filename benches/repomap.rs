@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use raven::repomap::build_map;
+use raven::repomap::{build_map, invalidate};
 use std::path::Path;
 
 fn make_workspace(dir: &Path, files: usize, lines_per_file: usize) {
@@ -21,7 +21,17 @@ fn bench(c: &mut Criterion) {
     make_workspace(tmp.path(), 60, 20);
 
     let mut g = c.benchmark_group("repomap");
-    g.bench_function("build_map_60_files", |b| {
+    // Cold walk: drop the cache so each sample rescans. `build_map` caches
+    // after the first call, so timing it without invalidate only measures
+    // a HashMap hit.
+    g.bench_function("build_map_cold_60_files", |b| {
+        b.iter(|| {
+            invalidate(tmp.path());
+            build_map(std::hint::black_box(tmp.path()))
+        })
+    });
+    let _ = build_map(tmp.path());
+    g.bench_function("build_map_cached_60_files", |b| {
         b.iter(|| build_map(std::hint::black_box(tmp.path())))
     });
     g.finish();
