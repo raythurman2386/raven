@@ -14,6 +14,21 @@ Day-to-day workflows for **Raven**. See the [root README](../README.md) for inst
 
 Force headless with no task using `--headless` (exits with an error if no prompt is given).
 
+### ACP (editor attachment)
+
+`raven acp` speaks [Agent Client Protocol](https://agentclientprotocol.com/) v1
+on stdin/stdout. Point an ACP-capable editor at the `raven` binary with the
+`acp` flag (for example Zed's custom agent command: `raven acp`).
+
+Supported: `initialize`, `session/new`, `session/prompt`, `session/cancel`,
+`session/load` (replays history), `session/resume`, `session/list`,
+`session/close`, `session/set_mode` (`plan` / `agent` / `chat`).
+`ask_user` and shell confirmation become `session/request_permission`.
+
+Not advertised: MCP servers, images/audio, client `fs/*` / `terminal/*`.
+Raven keeps its own sandbox. Other CLI flags (`--provider`, `--model`,
+`--workspace`, `--yolo`, `--mode`) still apply to the ACP process.
+
 ### Interaction modes
 
 Within a session, Raven runs in one of three **interaction modes**, which control

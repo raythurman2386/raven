@@ -235,7 +235,9 @@ These are real grok-build features but would bloat raven past "mini":
   for a per-turn agent.
 - Background task pool / kill-task supervisor — `spawn_blocking` + `/stop`
   covers the mini case.
-- ACP/editor protocol (`xai-acp-lib`) — raven targets TUI + headless.
+- Full official `agent-client-protocol` crate / MCP-over-ACP — Raven
+  ships a thin v1 stdio adapter (`raven acp`) instead: no MCP, no
+  client FS/terminal. Enough for editor attachment.
 
 ---
 

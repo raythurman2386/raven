@@ -27,6 +27,7 @@
 //! | [`memory`]    | Project memory (MEMORY.md) loading + update tool     |
 //! | [`plan`]      | Structured plan data model + parsing                |
 //! | [`session`]   | Session persistence (JSONL)                          |
+//! | [`acp`]       | Agent Client Protocol v1 stdio adapter               |
 //! | [`tokenizer`] | BPE-like token estimation                         |
 //!
 //! See the repository `README.md` for user-facing documentation and
@@ -149,6 +150,10 @@ struct Cli {
     /// List saved sessions for this workspace.
     #[arg(long)]
     list_sessions: bool,
+
+    /// Speak Agent Client Protocol v1 on stdin/stdout (editor attachment).
+    #[arg(long)]
+    acp: bool,
 }
 
 #[tokio::main]
@@ -256,6 +261,10 @@ async fn main() -> Result<()> {
         searxng_engines,
         sandbox_extra_rw: Vec::new(),
     };
+
+    if cli.acp {
+        return raven::acp::run_stdio(settings).await;
+    }
 
     if let Some(tasks) = cli.parallel {
         println!("Running {} parallel sub-agents…", tasks.len());

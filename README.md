@@ -20,7 +20,7 @@ That constraint is the design center, not an afterthought — it's why the featu
 
 | In scope | Intentionally out of scope |
 |---|---|
-| Streaming agent loop (OpenAI-compatible `/v1/chat/completions`) | MCP server marketplace |
+| Streaming agent loop (OpenAI-compatible `/v1/chat/completions`) | MCP *server* marketplace (ACP clients may still attach) |
 | 22 tools: `list_dir`, `read_file`, `search_replace`, `write_file`, `grep`, `run_shell`, `search_code`, `todo_write`, `memory_update`, `memory_search`, `git_status`, `git_diff`, `git_log`, `git_commit`, `apply_patch`, `run_tests`, `run_lint`, `ask_user`, `web_search`, `web_fetch`, `skill_search`, `skill_load` | Remote config sync |
 | Document extraction: `read_file` converts `.docx`, `.pdf`, `.xlsx`, `.odt`, `.epub`, `.pptx`, `.csv`, `.rtf`, `.ods`, `.odp`, `.doc`, `.xls`, `.ppt` and more to Markdown (via the `anydoc` engine) | Multi-model routing |
 | Workspace sandbox (path confinement + dangerous-command filter) | Rhai workflow engine |
@@ -39,6 +39,7 @@ That constraint is the design center, not an afterthought — it's why the featu
 | Typed errors with retry + exponential backoff | |
 | Non-streaming fallback (`--no-stream`) | |
 | Simple ratatui TUI + headless CLI | |
+| ACP v1 stdio (`raven acp`) for editor attachment | MCP server marketplace |
 | Markdown rendering in the TUI (headings, code blocks, lists, tables, links via `pulldown-cmark`) | |
 | `AGENTS.md` / `CLAUDE.md` auto-load + `--rules` session overrides | |
 | Local by default; optional Bearer auth for Ollama Cloud | |

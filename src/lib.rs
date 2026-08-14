@@ -2,6 +2,7 @@
 //! integration tests can import them. The binary (`main.rs`) re-exports the
 //! same modules via `use raven::...`.
 
+pub mod acp;
 pub mod agent;
 pub mod commands;
 pub mod config;
