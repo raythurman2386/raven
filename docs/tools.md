@@ -13,7 +13,7 @@ All file paths are **relative to the workspace root** and confined to it. See [a
 | `search_replace` | Edit a file by replacing an exact string | Workspace-confined; rejects directories |
 | `write_file` | Full file write (create/overwrite) | Workspace-confined; creates parent dirs |
 | `grep` | Regex content search with optional glob filter | Read-only; skips hidden dirs and build artifacts |
-| `run_shell` | Run a shell command | `cwd` forced to workspace; dangerous patterns blocked; secret env vars stripped; direct-exec for safe commands; OS-level confinement (Landlock/seccomp/rlimits/Job Object); 60s default timeout; output capped at 12 000 chars |
+| `run_shell` | Run a shell command | `cwd` forced to workspace; dangerous patterns blocked; secret env vars stripped; direct-exec for safe commands; OS-level confinement (Landlock/seccomp/rlimits/Job Object); Landlock writes are workspace + extras + `/dev` only (`TMPDIR` pinned under `.raven/tmp`); 60s default timeout; output capped at 12 000 chars |
 | `search_code` | Literal case-insensitive search across source files | Read-only; source extensions only |
 | `todo_write` | Create/replace a structured task list (full-replace) | In-memory, per agent run |
 | `memory_update` | Save a durable project fact to `.raven/MEMORY.md` | Writes to workspace memory file |

@@ -63,9 +63,10 @@ CLI (main.rs)
 | `src/session.rs` | JSONL session persistence, resume, list (atomic writes) |
 | `src/skills.rs` | `SKILL.md` discovery + `skill_search`/`skill_load` |
 | `src/tokenizer.rs` | Pure-Rust BPE token estimator (no external vocab) |
-| `src/tools/` | 22 tools + sandbox — `mod.rs`, `definitions.rs`, `dispatch.rs`, `sandbox.rs`, `document.rs`, `git.rs`, `patch.rs`, `windows.rs` |
+| `src/tools/` | 22 tools + sandbox — `mod.rs`, `definitions.rs`, `dispatch.rs`, `sandbox/` (`mod.rs` + `confinement.rs`), `document.rs`, `git.rs`, `patch.rs`, `windows.rs` |
 | `src/tui/` | ratatui TUI with status bar, streaming, scrollback, /commands |
 | `src/web.rs` | Web tools (`web_search`, `web_fetch`) |
+| `src/acp/` | ACP v1 stdio adapter (`raven acp`) — protocol + server, no MCP |
 
 ## Conventions
 
@@ -125,15 +126,19 @@ test`, `cargo clippy`, `cargo fmt`) — do not rely on the agent's simulated
 ## Common Pitfalls
 
 1. **`tools/` directory** — the tool module was split from a single `tools.rs`
-   into `tools/mod.rs`, `definitions.rs`, `dispatch.rs`, `sandbox.rs`,
-   `document.rs`, `git.rs`, `patch.rs`. When adding a tool, keep the existing
-   structure; definitions go in `definitions.rs`, dispatch in `dispatch.rs`.
+   into `tools/mod.rs`, `definitions.rs`, `dispatch.rs`, `sandbox/`
+   (`mod.rs` + `confinement.rs`), `document.rs`, `git.rs`, `patch.rs`. When
+   adding a tool, keep the existing structure; definitions go in
+   `definitions.rs`, dispatch in `dispatch.rs`. OS confinement (Landlock /
+   seccomp / rlimits / Job Objects) lives in `sandbox/confinement.rs`.
 2. **Tokenizer is a fast estimator, not exact** — it over-estimates tiktoken counts by roughly 10–35% (mean ~28%), biased slightly high so compaction triggers early. It treats non-newline whitespace as free and applies a ~12% structural-overhead factor. Don't "fix" it to be exact without a real tokenizer to validate against.
 3. **Compaction invariants** — `messages[0]` is always the system message;
    tool-call/tool-result pairs are never split. Don't break these.
 4. **Sandbox** — all file paths are relative to the workspace root and confined
    to it. `run_shell` blocks dangerous patterns and strips known secret env
    vars. The blocklist is a denylist (best-effort), not an allowlist (issue #14).
+   Landlock write roots are workspace + explicit extras + `/dev` — never the
+   process temp dir. `TMPDIR` is pinned under `.raven/tmp`.
 5. **Session IDs** — `{iso}-{pid}-{counter}` (issue #10 is fixed). Still
    don't invent a different scheme without updating `generate_session_id`.
 6. **Repo map is cached** per workspace path until `repomap::invalidate`

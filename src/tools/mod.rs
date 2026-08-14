@@ -658,14 +658,11 @@ mod tests {
     #[test]
     #[cfg(target_os = "linux")]
     fn confined_child_cannot_write_to_tmp_sibling_of_workspace() {
-        // Regression for the flaky 06_sandbox_escape eval case: when the
-        // workspace lives UNDER the global temp dir (e.g. `/tmp/raven-eval-.../workspace`),
-        // a confined child must NOT be able to write an arbitrary sibling file
-        // under `/tmp`. Landlock previously granted a RW rule on the whole temp
-        // dir whenever the workspace wasn't exactly equal to it, which let
-        // `echo pwned > /tmp/raven_eval_escape_probe.txt` succeed.
+        // Regression for 06_sandbox_escape: when the workspace lives UNDER
+        // the global temp dir (e.g. `/tmp/raven-eval-.../workspace`), a
+        // confined child must NOT be able to write an arbitrary sibling
+        // under `/tmp`.
         let tmp = tempfile::tempdir().unwrap();
-        // Force the workspace to be nested under the process temp dir.
         let ws = tmp.path().canonicalize().unwrap();
         assert!(
             ws.starts_with(std::env::temp_dir().canonicalize().unwrap()),
@@ -680,11 +677,42 @@ mod tests {
         let out = sb
             .run_shell(&format!("echo pwned > {}", probe.display()), 10)
             .unwrap();
-        // The write must be blocked by Landlock (permission denied), and the
-        // probe must not exist afterwards.
         assert!(
             !probe.exists(),
             "confined child must not write outside workspace under /tmp: {out}"
+        );
+        let _ = std::fs::remove_file(&probe);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn confined_child_cannot_write_to_tmp_from_home_like_workspace() {
+        // The live hole: a workspace under $HOME (or the crate itself) used
+        // to get a RW Landlock grant on the whole process temp dir, so
+        // `echo pwned > /tmp/probe` succeeded. TMPDIR is pinned under
+        // `.raven/tmp`; the global temp dir is never an RW root.
+        let ws = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("sandbox-home-ws-{}", std::process::id()));
+        std::fs::create_dir_all(&ws).unwrap();
+        let tmp = std::env::temp_dir().canonicalize().unwrap();
+        let ws = ws.canonicalize().unwrap();
+        assert!(
+            !ws.starts_with(&tmp),
+            "test setup requires workspace outside process temp dir"
+        );
+        let probe = tmp.join(format!(
+            "raven_eval_escape_probe_home_{}.txt",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&probe);
+        let sb = Sandbox::new(ws);
+        let out = sb
+            .run_shell(&format!("echo pwned > {}", probe.display()), 10)
+            .unwrap();
+        assert!(
+            !probe.exists(),
+            "confined child must not write /tmp from a home-like workspace: {out}"
         );
         let _ = std::fs::remove_file(&probe);
     }
@@ -1217,6 +1245,23 @@ mod tests {
         let (_tmp, sb) = git_sandbox();
         let out = sb.git_commit("   ").unwrap();
         assert!(out.contains("empty commit message"));
+    }
+
+    #[test]
+    fn git_commit_does_not_need_host_identity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
+        sb.run_shell("git init -q && git config --unset-all user.name; git config --unset-all user.email; true", 20)
+            .unwrap();
+        sb.write_file("a.txt", "v1").unwrap();
+        let out = sb.git_commit("add a.txt").unwrap();
+        assert!(
+            !out.contains("Error"),
+            "commit should succeed without host identity: {out}"
+        );
+        assert!(!out.contains("Please tell me who you are"), "{out}");
+        let log = sb.git_log(1).unwrap();
+        assert!(log.contains("add a.txt"), "commit in log: {log}");
     }
 
     #[test]

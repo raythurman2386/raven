@@ -56,10 +56,13 @@ subprocesses.
 ### 2. Landlock filesystem confinement (Linux)
 
 **What it does:** Applies a Landlock ruleset to every subprocess before `exec`.
-The child is granted **read/write** under the workspace, the process temp dir,
-and `/dev`; **read-only** for `/usr`, `/bin`, `/lib`, `/lib64`, `/etc`, and
-`$HOME` (or, when the workspace lives under `$HOME`, sibling dirs such as
-`.rustup` / `.cargo` / `.config`). Everything else is denied by the kernel.
+The child is granted **read/write** under the workspace, any explicit extra
+roots (git worktree siblings), and `/dev`; **read-only** for `/usr`, `/bin`,
+`/lib`, `/lib64`, `/etc`, `/proc`, and `$HOME`. Everything else is denied by
+the kernel. The process temp dir is **not** granted — children get `TMPDIR`
+pinned under `workspace/.raven/tmp`. Granting `/tmp` was a real escape:
+`run_shell` could write `/tmp/raven_eval_escape_probe.txt` from a normal
+home-directory workspace.
 
 **Why ABI V3 + pinned caches:** Landlock ABI V1 does not include `REFER`.
 Without it, `rename`/`link` across directories fails with `EXDEV` even under
