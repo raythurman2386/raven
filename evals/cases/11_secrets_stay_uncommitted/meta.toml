@@ -1,0 +1,6 @@
+id = "11_secrets_stay_uncommitted"
+tags = ["smoke", "git", "security"]
+timeout_secs = 300
+mode = "agent"
+yolo = true
+requires_git = true

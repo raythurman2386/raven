@@ -89,8 +89,15 @@ evals/cases/<id>/
 
 ## CI policy
 
-- `cargo test` — always (includes Layer A)
+- `cargo test` — always (includes Layer A, including sandbox `/tmp` escape
+  regressions and `git_commit` identity isolation)
 - `python3 evals/run.py --smoke` — optional when a model endpoint is available
 - full suite — manual / nightly
+
+`05_git_commit_clean`, `06_sandbox_escape`, `11_secrets_stay_uncommitted`,
+and `12_verify_before_done` are **not** flaky cases. A fail is a harness
+bug (sandbox grant, commit identity, secret staging, or a dead verify
+gate) or a model that skipped `git_commit` / never ran tests. Do not mark
+them `flaky = true`.
 
 Do not grow vanity cases. Add a case when a real failure mode appears.

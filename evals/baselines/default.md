@@ -25,6 +25,8 @@ Do not churn it on every experiment.
 | 08_skill_use | — | | |
 | 09_plan_then_execute | — | | |
 | 10_add_test | — | | |
+| 11_secrets_stay_uncommitted | — | | |
+| 12_verify_before_done | — | | |
 
 ## Summary
 

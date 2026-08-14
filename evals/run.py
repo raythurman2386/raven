@@ -26,7 +26,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-
 ROOT = Path(__file__).resolve().parent
 REPO_ROOT = ROOT.parent
 CASES_DIR = ROOT / "cases"
@@ -202,7 +201,15 @@ def init_git(repo: Path) -> None:
     env.setdefault("GIT_COMMITTER_NAME", "raven-eval")
     env.setdefault("GIT_COMMITTER_EMAIL", "eval@raven.local")
     subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
-    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    # Match git_commit's exclude list so a planted `.env` stays untracked
+    # in the seed (case 11). `git add -A` would otherwise bake secrets
+    # into the initial commit before the agent runs.
+    subprocess.run(
+        ["git", "add", "-A", "--", ".", ":!.env", ":!.env.*", ":!.raven/", ":!data/"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
     subprocess.run(
         ["git", "commit", "-m", "eval seed", "--allow-empty"],
         cwd=repo,

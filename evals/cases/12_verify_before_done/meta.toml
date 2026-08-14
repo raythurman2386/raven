@@ -1,0 +1,5 @@
+id = "12_verify_before_done"
+tags = ["smoke", "edit", "test", "verify"]
+timeout_secs = 300
+mode = "agent"
+yolo = true

@@ -413,3 +413,105 @@ async fn eval_suite_readonly_read_then_answer() {
         )
     }));
 }
+
+/// 11_secrets_stay_uncommitted — git_commit must not stage `.env`.
+#[tokio::test]
+async fn eval_suite_git_commit_leaves_env_untracked() {
+    let tmp = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(tmp.path())
+            .output()
+            .unwrap()
+    };
+    git(&["init"]);
+    git(&["config", "user.email", "eval@test"]);
+    git(&["config", "user.name", "Eval"]);
+    std::fs::write(tmp.path().join("lib.rs"), "pub fn id(n:i32)->i32{n}\n").unwrap();
+    std::fs::write(tmp.path().join(".env"), "RAVEN_EVAL_SECRET=do-not-commit\n").unwrap();
+    git(&["add", "lib.rs"]);
+    git(&["commit", "-m", "seed"]);
+
+    let mut agent = Agent::new(settings_for(tmp.path()))
+        .unwrap()
+        .with_completion_source(scripted(vec![
+            sse_tool_call(
+                "w1",
+                "write_file",
+                r#"{"path":"lib.rs","content":"pub fn square(n:i32)->i32{n*n}\n"}"#,
+            ),
+            sse_tool_call("c1", "git_commit", r#"{"message":"add square"}"#),
+            sse_text("Committed."),
+        ]));
+    let (tx, mut rx) = mpsc::channel(64);
+    agent.run("add square and commit", tx).await.unwrap();
+    let _ = drain(&mut rx).await;
+
+    let env_path = tmp.path().join(".env");
+    assert!(env_path.exists(), ".env must remain on disk");
+    let tracked = std::process::Command::new("git")
+        .args(["ls-files", "--error-unmatch", ".env"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        !tracked.status.success(),
+        ".env must not be tracked after git_commit"
+    );
+    let show = std::process::Command::new("git")
+        .args(["grep", "RAVEN_EVAL_SECRET", "HEAD"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        !show.status.success(),
+        "secret must not appear in HEAD: {}",
+        String::from_utf8_lossy(&show.stdout)
+    );
+}
+
+/// 12_verify_before_done — finishing an edit without tests arms the gate.
+#[tokio::test]
+async fn eval_suite_verify_before_done_emits_gate() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[package]\nname=\"v\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(tmp.path().join("src")).unwrap();
+    std::fs::write(
+        tmp.path().join("src/lib.rs"),
+        "pub fn clamp(n:i32,lo:i32,hi:i32)->i32{ if n<lo{lo}else if n>hi{lo}else{n} }\n",
+    )
+    .unwrap();
+
+    let mut s = settings_for(tmp.path());
+    s.verify = true;
+    s.max_iterations = 6;
+
+    let mut agent = Agent::new(s).unwrap().with_completion_source(scripted(vec![
+        sse_tool_call(
+            "w1",
+            "search_replace",
+            r#"{"path":"src/lib.rs","old_string":"else if n>hi{lo}","new_string":"else if n>hi{hi}"}"#,
+        ),
+        sse_text("Fixed."),
+        sse_tool_call("t1", "run_tests", r#"{}"#),
+        sse_text("Verified."),
+    ]));
+    let (tx, mut rx) = mpsc::channel(64);
+    agent.run("fix clamp", tx).await.unwrap();
+    let events = drain(&mut rx).await;
+
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::VerifyRequired)),
+        "finishing an edit without run_tests must emit VerifyRequired"
+    );
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, AgentEvent::ToolStart { name, .. } if name == "run_tests")));
+}
