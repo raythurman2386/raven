@@ -4,7 +4,8 @@ use anyhow::{Context, Result};
 use std::process::Command;
 
 use super::sandbox::{
-    cap_output, spawn_confined, truncate_output, wait_for_child, Sandbox, MAX_TOOL_OUTPUT,
+    cap_output, setup_shell_env, spawn_confined, truncate_output, wait_for_child, Sandbox,
+    MAX_TOOL_OUTPUT,
 };
 
 impl Sandbox {
@@ -222,6 +223,7 @@ impl Sandbox {
             .current_dir(&self.workspace)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
+        setup_shell_env(&mut cmd, &self.workspace);
         let mut confined = spawn_confined(&mut cmd, &self.workspace, &self.extra_rw, false)
             .context("spawn git")?;
         match wait_for_child(&mut confined.child, 30) {
@@ -241,10 +243,32 @@ impl Sandbox {
     /// temp dir (which would reopen the `06_sandbox_escape` hole).
     fn run_git_with_extra(&self, args: &[&str], extra_rw: &[std::path::PathBuf]) -> Result<String> {
         let mut cmd = Command::new("git");
+        // Agent commits must not depend on the host git identity, hooks, or
+        // commit.gpgsign. Those are the usual reasons `05_git_commit_clean`
+        // flakes: the model called git_commit, git refused, tree stayed dirty.
+        cmd.args([
+            "-c",
+            "user.name=raven",
+            "-c",
+            "user.email=raven@local",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            #[cfg(unix)]
+            "core.hooksPath=/dev/null",
+            #[cfg(not(unix))]
+            "core.hooksPath=NUL",
+        ]);
         cmd.args(args)
             .current_dir(&self.workspace)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
+        setup_shell_env(&mut cmd, &self.workspace);
+        cmd.env("GIT_AUTHOR_NAME", "raven")
+            .env("GIT_AUTHOR_EMAIL", "raven@local")
+            .env("GIT_COMMITTER_NAME", "raven")
+            .env("GIT_COMMITTER_EMAIL", "raven@local")
+            .env("GIT_CONFIG_NOSYSTEM", "1");
         let mut confined =
             spawn_confined(&mut cmd, &self.workspace, extra_rw, false).context("spawn git")?;
         match wait_for_child(&mut confined.child, 30) {
