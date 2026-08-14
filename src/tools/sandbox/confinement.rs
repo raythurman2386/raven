@@ -26,12 +26,14 @@ use std::os::unix::process::CommandExt;
 /// the same policy. Extra RW roots are for git worktrees (the sibling main
 /// repo, or the worktree parent while creating/removing it) — never the
 /// whole temp dir.
+#[cfg(target_os = "linux")]
 #[derive(Debug, Clone)]
 pub(crate) struct FsPolicy {
     workspace: PathBuf,
     extra_rw: Vec<PathBuf>,
 }
 
+#[cfg(target_os = "linux")]
 impl FsPolicy {
     pub(crate) fn new(workspace: impl Into<PathBuf>, extra_rw: Vec<PathBuf>) -> Self {
         Self {
@@ -570,7 +572,7 @@ fn kill_process_group(pid: u32) {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
 
