@@ -71,9 +71,3 @@ codegen-units = 1
 strip = true
 opt-level = "z"
 panic = "abort"
-
-[patch.crates-io]
-# crates.io pdf-inspector 0.1.7 pins vulnerable lopdf ^0.41.0 (RUSTSEC-2026-0187).
-# Upstream fixed it (lopdf 0.42.0) on the 0.1.7 branch but hasn't released to
-# crates.io, so pin the fixed revision until they do.
-pdf-inspector = { git = "https://github.com/firecrawl/pdf-inspector", rev = "f731e1191ca8c3adeda4a12be44a6c5cae0ab807" }
