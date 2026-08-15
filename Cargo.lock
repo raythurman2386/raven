@@ -4221,8 +4221,3 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
-
-[[patch.unused]]
-name = "pdf-inspector"
-version = "0.1.7"
-source = "git+https://github.com/firecrawl/pdf-inspector?rev=f731e1191ca8c3adeda4a12be44a6c5cae0ab807#f731e1191ca8c3adeda4a12be44a6c5cae0ab807"
