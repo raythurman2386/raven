@@ -121,9 +121,9 @@ dependencies = [
 
 [[package]]
 name = "anydoc"
-version = "0.1.6"
+version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1d88a76ba2a26a65e133879dee68acd593656e68e306488ebb162b69f37902b"
+checksum = "2b8e42cf43074578dd1d5a6771d1f28282790b2bf4bca60061ff51fd8ca03c09"
 dependencies = [
  "calamine",
  "cfb",
@@ -2087,8 +2087,9 @@ dependencies = [
 
 [[package]]
 name = "pdf-inspector"
-version = "0.1.7"
-source = "git+https://github.com/firecrawl/pdf-inspector?rev=f731e1191ca8c3adeda4a12be44a6c5cae0ab807#f731e1191ca8c3adeda4a12be44a6c5cae0ab807"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd2f755e49ad38eafbc82ba2bec1c59d57b5bf829b13a8f35e4263bc8913df3a"
 dependencies = [
  "env_logger",
  "include_dir",
@@ -4220,3 +4221,8 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
+
+[[patch.unused]]
+name = "pdf-inspector"
+version = "0.1.7"
+source = "git+https://github.com/firecrawl/pdf-inspector?rev=f731e1191ca8c3adeda4a12be44a6c5cae0ab807#f731e1191ca8c3adeda4a12be44a6c5cae0ab807"
