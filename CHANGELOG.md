@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-08-16
+
 ### Added
 
 - **Persistent goal + todos** — `.raven/state/` (`goal.json`, `todos.json`)
