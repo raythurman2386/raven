@@ -18,8 +18,7 @@ pub use crate::tokenizer::{history_tokens, message_tokens};
 /// Infer a model's context window from its name (fallback when API is unreachable).
 ///
 /// Heuristics:
-///   - glm:cloud, deepseek-v4-flash:cloud                   → 1_000_000
-///   - deepseek-v4:cloud (e.g. pro)                         → 524_288
+///   - glm:cloud, deepseek-v4:cloud (flash and pro)          → 1_000_000
 ///   - qwen3.5                                              → 262_144
 ///   - gemma4 / gemma3 / qwen2.5 / qwen3 / deepseek / llama3.1 / llama3.2 / codestral → 128_000
 ///   - llama3 / codellama / "32k" in name                   → 32_768
@@ -30,12 +29,9 @@ pub fn infer_context_window(model: &str) -> usize {
     // Cloud glm (via Ollama) has a 1M-token context.
     if m.contains("glm") && m.contains("cloud") {
         1_000_000
-    } else if m.contains("deepseek-v4-flash") && m.contains("cloud") {
-        // deepseek-v4-flash:cloud → 1M (verified via /api/show).
-        1_000_000
     } else if m.contains("deepseek-v4") && m.contains("cloud") {
-        // deepseek-v4-pro:cloud → 512K (verified via /api/show).
-        524_288
+        // deepseek-v4-flash:cloud and deepseek-v4-pro:cloud → 1M (verified via /api/show).
+        1_000_000
     } else if m.contains("qwen3.5") {
         // Qwen 3.5 family is 256K; check before the broader `qwen3` match.
         262_144

@@ -193,6 +193,7 @@ fn settings_for(workspace: &std::path::Path, base_url: &str) -> crate::config::S
         searxng_url: None,
         searxng_engines: Vec::new(),
         sandbox_extra_rw: Vec::new(),
+        allow_delegate: true,
     }
 }
 
@@ -224,8 +225,8 @@ fn tool_only() -> ChatMessage {
 #[test]
 fn no_reminders_early_and_clean() {
     let msgs = vec![plain("system"), plain("user"), plain("assistant")];
-    assert!(compute_reminders(&msgs, 0).is_empty());
-    assert!(compute_reminders(&msgs, 2).is_empty());
+    assert!(compute_reminders(&msgs, 0, None, &[]).is_empty());
+    assert!(compute_reminders(&msgs, 2, None, &[]).is_empty());
 }
 
 #[test]
@@ -234,7 +235,7 @@ fn loop_breaker_fires_after_3_tool_only_turns() {
     for _ in 0..3 {
         msgs.push(tool_only());
     }
-    let r = compute_reminders(&msgs, 3);
+    let r = compute_reminders(&msgs, 3, None, &[]);
     assert!(
         r.iter().any(|t| t.contains("Stop calling tools")),
         "loop breaker should fire, got {r:?}"
@@ -250,7 +251,7 @@ fn loop_breaker_ignores_recent_text_output() {
         tool_only(),
         plain("assistant"),
     ];
-    let r = compute_reminders(&msgs, 3);
+    let r = compute_reminders(&msgs, 3, None, &[]);
     assert!(
         !r.iter().any(|t| t.contains("Stop calling tools")),
         "should not fire with text output, got {r:?}"
@@ -260,7 +261,7 @@ fn loop_breaker_ignores_recent_text_output() {
 #[test]
 fn iteration_5_adds_reflect_nudge() {
     let msgs = vec![plain("system")];
-    let r = compute_reminders(&msgs, 5);
+    let r = compute_reminders(&msgs, 5, None, &[]);
     assert!(
         r.iter().any(|t| t.contains("Reflect")),
         "iteration-5 nudge should fire, got {r:?}"
@@ -270,12 +271,58 @@ fn iteration_5_adds_reflect_nudge() {
 #[test]
 fn iteration_5_does_not_fire_elsewhere() {
     let msgs = vec![plain("system")];
-    assert!(!compute_reminders(&msgs, 4)
+    assert!(!compute_reminders(&msgs, 4, None, &[])
         .iter()
         .any(|t| t.contains("Reflect")));
-    assert!(!compute_reminders(&msgs, 6)
+    assert!(!compute_reminders(&msgs, 6, None, &[])
         .iter()
         .any(|t| t.contains("Reflect")));
+}
+
+#[test]
+fn goal_aware_reminder_anchors_goal_and_next_task() {
+    let msgs = vec![plain("system")];
+    let goal = crate::state::Goal {
+        description: "Ship the feature".into(),
+        status: "in_progress".into(),
+        updated_at: "".into(),
+    };
+    let todos = vec![
+        crate::state::TodoItem {
+            content: "Done task".into(),
+            status: "completed".into(),
+            priority: "high".into(),
+        },
+        crate::state::TodoItem {
+            content: "Next task".into(),
+            status: "pending".into(),
+            priority: "medium".into(),
+        },
+    ];
+    let r = compute_reminders(&msgs, 4, Some(&goal), &todos);
+    assert!(
+        r.iter().any(|t| t.contains("Ship the feature")),
+        "goal should be anchored, got {r:?}"
+    );
+    assert!(
+        r.iter().any(|t| t.contains("Next task")),
+        "next pending task should be anchored, got {r:?}"
+    );
+}
+
+#[test]
+fn goal_aware_reminder_skips_completed_goal() {
+    let msgs = vec![plain("system")];
+    let goal = crate::state::Goal {
+        description: "Done goal".into(),
+        status: "completed".into(),
+        updated_at: "".into(),
+    };
+    let r = compute_reminders(&msgs, 4, Some(&goal), &[]);
+    assert!(
+        !r.iter().any(|t| t.contains("Done goal")),
+        "completed goal should not be anchored, got {r:?}"
+    );
 }
 
 #[tokio::test]
@@ -946,6 +993,56 @@ async fn compaction_triggers_when_context_exceeds_threshold() {
     assert!(events
         .iter()
         .any(|e| matches!(e, AgentEvent::Compacted { .. })));
+    assert!(events.iter().any(|e| matches!(e, AgentEvent::Done)));
+}
+
+#[tokio::test]
+async fn compaction_thrashing_pauses_after_cap() {
+    let tmp = tempfile::tempdir().unwrap();
+    // A summarizer that returns a huge summary so compaction never actually
+    // reduces the history (after >= before) — the thrashing case.
+    let huge_summary = "x".repeat(200_000);
+    let summarizer_body = format!(
+        r#"{{"choices":[{{"message":{{"role":"assistant","content":"{huge_summary}"}}}}]}}"#
+    );
+    let agent_body = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+    // Enough summarizer responses to exceed the thrash cap (3) plus the final
+    // agent response. The mock serves responses in order and reuses the
+    // connection, so we need one summarizer body per compaction attempt.
+    let mut responses: Vec<String> = Vec::new();
+    for _ in 0..6 {
+        responses.push(summarizer_body.clone());
+    }
+    responses.push(agent_body.to_string());
+    let static_responses: Vec<&'static str> = responses
+        .iter()
+        .map(|s| Box::leak(s.clone().into_boxed_str()) as &'static str)
+        .collect();
+    let (base, _h) = spawn_mock(static_responses).await;
+    let mut s = settings_for(tmp.path(), &base);
+    s.context_window = 500;
+    s.compact_threshold = 0.5;
+    s.max_iterations = 8;
+    let mut agent = Agent::new(s).unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+    agent.run("hello", tx).await.unwrap();
+    let mut events = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        events.push(ev);
+    }
+    // Compaction should have been attempted but then paused after the cap.
+    let compacted = events
+        .iter()
+        .filter(|e| matches!(e, AgentEvent::Compacted { .. }))
+        .count();
+    assert!(compacted >= 1, "compaction should have been attempted");
+    assert!(
+        compacted <= 3,
+        "thrashing should pause after the cap, got {compacted}"
+    );
     assert!(events.iter().any(|e| matches!(e, AgentEvent::Done)));
 }
 

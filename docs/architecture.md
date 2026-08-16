@@ -95,6 +95,42 @@ When `history_tokens(messages) > compact_threshold × (context_window − output
 - Summaries are lossy — the model loses exact details of compacted turns.
 - There is no re-summarization of prior summaries (each compaction summarizes the then-current middle fresh).
 
+### Thrashing protection
+
+If compaction keeps failing to bring the history under the soft limit (a single
+huge file/tool output refills context immediately), the loop would otherwise
+spin on repeated summarize calls. Raven tracks consecutive no-reduction
+compactions (`Agent.compact_thrash_count`); after 3 it pauses auto-compaction,
+retrying every 4th iteration so a later prune can resume shrinking.
+
+---
+
+## Persistent agent state
+
+Raven keeps long-horizon task state on disk under `.raven/state/` (see
+[`src/state.rs`](../src/state.rs)) so it survives context compaction, session
+resume, and process restarts:
+
+- `todos.json` — the structured task list written by `todo_write`.
+- `goal.json` — the current goal written by `goal_set`.
+
+Both are injected into the system prompt each turn (`build_system_message`),
+and `compute_reminders` re-anchors the model on the goal + next pending task
+from iteration 4. Writes are atomic (unique temp name + rename).
+
+---
+
+## Sub-agents
+
+`run_parallel` spawns N independent `Agent`s, each with a fresh conversation.
+Tool events are consumed silently; only `TextDelta` output is accumulated and
+returned in order.
+
+The `delegate_task` tool uses the same machinery to spawn a **single** focused
+sub-agent in a fresh context window and return its distilled output (capped at
+2000 chars), keeping the main conversation clean. It runs via `tokio::join!` +
+`Box::pin` (no `Send` bound; breaks the recursive-async cycle).
+
 ---
 
 ## Sandbox

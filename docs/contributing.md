@@ -37,7 +37,7 @@ src/
 ├── agent/       # Streaming loop (core, stream, tools_exec, loop_control, parallel, types)
 ├── context.rs    # Token estimation, compaction
 ├── tools/
-│   ├── mod.rs        # Tool module root, glob matcher, todo state
+│   ├── mod.rs        # Tool module root, glob matcher, todo_write
 │   ├── definitions.rs # OpenAI function-calling tool schemas
 │   ├── dispatch.rs    # Tool dispatch by name
 │   ├── sandbox.rs     # Sandbox (path confinement, shell filtering, file ops)
@@ -50,6 +50,7 @@ src/
 ├── skills.rs     # SKILL.md discovery + skill_search/skill_load
 ├── session.rs    # JSONL session persistence, resume, list
 ├── memory.rs     # Project memory (MEMORY.md) loading, update, search
+├── state.rs      # Persistent agent state (.raven/state/todos.json + goal.json)
 ├── repomap.rs    # Lightweight repo symbol map
 ├── tokenizer.rs  # Pure-Rust token estimator
 ├── web.rs        # Keyless web tools (web_fetch, web_search)
@@ -225,7 +226,7 @@ Compaction lives in [`src/context.rs`](../src/context.rs).
 ## Running tests
 
 ```bash
-cargo test                    # 523 tests, all offline
+cargo test                    # 570+ tests, all offline
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```

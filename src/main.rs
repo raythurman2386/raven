@@ -260,6 +260,7 @@ async fn main() -> Result<()> {
         searxng_url,
         searxng_engines,
         sandbox_extra_rw: Vec::new(),
+        allow_delegate: true,
     };
 
     if cli.acp {

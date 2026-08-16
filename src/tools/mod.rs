@@ -17,8 +17,8 @@ mod sandbox;
 mod windows;
 
 use std::path::Path;
-use std::sync::{Mutex, OnceLock};
 
+pub use crate::state::TodoItem;
 pub use definitions::{chat_tool_definitions, plan_tool_definitions, tool_definitions};
 pub use dispatch::dispatch;
 pub use sandbox::{safe_command_re, Sandbox};
@@ -58,42 +58,11 @@ pub fn glob_segment_match(text: &str, pat: &str) -> bool {
 
 // ── Todo state ────────────────────────────────────────────────────────
 
-/// A single todo item (content + status + priority).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct TodoItem {
-    pub content: String,
-    pub status: String,
-    pub priority: String,
-}
-
-/// In-memory todo store (shared across tool calls within one agent run).
-pub static TODO_STATE: OnceLock<Mutex<Vec<TodoItem>>> = OnceLock::new();
-
-fn todo_state() -> &'static Mutex<Vec<TodoItem>> {
-    TODO_STATE.get_or_init(|| Mutex::new(Vec::new()))
-}
-
-/// Full-replace todo list (Grok Build `todo_write` semantics).
-pub fn todo_write(todos: Vec<TodoItem>) -> anyhow::Result<String> {
-    let mut state = todo_state().lock().unwrap_or_else(|e| e.into_inner());
-    *state = todos;
-    Ok(summarize_todos(&state))
-}
-
-fn summarize_todos(todos: &[TodoItem]) -> String {
-    if todos.is_empty() {
-        return "No tasks".into();
-    }
-    let mut out = String::new();
-    for (i, t) in todos.iter().enumerate() {
-        let mark = match t.status.as_str() {
-            "completed" => "[completed]",
-            "in_progress" => "[in_progress]",
-            _ => "[pending]",
-        };
-        out.push_str(&format!("{} {}: {}\n", mark, i + 1, t.content));
-    }
-    out
+/// Full-replace todo list (Grok Build `todo_write` semantics), persisted to
+/// `.raven/state/todos.json` so it survives compaction and sessions.
+pub fn todo_write(workspace: &Path, todos: Vec<TodoItem>) -> anyhow::Result<String> {
+    crate::state::save_todos(workspace, &todos)?;
+    Ok(crate::state::format_todos(&todos))
 }
 
 #[cfg(test)]
@@ -1039,6 +1008,7 @@ mod tests {
             "skill_search",
             "skill_load",
             "memory_search",
+            "think",
         ] {
             assert!(
                 names.iter().any(|n| n == expected),
@@ -1051,6 +1021,8 @@ mod tests {
             "search_replace",
             "run_shell",
             "todo_write",
+            "goal_set",
+            "delegate_task",
             "memory_update",
             "apply_patch",
             "run_tests",
@@ -1139,6 +1111,8 @@ mod tests {
             "search_replace",
             "run_shell",
             "todo_write",
+            "goal_set",
+            "delegate_task",
             "memory_update",
             "apply_patch",
             "run_tests",

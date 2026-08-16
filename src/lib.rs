@@ -14,6 +14,7 @@ pub mod repomap;
 pub mod runner;
 pub mod session;
 pub mod skills;
+pub mod state;
 pub mod tokenizer;
 pub mod tools;
 pub mod tui;

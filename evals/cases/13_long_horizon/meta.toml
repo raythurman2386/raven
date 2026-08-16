@@ -1,0 +1,6 @@
+id = "13_long_horizon"
+tags = ["smoke", "edit", "test", "long-horizon"]
+timeout_secs = 600
+mode = "agent"
+yolo = true
+requires_git = false

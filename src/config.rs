@@ -142,6 +142,10 @@ pub struct Settings {
     /// under the temp dir). Defaults to empty; only set by parallel sub-agent
     /// orchestration. Linux-only (no effect on Windows).
     pub sandbox_extra_rw: Vec<PathBuf>,
+    /// When false, `delegate_task` / `goal_set` / `todo_write` are rejected.
+    /// Cleared on spawned sub-agents so they cannot nest or overwrite the
+    /// parent's persisted goal and task list.
+    pub allow_delegate: bool,
 }
 
 impl Settings {
@@ -670,9 +674,9 @@ mod tests {
 
     #[test]
     fn infer_context_window_deepseek_cloud_variants() {
-        // deepseek-v4-flash:cloud is 1M; pro:cloud is 512K.
+        // deepseek-v4-flash:cloud and pro:cloud are both 1M.
         assert_eq!(infer_context_window("deepseek-v4-flash:cloud"), 1_000_000);
-        assert_eq!(infer_context_window("deepseek-v4-pro:cloud"), 524_288);
+        assert_eq!(infer_context_window("deepseek-v4-pro:cloud"), 1_000_000);
         // Non-cloud deepseek falls back to the generic 128K.
         assert_eq!(infer_context_window("deepseek-r1:14b"), 128_000);
     }

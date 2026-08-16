@@ -21,7 +21,7 @@ That constraint is the design center, not an afterthought — it's why the featu
 | In scope | Intentionally out of scope |
 |---|---|
 | Streaming agent loop (OpenAI-compatible `/v1/chat/completions`) | MCP *server* marketplace (ACP clients may still attach) |
-| 22 tools: `list_dir`, `read_file`, `search_replace`, `write_file`, `grep`, `run_shell`, `search_code`, `todo_write`, `memory_update`, `memory_search`, `git_status`, `git_diff`, `git_log`, `git_commit`, `apply_patch`, `run_tests`, `run_lint`, `ask_user`, `web_search`, `web_fetch`, `skill_search`, `skill_load` | Remote config sync |
+| 25 tools: `list_dir`, `read_file`, `search_replace`, `write_file`, `grep`, `run_shell`, `search_code`, `todo_write`, `goal_set`, `delegate_task`, `think`, `memory_update`, `memory_search`, `git_status`, `git_diff`, `git_log`, `git_commit`, `apply_patch`, `run_tests`, `run_lint`, `ask_user`, `web_search`, `web_fetch`, `skill_search`, `skill_load` | Remote config sync |
 | Document extraction: `read_file` converts `.docx`, `.pdf`, `.xlsx`, `.odt`, `.epub`, `.pptx`, `.csv`, `.rtf`, `.ods`, `.odp`, `.doc`, `.xls`, `.ppt` and more to Markdown (via the `anydoc` engine) | Multi-model routing |
 | Workspace sandbox (path confinement + dangerous-command filter) | Rhai workflow engine |
 | OS-level subprocess confinement (Landlock, seccomp network block, rlimits) | GUI / web frontend |
@@ -35,6 +35,9 @@ That constraint is the design center, not an afterthought — it's why the featu
 | Context-window inference + automatic compaction (tool-result pruning) |  |
 | JSONL session persistence (`--resume`, `--list-sessions`) |  |
 | Cross-session project memory (`.raven/MEMORY.md`) | |
+| Persistent goal + task list (`.raven/state/`, injected into the system prompt) | |
+| Model-spawnable sub-agents (`delegate_task`) + `think` tool | |
+| Compaction thrashing protection | |
 | Config file (`~/.raven/config.toml` + workspace config) | |
 | Typed errors with retry + exponential backoff | |
 | Non-streaming fallback (`--no-stream`) | |
@@ -213,10 +216,9 @@ The agent tracks token usage with a built-in token estimator (no external vocab 
 1. **Prunes old tool results** — soft-trims tool outputs older than 3 turns (keeps head + tail with a truncation marker)
 2. **Compacts the conversation** — summarizes the middle of the conversation, preserving the system message and the last ~40% of the context budget for recent messages
 
-Context window sizes are fetched from the model's actual metadata via Ollama's `/api/show` endpoint. This returns the real `context_length` from the model file (e.g. `gemma4` → 128K, `qwen3.5` → 256K, `deepseek-v4-pro:cloud` → 512K). If the API is unreachable (Ollama not running, model not found), a name-based heuristic is used as fallback:
+Context window sizes are fetched from the model's actual metadata via Ollama's `/api/show` endpoint. This returns the real `context_length` from the model file (e.g. `gemma4` → 128K, `qwen3.5` → 256K, `deepseek-v4-pro:cloud` → 1M). If the API is unreachable (Ollama not running, model not found), a name-based heuristic is used as fallback:
 
-- `glm:cloud`, `deepseek-v4-flash:cloud` → 1M
-- `deepseek-v4:cloud` (e.g. `pro`) → 512K
+- `glm:cloud`, `deepseek-v4:cloud` (flash and pro) → 1M
 - `qwen3.5` → 256K
 - `gemma4`, `gemma3`, `qwen2.5`, `qwen3`, `llama3.1`, `llama3.2`, `deepseek`, `codestral`, `glm` → 128K
 - `llama3`, `codellama`, `"32k"` in name → 32K
@@ -287,6 +289,7 @@ src/
   session.rs    # JSONL session persistence, resume, list
   plan.rs       # Structured plan mode, parse_plan, format_plan
   memory.rs     # Cross-session MEMORY.md
+  state.rs      # Persistent agent state (.raven/state/todos.json + goal.json)
   skills.rs     # SKILL.md discovery + skill_search/skill_load
   repomap.rs    # Lightweight repo symbol map
   web.rs        # Web tools (web_search, web_fetch)

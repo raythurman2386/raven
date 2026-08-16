@@ -10,6 +10,18 @@ use crate::tools::Sandbox;
 use super::core::Agent;
 use super::types::AgentEvent;
 
+#[cfg(test)]
+thread_local! {
+    static DELEGATE_STUB: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Test-only: next `delegate_task` returns `out` without spawning a child.
+#[cfg(test)]
+pub fn stub_delegate_task(out: impl Into<String>) {
+    DELEGATE_STUB.with(|c| *c.borrow_mut() = Some(out.into()));
+}
+
 /// Report from a single parallel sub-agent.
 #[derive(Debug, Clone)]
 pub struct SubAgentReport {
@@ -21,6 +33,47 @@ pub struct SubAgentReport {
     /// Path to a recovery patch file when the sub-agent's work could not be
     /// merged but was preserved as a diff.
     pub recovery_patch: Option<String>,
+}
+
+/// Run a single focused sub-agent on `task` and return its accumulated text
+/// output (bounded). Used by the `delegate_task` tool so the model can offload
+/// a sub-task to a fresh context window and get back a distilled summary,
+/// keeping the main conversation clean (Claude Code's subagent pattern).
+///
+/// The sub-agent shares the workspace (no git-worktree isolation) and inherits
+/// the same sandbox confinement. Nesting is disabled (`allow_delegate = false`)
+/// so the child cannot spawn another delegate or overwrite parent goal/todos.
+/// Tool events are consumed silently; only `TextDelta` output is accumulated.
+pub async fn delegate_task(mut settings: Settings, task: String) -> Result<String> {
+    #[cfg(test)]
+    if let Some(out) = DELEGATE_STUB.with(|c| c.borrow_mut().take()) {
+        let _ = (settings, task);
+        return Ok(out);
+    }
+    settings.allow_delegate = false;
+    settings.max_iterations = settings.max_iterations.min(8);
+    let mut agent = Agent::new(settings)?;
+    let (tx, mut rx) = mpsc::channel::<AgentEvent>(64);
+    // Box the run future: delegate_task is reachable from agent.run (via the
+    // delegate_task tool), so an unboxed recursive async fn would be infinitely
+    // sized. Boxing breaks the cycle.
+    let run = Box::pin(agent.run(&task, tx));
+    let drain = async {
+        let mut out = String::new();
+        while let Some(ev) = rx.recv().await {
+            match ev {
+                AgentEvent::TextDelta(t) => out.push_str(&t),
+                AgentEvent::Done | AgentEvent::Error(_) => break,
+                _ => {}
+            }
+        }
+        out
+    };
+    let (run_res, out) = tokio::join!(run, drain);
+    if let Err(e) = run_res {
+        tracing::warn!("delegate_task sub-agent failed: {e}");
+    }
+    Ok(out)
 }
 
 /// Run several focused sub-agents in parallel and return their final reports.

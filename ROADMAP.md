@@ -345,3 +345,53 @@ Two pre-existing flaky tests surfaced during Phase 10 verification:
 
 **Acceptance:** 30 consecutive full-suite runs with 0 failures (previously ~3/25), clippy `-D warnings`, fmt clean.
 **Commit:** `fix(tests): make mock server keep-alive aware + precise timeout`.
+
+---
+
+## Phase 12 — Long-horizon task management  (Claude Code / Grok Build research)
+
+**Why:** raven's todo state was an in-memory `static` (lost across turns and
+sessions), there was no persistent goal, no model-spawnable sub-agent, no
+`think` tool, no compaction thrashing protection, and no goal-aware reflection.
+These are the mechanisms the research identifies for keeping an agent on track
+over long tasks with clean changes.
+
+### 12.1 Persistent todo + goal state  (`src/state.rs`)
+- New `src/state.rs`: disk-backed state under `.raven/state/` — `todos.json`
+  (`Vec<TodoItem>`) + `goal.json` (`Goal`), atomic writes, loaded lazily.
+- Replaced the `static TODO_STATE` in `tools/mod.rs` with per-workspace
+  persistence; `todo_write` now takes the workspace and persists.
+- New `goal_set(description, status)` tool (schema + dispatch + `is_write_tool`).
+- Injected `<Current goal>` + `<Task list>` into the system prompt each turn
+  (`build_system_message`), so the objective survives compaction and sessions.
+
+### 12.2 `delegate_task` sub-agent tool
+- New `delegate_task(description)` tool: spawns a focused sub-agent in a fresh
+  context window and returns a distilled (capped 2K) summary, keeping the main
+  context clean (Claude Code subagent pattern).
+- Depth 1 only: the child sets `allow_delegate = false` so it cannot nest
+  another delegate or overwrite the parent goal/todos. Shares the workspace
+  (no worktree). `tokio::join!` + `Box::pin` breaks the recursive-async cycle.
+
+### 12.3 `think` tool
+- New `think(thought)` tool — appends a thought to the log, returns nothing.
+  Read-only; available in plan/chat toolsets. (Claude Code: 54% τ-Bench gain.)
+
+### 12.4 Compaction thrashing protection
+- `Agent.compact_thrash_count`: when compaction fails to reduce the history
+  (`after >= before`, context refills immediately), count toward a cap (3);
+  past the cap, auto-compaction is paused so the loop doesn't spin on repeated
+  summarize calls (Claude Code thrashing protection).
+
+### 12.5 Goal-aware reflection
+- `compute_reminders` now takes the goal + todos and, from iteration 4, injects
+  a re-anchor reminder restating the goal and the next pending task (Goose
+  `next_step` carry-over).
+
+**Acceptance:** `cargo test` (570+ tests incl. state round-trips, thrashing cap,
+goal-aware reminders, eval_suite long-horizon cases), clippy `-D warnings`, fmt clean. Live run: set a goal,
+run a long session, resume, confirm goal+todos persist and the agent re-anchors.
+**Commit:** `feat(agent): long-horizon task management (persistent state, delegate_task, think, thrash guard, goal reflection)`.
+
+**Phase status:**
+- [x] Phase 12 — Long-horizon task management

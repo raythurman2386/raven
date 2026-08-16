@@ -174,7 +174,7 @@ pub struct Sandbox {
     pub workspace: PathBuf,
     /// Extra Landlock RW roots granted to every confined child (e.g. a git
     /// worktree's shared main repo). Defaults to empty. The process temp dir
-    /// is never implied — see [`confinement::FsPolicy`]. Never granted on
+    /// is never implied (see `confinement::FsPolicy`). Never granted on
     /// Windows (no Landlock).
     pub extra_rw: Vec<PathBuf>,
 }

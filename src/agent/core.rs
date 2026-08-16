@@ -80,6 +80,9 @@ const SYSTEM_BASE: &str = r#"You are an efficient coding agent. You help with so
 - Use run_shell only for commands with no dedicated tool (build, test, git).
 - You can call multiple tools in a single response.
 - Do NOT call the same tool with the same arguments twice. If you already have the information, use it.
+- Use think to reason through long chains of tool calls or costly sequential decisions before acting.
+- Use goal_set at the start of a multi-step task and todo_write to track 3+ steps; keep them updated as you work.
+- Use delegate_task to offload a self-contained sub-task to a fresh context window; it returns a summary you can rely on.
 </tool_calling>
 
 <edit_discipline>
@@ -93,6 +96,14 @@ const SYSTEM_BASE: &str = r#"You are an efficient coding agent. You help with so
 - Stay strictly inside the workspace.
 </workspace>
 
+<accuracy>
+- Never invent or guess file contents, function signatures, test results, or command output. If you have not read it or run it, you do not know it.
+- Base every claim about the code on what a tool actually returned. If a tool result is missing, truncated, or errored, say so instead of fabricating.
+- Do not claim a change is done or verified unless you actually ran the test/lint command and saw a passing result.
+- If you are unsure whether a file exists or what it contains, read it or list the directory rather than assuming.
+- When you finish, only report what you genuinely did and observed.
+</accuracy>
+
 <output>
 - When you have enough information, answer the user's question directly with text.
 - You do NOT need to call a tool for every response. Sometimes just text is the right answer.
@@ -101,6 +112,11 @@ const SYSTEM_BASE: &str = r#"You are an efficient coding agent. You help with so
 - Do not call list_dir again — you already know the structure.
 </output>
 "#;
+
+/// Rebuild the system message (goal/todos, repo map, memory) from disk.
+pub(crate) fn rebuild_system_message(settings: &Settings) -> ChatMessage {
+    build_system_message(settings)
+}
 
 /// Build the system message from settings, including the repo map if applicable.
 fn build_system_message(settings: &Settings) -> ChatMessage {
@@ -170,6 +186,17 @@ fn build_system_message(settings: &Settings) -> ChatMessage {
         system.push_str(&mem);
         system.push('\n');
     }
+    if let Some(goal) = crate::state::load_goal(&settings.workspace) {
+        system.push_str("\n--- Current goal ---\n");
+        system.push_str(&crate::state::format_goal(&goal));
+        system.push('\n');
+    }
+    let todos = crate::state::load_todos(&settings.workspace);
+    if !todos.is_empty() {
+        system.push_str("\n--- Task list ---\n");
+        system.push_str(&crate::state::format_todos(&todos));
+        system.push('\n');
+    }
     if let Some(rules) = &settings.rules {
         system.push_str("\n--- Session rules ---\n");
         system.push_str(rules);
@@ -235,6 +262,10 @@ pub struct Agent {
     pub(crate) plan: Option<Plan>,
     /// Index into `plan.steps` of the step currently being executed.
     pub(crate) current_step: usize,
+    /// Consecutive compactions that failed to bring the history under the
+    /// soft limit (context refilled immediately). After a cap, auto-compaction
+    /// is paused to avoid thrashing (Claude Code's thrashing protection).
+    pub(crate) compact_thrash_count: u32,
     /// Test-only completion source. When set, `run()` bypasses HTTP entirely
     /// and pulls each completion body from this closure instead, so the agent
     /// loop can be driven offline with scripted responses. The closure
@@ -274,6 +305,7 @@ impl Agent {
             pending_blank: None,
             plan: None,
             current_step: 0,
+            compact_thrash_count: 0,
             #[cfg(test)]
             completion_source: None,
             client: shared_http_client()?,
@@ -330,14 +362,33 @@ impl Agent {
     /// so the model can gather context but physically cannot write files or
     /// run shell.
     fn tools_value(&self) -> serde_json::Value {
-        if self.plan_only {
+        let tools = if self.plan_only {
             match self.settings.mode {
                 Mode::Chat => crate::tools::chat_tool_definitions(),
                 _ => crate::tools::plan_tool_definitions(),
             }
         } else {
             cached_tool_definitions().clone()
+        };
+        if self.settings.allow_delegate {
+            return tools;
         }
+        let Some(arr) = tools.as_array() else {
+            return tools;
+        };
+        let filtered: Vec<serde_json::Value> = arr
+            .iter()
+            .filter(|tool| {
+                !matches!(
+                    tool.get("function")
+                        .and_then(|f| f.get("name"))
+                        .and_then(|n| n.as_str()),
+                    Some("delegate_task" | "goal_set" | "todo_write")
+                )
+            })
+            .cloned()
+            .collect();
+        serde_json::Value::Array(filtered)
     }
 
     /// Run one full agent turn (may include multiple tool rounds). Yields events.
@@ -363,17 +414,14 @@ impl Agent {
         self.blank_attempts = 0;
         let mut edited_any = false;
 
-        // Rebuild the repo map in the system message if files were edited
-        // during a previous turn and the workspace is large enough to have
-        // a map. The stale flag is always cleared so it doesn't persist
-        // forever in small workspaces that never had a map.
+        // Always refresh the system message so persisted goal/todos and
+        // working-tree status stay current. Invalidate the repo map first
+        // when a previous turn edited files.
         if self.repo_map_stale {
             crate::repomap::invalidate(&self.settings.workspace);
-            if crate::repomap::should_build(&self.settings.workspace) {
-                self.messages[0] = build_system_message(&self.settings);
-            }
             self.repo_map_stale = false;
         }
+        self.messages[0] = build_system_message(&self.settings);
 
         for iter in 0..self.settings.max_iterations {
             match self
@@ -421,7 +469,12 @@ impl Agent {
             let _ = tx.send(AgentEvent::PlanProgress(plan.clone())).await;
         }
 
-        let mut reminders = compute_reminders(&self.messages, iter);
+        let mut reminders = compute_reminders(
+            &self.messages,
+            iter,
+            crate::state::load_goal(&self.settings.workspace).as_ref(),
+            &crate::state::load_todos(&self.settings.workspace),
+        );
         if let Some(lint) = self.pending_lint.take() {
             reminders.push(lint);
         }
@@ -439,28 +492,46 @@ impl Agent {
         let base_url = self.settings.base_url().to_string();
         let model = self.settings.model.clone();
         let api_key = self.settings.api_key().map(str::to_string);
-        if let Some((before, after)) = compact_if_needed_llm(
-            &mut self.messages,
-            self.settings.context_window,
-            self.settings.compact_threshold,
-            move |middle| {
-                Box::pin(summarize_request(
-                    client.clone(),
-                    base_url.clone(),
-                    model.clone(),
-                    api_key.clone(),
-                    middle,
-                ))
-            },
-        )
-        .await
-        {
-            let _ = tx
-                .send(AgentEvent::Compacted {
-                    before_tokens: before,
-                    after_tokens: after,
-                })
-                .await;
+        // Thrashing protection: if compaction keeps failing to bring the
+        // history under the soft limit (a single huge file/tool output refills
+        // context immediately), pause auto-compaction after a few attempts so
+        // the loop doesn't spin on repeated summarize calls (Claude Code).
+        const MAX_COMPACT_THRASH: u32 = 3;
+        // Retry compaction every 4th iteration even after the pause so a
+        // later prune can resume shrinking instead of staying stuck forever.
+        let compact_paused =
+            self.compact_thrash_count >= MAX_COMPACT_THRASH && !iter.is_multiple_of(4);
+        if !compact_paused {
+            if let Some((before, after)) = compact_if_needed_llm(
+                &mut self.messages,
+                self.settings.context_window,
+                self.settings.compact_threshold,
+                move |middle| {
+                    Box::pin(summarize_request(
+                        client.clone(),
+                        base_url.clone(),
+                        model.clone(),
+                        api_key.clone(),
+                        middle,
+                    ))
+                },
+            )
+            .await
+            {
+                // If compaction didn't actually reduce the history (context
+                // refilled immediately), count it toward the thrash cap.
+                if after >= before {
+                    self.compact_thrash_count += 1;
+                } else {
+                    self.compact_thrash_count = 0;
+                }
+                let _ = tx
+                    .send(AgentEvent::Compacted {
+                        before_tokens: before,
+                        after_tokens: after,
+                    })
+                    .await;
+            }
         }
 
         let prompt_est = history_tokens(&self.messages);

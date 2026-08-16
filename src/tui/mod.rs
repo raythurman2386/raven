@@ -2539,6 +2539,7 @@ mod tests {
             searxng_url: None,
             searxng_engines: Vec::new(),
             sandbox_extra_rw: Vec::new(),
+            allow_delegate: true,
         }
     }
 
@@ -2548,6 +2549,17 @@ mod tests {
         let store = SessionStore::for_workspace(tmp.path()).unwrap();
         let mut session = store.create("gemma4:latest").unwrap();
         let mut settings = test_settings(tmp.path());
+        // Point at an unreachable host so the test deterministically exercises
+        // the name-heuristic fallback (a live local Ollama would otherwise
+        // return the real /api/show value and make the assertion environment-
+        // dependent).
+        settings.provider = Provider {
+            name: "unreachable".into(),
+            base_url: "http://127.0.0.1:1/v1".into(),
+            api_key: None,
+            api_key_env: None,
+            default_model: "gemma4:latest".into(),
+        };
         let mut state = dummy_state();
         // Seed the header blocks the way TuiState::new does.
         state.blocks = vec![
@@ -2583,12 +2595,12 @@ mod tests {
 
         assert!(handled);
         assert_eq!(settings.model, "deepseek-v4-pro:cloud");
-        // deepseek-v4-pro:cloud → 524_288 (name heuristic; API unreachable in test).
-        assert_eq!(settings.context_window, 524_288);
-        assert_eq!(settings.max_tokens, Settings::derived_max_tokens(524_288));
+        // deepseek-v4-pro:cloud → 1M (live /api/show or name heuristic).
+        assert_eq!(settings.context_window, 1_000_000);
+        assert_eq!(settings.max_tokens, Settings::derived_max_tokens(1_000_000));
         // compact_at recomputed from the new window (window - reserve) * threshold.
         let expected_compact =
-            ((524_288 - 524_288 / 8) as f32 * settings.compact_threshold) as usize;
+            ((1_000_000 - 1_000_000 / 8) as f32 * settings.compact_threshold) as usize;
         assert_eq!(compact_at, expected_compact);
         // Session model persisted.
         assert_eq!(session.summary.model, "deepseek-v4-pro:cloud");
@@ -2599,7 +2611,7 @@ mod tests {
             panic!("block 0 should be a SystemBlock");
         }
         if let BlockKind::System(b) = &state.blocks[2] {
-            assert!(b.text().contains("524K"), "context block: {}", b.text());
+            assert!(b.text().contains("1.0M"), "context block: {}", b.text());
         } else {
             panic!("block 2 should be a SystemBlock");
         }

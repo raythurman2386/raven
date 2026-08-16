@@ -12,9 +12,10 @@ cargo test
 
 - **Unit tests** (`#[cfg(test)] mod tests` in each source file):
   - `src/config.rs` — context window inference, max_tokens derivation, AGENTS.md loading, config.toml parsing
-  - `src/agent/` — ephemeral reminder computation (loop-breaker, iteration nudge); **mock-server integration tests** for the full `Agent::run` loop (streaming text, tool-call dispatch, 5xx retry, non-streaming JSON, model-not-found fails-fast) against a fake `/chat/completions` endpoint; **offline fake-model tests** (`src/agent/tests/fake_model.rs`) that drive the loop via a scripted `CompletionSource` with no HTTP (finish, blank-stall recovery + cap, tool round-trip, same-file serial edits, max_tokens clamp)
+  - `src/agent/` — ephemeral reminder computation (loop-breaker, iteration nudge, goal-aware re-anchor); **mock-server integration tests** for the full `Agent::run` loop (streaming text, tool-call dispatch, 5xx retry, non-streaming JSON, model-not-found fails-fast) against a fake `/chat/completions` endpoint; **offline fake-model tests** (`src/agent/tests/fake_model.rs`) that drive the loop via a scripted `CompletionSource` with no HTTP (finish, blank-stall recovery + cap, tool round-trip, same-file serial edits, max_tokens clamp); **eval-suite tests** (`src/agent/tests/eval_suite.rs`) covering goal_set/todo_write persistence + injection, delegate_task, think, and compaction thrashing
   - `src/commands.rs` — slash-command parsing, alias resolution, registry uniqueness, help rendering
-  - `src/context.rs` — token estimation, compaction (preserves system message, reduces tokens, keeps tool-call/result pairs), tool-result pruning
+  - `src/context.rs` — token estimation, compaction (preserves system message, reduces tokens, keeps tool-call/result pairs), tool-result pruning, thrashing protection
+  - `src/state.rs` — persistent todo/goal load/save round-trips, atomic writes, system-prompt formatting
   - `src/tools/` — sandbox path confinement (including symlink-escape rejection and `openat2`/`open_beneath` traversal rejection), list_dir, read_file, write_file, search_replace, grep, run_shell (dangerous command blocking, API key stripping, direct-exec classification, confined-child behavior incl. Landlock/network-block/RLIMIT_FSIZE), worktree isolation between branches, dispatch routing, glob matching, unified diff parsing, apply_patch, document extraction
   - `src/plan.rs` — plan parsing (JSON, numbered list, bullet list, code block), plan formatting
   - `src/tokenizer.rs` — token counting behavior

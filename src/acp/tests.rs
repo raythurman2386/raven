@@ -33,6 +33,7 @@ fn settings(ws: &std::path::Path) -> Settings {
         searxng_url: None,
         searxng_engines: Vec::new(),
         sandbox_extra_rw: Vec::new(),
+        allow_delegate: true,
     }
 }
 

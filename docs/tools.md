@@ -15,7 +15,10 @@ All file paths are **relative to the workspace root** and confined to it. See [a
 | `grep` | Regex content search with optional glob filter | Read-only; skips hidden dirs and build artifacts |
 | `run_shell` | Run a shell command | `cwd` forced to workspace; dangerous patterns blocked; secret env vars stripped; direct-exec for safe commands; OS-level confinement (Landlock/seccomp/rlimits/Job Object); Landlock writes are workspace + extras + `/dev` only (`TMPDIR` pinned under `.raven/tmp`); 60s default timeout; output capped at 12 000 chars |
 | `search_code` | Literal case-insensitive search across source files | Read-only; source extensions only |
-| `todo_write` | Create/replace a structured task list (full-replace) | In-memory, per agent run |
+| `todo_write` | Create/replace a structured task list (full-replace) | Persists to `.raven/state/todos.json`; injected into the system prompt |
+| `goal_set` | Set/update the current goal for a task | Persists to `.raven/state/goal.json`; injected into the system prompt |
+| `delegate_task` | Spawn a focused sub-agent in a fresh context window, return its summary | Runs a nested agent; shares the workspace; nesting disabled (no recursive delegate); output capped |
+| `think` | Record a thought for structured mid-task reasoning | Read-only no-op; available in plan/chat |
 | `memory_update` | Save a durable project fact to `.raven/MEMORY.md` | Writes to workspace memory file |
 | `memory_search` | Search project memory by keyword | Read-only; scans `.raven/MEMORY.md` |
 | `git_status` | Show working tree status | Read-only; runs `git status --porcelain` |
@@ -146,7 +149,49 @@ Full-replace semantics: each call replaces the entire todo list. Returns a summa
 [pending] 3: Write tests
 ```
 
-State is in-memory and per agent run (not persisted across sessions).
+State is **persisted** to `.raven/state/todos.json` (atomic write) and injected
+into the system prompt on each turn, so it survives context compaction and
+session resume.
+
+### `goal_set`
+
+```json
+{
+  "description": "string (required)",
+  "status": "pending | in_progress | completed (optional, default in_progress)"
+}
+```
+
+Sets or updates the current goal. Persisted to `.raven/state/goal.json` and
+injected into the system prompt on each turn. Use at the start of a multi-step
+task and whenever the objective changes.
+
+### `delegate_task`
+
+```json
+{
+  "description": "string (required)"
+}
+```
+
+Spawns a focused sub-agent in a **fresh context window** to work on a
+self-contained sub-task, then returns its distilled output (capped at 2000
+chars). The sub-agent shares the workspace and inherits the same sandbox
+confinement. Nesting is disabled: the child cannot spawn another `delegate_task`
+or overwrite the parent's goal/todos. Use it to offload exploration or isolated
+work without bloating your own context.
+
+### `think`
+
+```json
+{
+  "thought": "string (required)"
+}
+```
+
+Appends a thought to the log and returns nothing. It does not obtain new
+information or change any state — it is a scratchpad for structured reasoning
+mid-task. Read-only and available during planning.
 
 ### `memory_update`
 

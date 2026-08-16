@@ -102,9 +102,9 @@ abort, or any other text to revise the plan.
 During the plan-proposal turn (and any revision turn), the agent is limited to a **read-only toolset** so it can gather context without modifying the workspace before you approve:
 
 - `list_dir`, `read_file`, `grep`, `search_code`, `git_status`, `git_diff`, `git_log`
-- `web_search`, `web_fetch`, `skill_search`, `skill_load`, `memory_search`
+- `web_search`, `web_fetch`, `skill_search`, `skill_load`, `memory_search`, `think`
 
-The mutating and shell tools (`write_file`, `search_replace`, `run_shell`, `todo_write`, `memory_update`, `apply_patch`, `run_tests`, `run_lint`, `git_commit`, `ask_user`) are **not advertised** to the model during planning, so it physically cannot change files or run commands until you approve. Only after approval does the full toolset become available.
+The mutating and shell tools (`write_file`, `search_replace`, `run_shell`, `todo_write`, `goal_set`, `delegate_task`, `memory_update`, `apply_patch`, `run_tests`, `run_lint`, `git_commit`, `ask_user`) are **not advertised** to the model during planning, so it physically cannot change files or run commands until you approve. Only after approval does the full toolset become available.
 
 ---
 
@@ -262,6 +262,25 @@ To step back from the last commit, use the `/undo` (or `/u`) slash command in
 the TUI. It runs `git reset --soft HEAD~1`, which undoes the commit while
 **keeping all changes in the working tree** — nothing is lost, and you can
 re-commit once the agent's next move is clearer.
+
+### Long-horizon task management (`goal_set`, `todo_write`, `delegate_task`, `think`)
+
+For multi-step tasks, Raven keeps the agent on track with persistent state and
+context hygiene:
+
+- **`goal_set(description)`** records the current objective to
+  `.raven/state/goal.json`. It is injected into the system prompt each turn, so
+  the agent re-anchors on its goal even after context compaction or a session
+  resume.
+- **`todo_write(todos)`** maintains a structured task list persisted to
+  `.raven/state/todos.json` (full-replace semantics). The pending items are
+  injected into the system prompt, and from iteration 4 the harness injects a
+  reminder restating the goal and the next pending task.
+- **`delegate_task(description)`** spawns a focused sub-agent in a **fresh
+  context window** and returns a distilled summary, so exploration or isolated
+  work doesn't bloat the main conversation.
+- **`think(thought)`** is a read-only scratchpad for structured mid-task
+  reasoning (useful across long chains of tool calls).
 
 ### Context compaction (LLM-structured)
 

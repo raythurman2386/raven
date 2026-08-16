@@ -122,7 +122,31 @@ pub fn dispatch(
                     .collect(),
                 None => Vec::new(),
             };
-            super::todo_write(todos)
+            super::todo_write(&sandbox.workspace, todos)
+        }
+        "think" => {
+            let thought = args.get("thought").and_then(|v| v.as_str()).unwrap_or("");
+            Ok(format!("Thought recorded: {thought}"))
+        }
+        "goal_set" => {
+            let description = args
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let status = crate::state::normalize_status(
+                args.get("status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("in_progress"),
+            )
+            .to_string();
+            let goal = crate::state::Goal {
+                description,
+                status,
+                updated_at: crate::session::now_iso_public(),
+            };
+            crate::state::save_goal(&sandbox.workspace, &goal)
+                .map(|_| crate::state::format_goal(&goal))
         }
         "memory_update" => {
             let section = args.get("section").and_then(|v| v.as_str()).unwrap_or("");
@@ -194,5 +218,7 @@ fn is_write_tool(name: &str) -> bool {
             | "git_commit"
             | "memory_update"
             | "todo_write"
+            | "goal_set"
+            | "delegate_task"
     )
 }

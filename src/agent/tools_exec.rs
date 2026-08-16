@@ -177,6 +177,50 @@ impl Agent {
                 }
             }
 
+            if matches!(
+                tc.function.name.as_str(),
+                "delegate_task" | "goal_set" | "todo_write"
+            ) && !self.settings.allow_delegate
+            {
+                slots[idx] = Some(PendingToolResult::ready(
+                    tc.id.clone(),
+                    tc.function.name.clone(),
+                    String::new(),
+                    Ok(
+                        "This sub-agent cannot nest delegate_task or change the parent goal/todos."
+                            .into(),
+                    ),
+                ));
+                continue;
+            }
+
+            // delegate_task spawns a fresh sub-agent in a new context window
+            // and returns its distilled output — async, so special-case it
+            // like the web tools.
+            if tc.function.name == "delegate_task" {
+                let description = args
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let sub_settings = self.settings.clone();
+                let result = super::parallel::delegate_task(sub_settings, description).await;
+                let result = match result {
+                    Ok(out) => {
+                        let capped: String = out.chars().take(2000).collect();
+                        format!("Sub-agent result:\n{capped}")
+                    }
+                    Err(e) => format!("Sub-agent error: {e}"),
+                };
+                slots[idx] = Some(PendingToolResult::ready(
+                    tc.id.clone(),
+                    "delegate_task".into(),
+                    String::new(),
+                    Ok(result),
+                ));
+                continue;
+            }
+
             // Web tools are async HTTP — special-case them like ask_user.
             if tc.function.name == "web_search" || tc.function.name == "web_fetch" {
                 let result = if tc.function.name == "web_search" {
@@ -319,7 +363,11 @@ impl Agent {
             );
         }
 
+        let mut refresh_state = false;
         for slot in slots.into_iter().flatten() {
+            if matches!(slot.name.as_str(), "goal_set" | "todo_write") {
+                refresh_state = true;
+            }
             self.record_tool_result(
                 tx,
                 slot.id,
@@ -329,6 +377,9 @@ impl Agent {
                 slot.is_verification,
             )
             .await;
+        }
+        if refresh_state && !self.messages.is_empty() {
+            self.messages[0] = super::core::rebuild_system_message(&self.settings);
         }
 
         // Plan progress: mark the current step Completed and advance to

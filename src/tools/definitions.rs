@@ -143,6 +143,49 @@ pub fn tool_definitions() -> serde_json::Value {
         {
             "type": "function",
             "function": {
+                "name": "think",
+                "description": "Record a short reasoning step. Does not read files or change the workspace. Use for long chains of tool calls, sequential decisions, or when a mistake would be costly.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "thought": { "type": "string", "description": "The thought to record" }
+                    },
+                    "required": ["thought"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "delegate_task",
+                "description": "Spawn a focused sub-agent on a self-contained sub-task in a fresh context window and return a short summary. The child shares this workspace (no worktree isolation), cannot nest another delegate_task, and cannot change the parent goal or todo list. Use for exploration or isolated work.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "description": { "type": "string", "description": "A self-contained, unambiguous task for the sub-agent" }
+                    },
+                    "required": ["description"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "goal_set",
+                "description": "Set or update the current goal for this task. Persists across turns and sessions. Use at the start of a multi-step task and whenever the objective changes.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "description": { "type": "string", "description": "The goal, stated concisely" },
+                        "status": { "type": "string", "enum": ["pending", "in_progress", "completed"], "description": "Goal status (default in_progress)" }
+                    },
+                    "required": ["description"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "memory_update",
                 "description": "Save a durable project fact to memory (persists across sessions). Use for conventions, decisions, or context — not ephemeral task progress.",
                 "parameters": {
@@ -343,6 +386,7 @@ pub fn plan_tool_definitions() -> serde_json::Value {
         "skill_search",
         "skill_load",
         "memory_search",
+        "think",
     ];
 
     let all = tool_definitions();
@@ -377,6 +421,7 @@ pub fn chat_tool_definitions() -> serde_json::Value {
         "skill_load",
         "memory_search",
         "ask_user",
+        "think",
     ];
 
     let all = tool_definitions();

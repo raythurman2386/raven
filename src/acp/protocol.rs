@@ -204,7 +204,8 @@ pub fn tool_kind(name: &str) -> &'static str {
         "run_shell" | "run_tests" | "run_lint" | "git_commit" => "execute",
         "git_status" | "git_diff" | "git_log" => "read",
         "web_search" | "web_fetch" => "fetch",
-        "todo_write" | "memory_update" | "skill_load" => "think",
+        "todo_write" | "memory_update" | "skill_load" | "goal_set" | "think" => "think",
+        "delegate_task" => "other",
         "ask_user" => "other",
         _ => "other",
     }

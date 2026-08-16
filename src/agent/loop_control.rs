@@ -206,7 +206,12 @@ impl Agent {
 /// - After 3+ consecutive tool-only assistant turns (`iter >= 3`), push a
 ///   "stop calling tools" reminder to break a tool-calling loop.
 /// - At `iter == 5`, push a "reflect on progress" nudge.
-pub(crate) fn compute_reminders(messages: &[ChatMessage], iter: usize) -> Vec<String> {
+pub(crate) fn compute_reminders(
+    messages: &[ChatMessage],
+    iter: usize,
+    goal: Option<&crate::state::Goal>,
+    todos: &[crate::state::TodoItem],
+) -> Vec<String> {
     let mut reminders = Vec::new();
 
     if iter >= 3 {
@@ -233,6 +238,29 @@ pub(crate) fn compute_reminders(messages: &[ChatMessage], iter: usize) -> Vec<St
              If you're stuck in a loop, try a different approach."
                 .into(),
         );
+    }
+
+    // Goal-aware reflection: after several iterations, re-anchor the model to
+    // its objective and the next pending task (Goose's `next_step` carry-over).
+    if iter >= 4 {
+        let mut anchor = String::new();
+        if let Some(goal) = goal {
+            if crate::state::normalize_status(&goal.status) != "completed" {
+                anchor.push_str(&format!("Your goal: {}\n", goal.description));
+            }
+        }
+        let next_pending = todos
+            .iter()
+            .find(|t| crate::state::normalize_status(&t.status) != "completed")
+            .map(|t| t.content.clone());
+        if let Some(next) = next_pending {
+            anchor.push_str(&format!("Next pending task: {next}\n"));
+        }
+        if !anchor.is_empty() {
+            reminders.push(format!(
+                "Re-anchor on your objective before continuing:\n{anchor}"
+            ));
+        }
     }
 
     reminders

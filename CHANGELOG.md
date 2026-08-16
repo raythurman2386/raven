@@ -6,6 +6,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Persistent goal + todos** — `.raven/state/` (`goal.json`, `todos.json`)
+  survive compaction and resume; injected into the system prompt each turn
+  and after `goal_set` / `todo_write`.
+- **`goal_set`, `delegate_task`, `think` tools** — long-horizon tracking,
+  depth-1 sub-agents (shared workspace, no nested delegate / parent state
+  overwrite), and a read-only reasoning scratchpad.
+- **Eval case `13_long_horizon`** — multi-step fix that must set a goal and
+  track todos.
+
+### Changed
+
+- **Compaction thrashing protection** — pause after 3 no-reduction
+  compactions; retry every 4th iteration so a later prune can resume.
+
 ## [0.2.3] - 2026-08-14
 
 ### Added

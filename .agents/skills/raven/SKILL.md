@@ -62,8 +62,9 @@ CLI (main.rs)
 | `src/runner.rs` | Shared event-draining and plan-approval flow |
 | `src/session.rs` | JSONL session persistence, resume, list (atomic writes) |
 | `src/skills.rs` | `SKILL.md` discovery + `skill_search`/`skill_load` |
+| `src/state.rs` | Persistent agent state — `.raven/state/todos.json` + `goal.json`, injected into the system prompt |
 | `src/tokenizer.rs` | Pure-Rust BPE token estimator (no external vocab) |
-| `src/tools/` | 22 tools + sandbox — `mod.rs`, `definitions.rs`, `dispatch.rs`, `sandbox/` (`mod.rs` + `confinement.rs`), `document.rs`, `git.rs`, `patch.rs`, `windows.rs` |
+| `src/tools/` | 25 tools + sandbox — `mod.rs`, `definitions.rs`, `dispatch.rs`, `sandbox/` (`mod.rs` + `confinement.rs`), `document.rs`, `git.rs`, `patch.rs`, `windows.rs` |
 | `src/tui/` | ratatui TUI with status bar, streaming, scrollback, /commands |
 | `src/web.rs` | Web tools (`web_search`, `web_fetch`) |
 | `src/acp/` | ACP v1 stdio adapter (`raven acp`) — protocol + server, no MCP |
@@ -92,7 +93,7 @@ CLI (main.rs)
 ```bash
 cargo build                    # debug build, must be warning-free
 cargo build --release          # LTO + strip
-cargo test                     # 520+ tests, all offline (no Ollama needed)
+cargo test                     # 570+ tests, all offline (no Ollama needed)
 cargo clippy --all-targets -- -D warnings   # must be zero warnings
 cargo fmt --all --check        # formatting check
 cargo doc --no-deps            # docs must build with no warnings
@@ -162,6 +163,15 @@ test`, `cargo clippy`, `cargo fmt`) — do not rely on the agent's simulated
 10. **Headless plan revise** — after `[r]evise` + approve, execute the
     *revised* plan and *revised* message list (`run_plan_flow`), not the first
     proposal.
+11. **Persistent state** — todos/goal live in `.raven/state/` (`src/state.rs`),
+    not a `static`. `todo_write`/`goal_set` persist; rebuild the system
+    message at the start of every turn *and* after those tools. Nested
+    `delegate_task` is depth-1 (`allow_delegate = false` on the child; no
+    parent goal/todo overwrite). `think` is read-only and available in
+    plan/chat.
+12. **Compaction thrashing** — `Agent.compact_thrash_count` pauses auto-
+    compaction after 3 consecutive no-reduction compactions; retry every 4th
+    iteration so a later prune can resume.
 
 ## Verification Checklist
 

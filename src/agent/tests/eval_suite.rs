@@ -29,6 +29,7 @@ fn settings_for(workspace: &std::path::Path) -> Settings {
         searxng_url: None,
         searxng_engines: Vec::new(),
         sandbox_extra_rw: Vec::new(),
+        allow_delegate: true,
     }
 }
 
@@ -469,6 +470,138 @@ async fn eval_suite_git_commit_leaves_env_untracked() {
         "secret must not appear in HEAD: {}",
         String::from_utf8_lossy(&show.stdout)
     );
+}
+
+/// 13_goal_set — goal_set persists to `.raven/state/goal.json` and is
+/// injected into the system prompt on the next turn.
+#[tokio::test]
+async fn eval_suite_goal_set_persists_and_injects() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut agent = Agent::new(settings_for(tmp.path()))
+        .unwrap()
+        .with_completion_source(scripted(vec![
+            sse_tool_call(
+                "g1",
+                "goal_set",
+                r#"{"description":"Ship the feature","status":"in_progress"}"#,
+            ),
+            sse_text("Goal set."),
+        ]));
+    let (tx, mut rx) = mpsc::channel(64);
+    agent.run("set a goal", tx).await.unwrap();
+    let _ = drain(&mut rx).await;
+
+    let goal_path = tmp.path().join(".raven/state/goal.json");
+    assert!(goal_path.exists(), "goal.json should be written");
+    let goal = crate::state::load_goal(tmp.path()).expect("goal should load");
+    assert_eq!(goal.description, "Ship the feature");
+    assert_eq!(goal.status, "in_progress");
+
+    let sys = agent.messages[0].content.clone().unwrap_or_default();
+    assert!(
+        sys.contains("Ship the feature"),
+        "same-turn system prompt should include the goal: {sys}"
+    );
+
+    // A fresh agent should inject the goal into its system prompt.
+    let agent2 = Agent::new(settings_for(tmp.path())).unwrap();
+    let sys = agent2.messages[0].content.clone().unwrap_or_default();
+    assert!(
+        sys.contains("Ship the feature"),
+        "system prompt should include the goal: {sys}"
+    );
+}
+
+/// 14_todo_write — todo_write persists to `.raven/state/todos.json` and is
+/// injected into the system prompt on the next turn.
+#[tokio::test]
+async fn eval_suite_todo_write_persists_and_injects() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut agent = Agent::new(settings_for(tmp.path()))
+        .unwrap()
+        .with_completion_source(scripted(vec![
+            sse_tool_call(
+                "t1",
+                "todo_write",
+                r#"{"todos":[{"content":"Do A","status":"in_progress","priority":"high"},{"content":"Do B","status":"pending","priority":"low"}]}"#,
+            ),
+            sse_text("Todos saved."),
+        ]));
+    let (tx, mut rx) = mpsc::channel(64);
+    agent.run("track tasks", tx).await.unwrap();
+    let _ = drain(&mut rx).await;
+
+    let todos = crate::state::load_todos(tmp.path());
+    assert_eq!(todos.len(), 2);
+    assert_eq!(todos[0].content, "Do A");
+    assert_eq!(todos[0].status, "in_progress");
+
+    let agent2 = Agent::new(settings_for(tmp.path())).unwrap();
+    let sys = agent2.messages[0].content.clone().unwrap_or_default();
+    assert!(
+        sys.contains("Do A") && sys.contains("Do B"),
+        "system prompt should include todos: {sys}"
+    );
+}
+
+/// 15_delegate_task — a delegate_task call returns a bounded summary and the
+/// main agent continues. The child is stubbed so this stays offline.
+#[tokio::test]
+async fn eval_suite_delegate_task_returns_summary() {
+    let tmp = tempfile::tempdir().unwrap();
+    super::super::parallel::stub_delegate_task("x".repeat(4000));
+    let mut agent = Agent::new(settings_for(tmp.path()))
+        .unwrap()
+        .with_completion_source(scripted(vec![
+            sse_tool_call(
+                "d1",
+                "delegate_task",
+                r#"{"description":"explore the codebase"}"#,
+            ),
+            sse_text("Main agent done."),
+        ]));
+    let (tx, mut rx) = mpsc::channel(64);
+    agent.run("delegate", tx).await.unwrap();
+    let events = drain(&mut rx).await;
+
+    let preview = events.iter().find_map(|e| match e {
+        AgentEvent::ToolEnd { name, preview } if name == "delegate_task" => Some(preview.clone()),
+        _ => None,
+    });
+    let preview = preview.expect("delegate_task should complete");
+    assert!(
+        preview.starts_with("Sub-agent result:"),
+        "expected bounded summary prefix, got {preview}"
+    );
+    assert!(
+        preview.chars().count() <= 2030,
+        "summary should be capped, got {} chars",
+        preview.chars().count()
+    );
+    assert!(events.iter().any(|e| matches!(e, AgentEvent::Done)));
+}
+
+/// 16_think — think is a read-only no-op that records a thought.
+#[tokio::test]
+async fn eval_suite_think_records_thought() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut agent = Agent::new(settings_for(tmp.path()))
+        .unwrap()
+        .with_completion_source(scripted(vec![
+            sse_tool_call("th1", "think", r#"{"thought":"check the edge case"}"#),
+            sse_text("Done."),
+        ]));
+    let (tx, mut rx) = mpsc::channel(64);
+    agent.run("think", tx).await.unwrap();
+    let events = drain(&mut rx).await;
+
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::ToolStart { name, .. } if name == "think")),
+        "think should run"
+    );
+    assert!(events.iter().any(|e| matches!(e, AgentEvent::Done)));
 }
 
 /// 12_verify_before_done — finishing an edit without tests arms the gate.

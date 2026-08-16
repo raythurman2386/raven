@@ -36,5 +36,5 @@ mod types;
 mod tests;
 
 pub use core::Agent;
-pub use parallel::{run_parallel, SubAgentReport};
+pub use parallel::{delegate_task, run_parallel, SubAgentReport};
 pub use types::{AgentEvent, ChatMessage, FunctionCall, ToolCall};
