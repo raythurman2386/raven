@@ -28,8 +28,6 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
@@ -38,7 +36,9 @@ use ratatui::{
     widgets::{Block, Borders, Padding, Paragraph},
     Frame, Terminal,
 };
+use std::collections::HashMap;
 use std::io::stdout;
+use std::sync::{Mutex, OnceLock};
 use tokio::sync::mpsc;
 
 use crate::agent::{Agent, AgentEvent, ChatMessage};
@@ -86,7 +86,11 @@ fn provider_model_candidates(provider: &crate::config::Provider) -> Vec<String> 
     }
 
     let fetched = fetch_live_provider_models(provider);
-    let cached_value = if fetched.is_empty() { None } else { Some(fetched.clone()) };
+    let cached_value = if fetched.is_empty() {
+        None
+    } else {
+        Some(fetched.clone())
+    };
     if let Ok(mut cache) = cache.lock() {
         cache.insert(key, cached_value);
     }
@@ -96,7 +100,10 @@ fn provider_model_candidates(provider: &crate::config::Provider) -> Vec<String> 
 fn fetch_live_provider_models(provider: &crate::config::Provider) -> Vec<String> {
     let base = provider.base_url.trim_end_matches('/');
     let urls = if base.contains("/v1") {
-        vec![format!("{}/models", base), format!("{}/api/tags", base.trim_end_matches("/v1"))]
+        vec![
+            format!("{}/models", base),
+            format!("{}/api/tags", base.trim_end_matches("/v1")),
+        ]
     } else {
         vec![format!("{}/models", base), format!("{}/api/tags", base)]
     };

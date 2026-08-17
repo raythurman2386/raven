@@ -181,7 +181,11 @@ impl SessionStore {
             buf.push('\n');
         }
         write_atomic(&path, buf.as_bytes())?;
-        self.log_event(session, "messages_saved", &format!("{} messages", messages.len()))
+        self.log_event(
+            session,
+            "messages_saved",
+            &format!("{} messages", messages.len()),
+        )
     }
 
     /// Update the session's summary (title, updated_at).
