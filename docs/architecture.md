@@ -6,7 +6,7 @@ Design overview for **Raven**. See the [project layout](../README.md#project-lay
 
 ```
 CLI (main.rs)
-  └─ Settings (config.rs) ── named providers, context-window inference
+  └─ Settings (config/mod.rs) ── named providers, context-window inference
   └─ Agent (agent/)
        ├─ system prompt (SYSTEM_BASE + AGENTS.md + repo map + --rules)
        ├─ streaming loop ── POST /v1/chat/completions (Ollama / OpenRouter / …)
@@ -20,7 +20,7 @@ CLI (main.rs)
 
 ### Step-by-step
 
-1. **CLI** (`main.rs`) parses flags with `clap`, builds a [`Settings`](../src/config.rs) struct (resolving env vars, loading config files, and querying the model's actual context window via Ollama's `/api/show` endpoint).
+1. **CLI** (`main.rs`) parses flags with `clap`, builds a [`Settings`](../src/config/mod.rs) struct (resolving env vars, loading config files, and querying the model's actual context window via Ollama's `/api/show` endpoint).
 2. **Agent construction** (`Agent::new`): validates the workspace, builds the system prompt (`SYSTEM_BASE` + workspace root + `AGENTS.md` + `--rules`), and seeds `messages[0]` as the system message.
 3. **Agent loop** (`Agent::run`): appends the user message, then loops up to `max_iterations`:
    - **Compaction check**: estimate history tokens; if over the soft limit, summarize the middle (see [Compaction](#compaction)).

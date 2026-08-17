@@ -11,7 +11,7 @@ cargo test
 ## Test structure
 
 - **Unit tests** (`#[cfg(test)] mod tests` in each source file):
-  - `src/config.rs` — context window inference, max_tokens derivation, AGENTS.md loading, config.toml parsing
+  - `src/config/mod.rs` — context window inference, max_tokens derivation, AGENTS.md loading, config.toml parsing
   - `src/agent/` — ephemeral reminder computation (loop-breaker, iteration nudge, goal-aware re-anchor); **mock-server integration tests** for the full `Agent::run` loop (streaming text, tool-call dispatch, 5xx retry, non-streaming JSON, model-not-found fails-fast) against a fake `/chat/completions` endpoint; **offline fake-model tests** (`src/agent/tests/fake_model.rs`) that drive the loop via a scripted `CompletionSource` with no HTTP (finish, blank-stall recovery + cap, tool round-trip, same-file serial edits, max_tokens clamp); **eval-suite tests** (`src/agent/tests/eval_suite.rs`) covering goal_set/todo_write persistence + injection, delegate_task, think, and compaction thrashing
   - `src/commands.rs` — slash-command parsing, alias resolution, registry uniqueness, help rendering
   - `src/context.rs` — token estimation, compaction (preserves system message, reduces tokens, keeps tool-call/result pairs), tool-result pruning, thrashing protection
@@ -48,7 +48,7 @@ cargo llvm-cov
 cargo llvm-cov --html    # opens HTML report in browser
 ```
 
-Target: >=80% line coverage on `config.rs` and `tools/`. Overall coverage
+Target: >=80% line coverage on `config/mod.rs` and `tools/`. Overall coverage
 as high as practical without testing pure glue (main.rs argument parsing,
 tui/ rendering).
 

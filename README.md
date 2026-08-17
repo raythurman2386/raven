@@ -283,7 +283,7 @@ src/
   commands.rs   # Slash-command registry + parsing for the TUI
   tools/        # Tool modules: definitions, dispatch, document, git, patch, sandbox
   tui/          # ratatui TUI (mod, render, markdown, blocks, status, selection)
-  config.rs     # Settings, config.toml loading, context window inference
+  config/mod.rs  # Settings, config.toml loading, context window inference
   context.rs    # Compaction strategy, tool-result pruning
   tokenizer.rs  # Pure-Rust token estimator (no external vocab)
   session.rs    # JSONL session persistence, resume, list
@@ -291,7 +291,7 @@ src/
   memory.rs     # Cross-session MEMORY.md
   state.rs      # Persistent agent state (.raven/state/todos.json + goal.json)
   skills.rs     # SKILL.md discovery + skill_search/skill_load
-  repomap.rs    # Lightweight repo symbol map
+  repomap/mod.rs # Lightweight repo symbol map
   web.rs        # Web tools (web_search, web_fetch)
   error.rs      # Typed AgentError enum
   runner.rs     # Shared event-draining and plan-approval flow

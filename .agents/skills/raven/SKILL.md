@@ -33,7 +33,7 @@ Don't use for: porting the Ravenwood palette to other apps — use the
 
 ```
 CLI (main.rs)
-  └─ Settings (config.rs) ── named providers, context-window inference
+  └─ Settings (config/mod.rs) ── named providers, context-window inference
   └─ Agent (src/agent/)
        ├─ system prompt (SYSTEM_BASE + AGENTS.md + repo map + --rules)
        ├─ streaming loop ── POST /v1/chat/completions (Ollama / OpenRouter / …)
@@ -53,12 +53,12 @@ CLI (main.rs)
 | `src/lib.rs` | Library crate re-exports for benchmarks/integration tests |
 | `src/agent/` | Streaming loop (`core.rs`), stream parse, tool exec, loop control, parallel sub-agents |
 | `src/commands.rs` | Slash-command registry + parsing for the TUI |
-| `src/config.rs` | `Settings`, `Provider`, config.toml, AGENTS.md loader |
+| `src/config/mod.rs` | `Settings`, config.toml, AGENTS.md loader; `provider.rs` holds `Provider`/resolution |
 | `src/context.rs` | Token estimation, compaction strategy, tool-result pruning |
 | `src/error.rs` | Typed `AgentError` / `ToolError` |
 | `src/memory.rs` | Cross-session project memory (`.raven/MEMORY.md`) |
 | `src/plan.rs` | Structured plan mode, `parse_plan`, `format_plan` |
-| `src/repomap.rs` | Cached, walk-capped repo symbol map (`<repo_map>`) |
+| `src/repomap/mod.rs` | Cached, walk-capped repo symbol map (`<repo_map>`); `patterns.rs` holds the language regexes |
 | `src/runner.rs` | Shared event-draining and plan-approval flow |
 | `src/session.rs` | JSONL session persistence, resume, list (atomic writes) |
 | `src/skills.rs` | `SKILL.md` discovery + `skill_search`/`skill_load` |

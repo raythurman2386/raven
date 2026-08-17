@@ -312,7 +312,7 @@ couldn't move you to a different host mid-session. A named-provider abstraction
 bundles endpoint + auth + default model into one switchable unit, mirroring
 Grok Build / Hermes / Opencode.
 
-- New `Provider` struct (`src/config.rs`) bundling `{ name, base_url, api_key,
+- New `Provider` struct (`src/config/mod.rs`) bundling `{ name, base_url, api_key,
   default_model }`, with built-in `ollama` and `openrouter` presets.
 - `[providers.<name>]` config table + `provider` selection key; `resolve_provider`
   merges builtin + config + env (`--provider` > `RAVEN_PROVIDER` > config > builtin).
