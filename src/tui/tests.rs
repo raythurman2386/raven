@@ -721,6 +721,20 @@ async fn model_switch_updates_settings_compact_and_header_blocks() {
     }
 }
 
+#[test]
+fn slash_command_completes_provider_and_model_names() {
+    let settings = test_settings(tempfile::tempdir().unwrap().path());
+    let arg_candidates = |cmd: &str| -> Vec<String> {
+        crate::tui::completion_arg_candidates(&settings, &ConfigFile::default(), cmd)
+    };
+
+    let provider = candidates_for("/provider o", &arg_candidates).unwrap();
+    assert!(provider.candidates.iter().any(|s| s == "ollama"));
+
+    let model = candidates_for("/model q", &arg_candidates).unwrap();
+    assert!(model.candidates.iter().any(|s| s == "qwen2.5-coder:14b"));
+}
+
 #[tokio::test]
 async fn theme_command_switches_theme_and_lists() {
     let tmp = tempfile::tempdir().unwrap();

@@ -28,6 +28,8 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
@@ -64,6 +66,146 @@ use selection::{
     Selection,
 };
 use status::{fmt_tokens, spinner_frame, state_label, usage_color, waiting_diamond};
+
+static MODEL_COMPLETION_CACHE: OnceLock<Mutex<HashMap<String, Option<Vec<String>>>>> =
+    OnceLock::new();
+
+fn provider_model_candidates(provider: &crate::config::Provider) -> Vec<String> {
+    let cache = MODEL_COMPLETION_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = format!(
+        "{}|{}|{}",
+        provider.name,
+        provider.base_url,
+        provider.api_key.as_deref().unwrap_or_default()
+    );
+
+    if let Ok(cache) = cache.lock() {
+        if let Some(cached) = cache.get(&key) {
+            return cached.clone().unwrap_or_default();
+        }
+    }
+
+    let fetched = fetch_live_provider_models(provider);
+    let cached_value = if fetched.is_empty() { None } else { Some(fetched.clone()) };
+    if let Ok(mut cache) = cache.lock() {
+        cache.insert(key, cached_value);
+    }
+    fetched
+}
+
+fn fetch_live_provider_models(provider: &crate::config::Provider) -> Vec<String> {
+    let base = provider.base_url.trim_end_matches('/');
+    let urls = if base.contains("/v1") {
+        vec![format!("{}/models", base), format!("{}/api/tags", base.trim_end_matches("/v1"))]
+    } else {
+        vec![format!("{}/models", base), format!("{}/api/tags", base)]
+    };
+
+    let client = match reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+    {
+        Ok(client) => client,
+        Err(_) => return Vec::new(),
+    };
+
+    for url in urls {
+        let mut req = client.get(&url);
+        if let Some(key) = &provider.api_key {
+            req = req.bearer_auth(key);
+        }
+
+        let Ok(resp) = req.send() else {
+            continue;
+        };
+        if !resp.status().is_success() {
+            continue;
+        }
+
+        let Ok(body) = resp.json::<serde_json::Value>() else {
+            continue;
+        };
+
+        let mut names = Vec::new();
+        if let Some(data) = body.get("data").and_then(serde_json::Value::as_array) {
+            for entry in data {
+                if let Some(id) = entry.get("id").and_then(serde_json::Value::as_str) {
+                    names.push(id.to_string());
+                } else if let Some(name) = entry.get("name").and_then(serde_json::Value::as_str) {
+                    names.push(name.to_string());
+                }
+            }
+        }
+        if let Some(models) = body.get("models").and_then(serde_json::Value::as_array) {
+            for entry in models {
+                if let Some(name) = entry.get("name").and_then(serde_json::Value::as_str) {
+                    names.push(name.to_string());
+                }
+            }
+        }
+
+        if !names.is_empty() {
+            names.sort();
+            names.dedup();
+            return names;
+        }
+    }
+
+    Vec::new()
+}
+
+/// Argument completion candidates for slash commands that accept a value.
+pub fn completion_arg_candidates(
+    settings: &Settings,
+    config_file: &crate::config::ConfigFile,
+    cmd: &str,
+) -> Vec<String> {
+    match cmd {
+        "theme" => Theme::all().iter().map(|(n, _)| n.to_string()).collect(),
+        "provider" => crate::config::known_provider_names(config_file),
+        "model" => {
+            let live_names = provider_model_candidates(&settings.provider);
+            let mut preferred = Vec::new();
+            let mut seen = std::collections::BTreeSet::new();
+            let mut push_unique = |value: &str| {
+                if !value.trim().is_empty() && seen.insert(value.to_string()) {
+                    preferred.push(value.to_string());
+                }
+            };
+
+            for value in [
+                settings.model.as_str(),
+                settings.provider.default_model.as_str(),
+            ] {
+                push_unique(value);
+            }
+            if let Some(cfg) = config_file.providers.get(&settings.provider.name) {
+                if let Some(model) = &cfg.default_model {
+                    push_unique(model);
+                }
+            }
+            for name in live_names {
+                push_unique(&name);
+            }
+            for candidate in [
+                "gemma4:latest",
+                "qwen2.5-coder:7b",
+                "qwen2.5-coder:14b",
+                "llama3.1:8b",
+                "deepseek-coder-v2",
+                "codestral",
+                "deepseek-v4-flash:cloud",
+                "deepseek-v4-pro:cloud",
+                "gemma3:12b",
+            ] {
+                push_unique(candidate);
+            }
+
+            preferred
+        }
+        _ => Vec::new(),
+    }
+}
 
 // ── TUI state ────────────────────────────────────────────────────────────
 
@@ -278,14 +420,13 @@ pub async fn run_tui(
         store.create(&settings.model)?
     };
 
-    // Argument-completion candidates per command. `/theme` completes from the
-    // theme registry; other commands have no argument candidates.
+    // Argument-completion candidates per command. Slash commands with values
+    // should complete from real, live choices: theme names, known providers,
+    // and a useful set of model names for the current provider.
+    let completion_settings = settings.clone();
+    let completion_config = config_file.clone();
     let arg_candidates = |cmd: &str| -> Vec<String> {
-        if cmd == "theme" {
-            Theme::all().iter().map(|(n, _)| n.to_string()).collect()
-        } else {
-            Vec::new()
-        }
+        completion_arg_candidates(&completion_settings, &completion_config, cmd)
     };
 
     loop {
