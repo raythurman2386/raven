@@ -206,6 +206,7 @@ pub fn save_session_messages(
         session.summary.title.clone()
     };
     store.update_summary(session, Some(title))?;
+    store.snapshot_patch(session)?;
 
     session.messages = messages.to_vec();
     Ok(())

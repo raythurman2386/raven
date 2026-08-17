@@ -52,6 +52,7 @@ pub const CURRENT_SESSION_FORMAT_VERSION: u32 = SESSION_FORMAT_VERSION;
 /// Manages session storage for a workspace.
 pub struct SessionStore {
     sessions_dir: PathBuf,
+    workspace: PathBuf,
 }
 
 impl SessionStore {
@@ -60,7 +61,10 @@ impl SessionStore {
     pub fn for_workspace(workspace: &Path) -> Result<Self> {
         let sessions_dir = workspace.join(".raven").join("sessions");
         std::fs::create_dir_all(&sessions_dir)?;
-        Ok(Self { sessions_dir })
+        Ok(Self {
+            sessions_dir,
+            workspace: workspace.to_path_buf(),
+        })
     }
 
     /// Create a new session with a collision-proof ID.
@@ -176,7 +180,8 @@ impl SessionStore {
             buf.push_str(&serde_json::to_string(msg)?);
             buf.push('\n');
         }
-        write_atomic(&path, buf.as_bytes())
+        write_atomic(&path, buf.as_bytes())?;
+        self.log_event(session, "messages_saved", &format!("{} messages", messages.len()))
     }
 
     /// Update the session's summary (title, updated_at).
@@ -186,7 +191,7 @@ impl SessionStore {
             session.summary.title = t;
         }
         self.write_summary(&session.summary)?;
-        Ok(())
+        self.log_event(session, "summary_updated", &session.summary.title)
     }
 
     /// Update the session's model name and persist the summary, so a model
@@ -194,7 +199,64 @@ impl SessionStore {
     pub fn update_model(&self, session: &mut Session, model: &str) -> Result<()> {
         session.summary.model = model.to_string();
         session.summary.updated_at = now_iso();
-        self.write_summary(&session.summary)
+        self.write_summary(&session.summary)?;
+        self.log_event(session, "model_changed", model)
+    }
+
+    /// Persist a local-only debug event in the session directory.
+    ///
+    /// This is intentionally local-only and not networked: it is a reproducible
+    /// record for debugging or later review, without violating the project's
+    /// no-remote-telemetry policy.
+    pub fn log_event(&self, session: &Session, kind: &str, message: &str) -> Result<()> {
+        let dir = self.session_dir(&session.summary.id);
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join("debug-events.jsonl");
+        let line = serde_json::to_string(&serde_json::json!({
+            "ts": now_iso(),
+            "kind": kind,
+            "message": message,
+        }))?;
+        let mut bytes = std::fs::read(&path).unwrap_or_default();
+        bytes.extend_from_slice(line.as_bytes());
+        bytes.push(b'\n');
+        write_atomic(&path, &bytes)
+    }
+
+    /// Snapshot the current repo diff for this session as a patch file.
+    ///
+    /// This creates a reviewable artifact in `.raven/sessions/<id>/last.patch`
+    /// without sending anything remotely; it is suitable for auditing or
+    /// rollback decisions after a task completes.
+    pub fn snapshot_patch(&self, session: &Session) -> Result<()> {
+        let path = self.session_dir(&session.summary.id).join("last.patch");
+        if !self.workspace.join(".git").exists() {
+            let marker = "# no git repository detected; patch snapshot unavailable\n";
+            return write_atomic(&path, marker.as_bytes());
+        }
+
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&self.workspace)
+            .arg("diff")
+            .arg("--no-ext-diff")
+            .arg("--binary")
+            .output();
+
+        match output {
+            Ok(out) if out.status.success() => write_atomic(&path, &out.stdout),
+            Ok(out) => {
+                let mut msg = String::from("# git diff failed\n");
+                if !out.stderr.is_empty() {
+                    msg.push_str(&String::from_utf8_lossy(&out.stderr));
+                }
+                write_atomic(&path, msg.as_bytes())
+            }
+            Err(e) => {
+                let msg = format!("# failed to snapshot patch: {e}\n");
+                write_atomic(&path, msg.as_bytes())
+            }
+        }
     }
 
     // ── Internal helpers ──────────────────────────────────────────────
