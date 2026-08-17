@@ -101,3 +101,62 @@ gate) or a model that skipped `git_commit` / never ran tests. Do not mark
 them `flaky = true`.
 
 Do not grow vanity cases. Add a case when a real failure mode appears.
+
+---
+
+## Recommended models for evaluation
+
+**High-quality models** that consistently pass the full eval suite with Raven:
+
+| Model | Provider | Type | Status | Notes |
+|-------|----------|------|--------|-------|
+| `qwen3.8` | Ollama Cloud | General/Reasoning | ✅ Recommended | Latest Qwen; strong on agentic long-horizon tasks |
+| `deepseek-v4-flash:cloud` | Ollama Cloud | Reasoning | ✅ Passing | Efficient alternative to pro; good token usage |
+| `deepseek-v4-pro:cloud` | Ollama Cloud | Reasoning/Coding | ✅ Recommended | High quality, fast; strong on complex reasoning |
+| `grok-4.5` | OpenRouter | Multimodal/Reasoning | ✅ Recommended | Frontier performance; best reasoning and cost for complex evals |
+| `grok-4.6` | OpenRouter | Multimodal/Reasoning | ✅ Recommended | Frontier performance; excellent reasoning for complex evals |
+| `nemotron-3-ultra:cloud` | Ollama Cloud | Agentic | ✅ Passing | Built for long-running agent workflows |
+| `glm-5.2:cloud` | Ollama Cloud | Long-horizon | ✅ Passing | Optimized for long-horizon tasks; some flakiness |
+| `kimi-k3:cloud` | Ollama Cloud | Agentic/Multimodal | ⚠️ Partial | Passes most cases; may need auth/usage credits |
+| `kimi-k2.7-code:cloud` | Ollama Cloud | Coding/Agentic | ⚠️ Partial | Coding-focused; long-horizon improvements over k2.6 |
+| `gemma4:cloud` | Ollama Cloud | General | ❌ Flaky | Fails long-horizon eval (case 13) regularly; inconsistent |
+| `minimax-m3:cloud` | Ollama Cloud | Agentic | ❌ Flaky | Fails multiple evals; poor tool-use consistency |
+| `minimax-m2.7:cloud` | Ollama Cloud | Coding | ❌ Flaky | Predecessor to m3; similar reliability issues |
+
+**Legend:**
+- **✅ Recommended** — Passes full eval suite; production-ready for daily use
+- **✅ Passing** — Passes full eval suite; good for specific use cases or features
+- **⚠️ Partial** — Passes most evals; may fail edge cases or require special setup (auth, credits, quota)
+- **❌ Flaky** — Fails multiple evals; unreliable for agent workflows; not recommended
+
+### Running evals against multiple models
+
+Use the batch evaluation script:
+
+```bash
+# List all available cloud models
+python3 evals/run_all_models.py --list-only
+
+# Run evals against all official cloud models (requires network access)
+python3 evals/run_all_models.py
+
+# Test specific models
+python3 evals/run_all_models.py --models qwen3.5-coder,deepseek-v4-pro:cloud,grok-4.5
+
+# Local Ollama only
+python3 evals/run_all_models.py --host http://127.0.0.1:11434/v1
+```
+
+Reports are saved to `evals/out/<timestamp>.{json,md}` for analysis.
+
+### Model selection guidance
+
+**For daily coding work:**
+- **First choice:** `qwen3.8` (all-around excellence for local; Ollama Cloud recommended)
+- **Alternative:** `deepseek-v4-flash:cloud` (for cheap high performance in the cloud)
+- **Fallback:** `glm-5.2` (if qwen and deepseek are unavailable; fast, reliable, high reasoning)
+
+**For frontier/complex reasoning:**
+- `grok-4.5` (via OpenRouter; multimodal, excellent model)
+- `grok-4.6` (via OpenRouter; multimodal, best reasoning)
+- `deepseek-v4-pro:cloud` (strong reasoning within cloud models)
