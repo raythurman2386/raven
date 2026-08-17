@@ -1,18 +1,23 @@
 # Raven
 
-A **privacy-first** local coding-agent harness written in Rust for [Ollama](https://ollama.com) and any OpenAI-compatible endpoint. It distills the useful core of agent-harness ideas into a single binary that runs entirely against a local (or cloud) endpoint — no managed cloud auth, no MCP marketplace, no telemetry. Ideal for locked-down or air-gapped work environments where Ollama is the only reachable model endpoint.
+A **privacy-first** local coding-agent harness written in Rust for [Ollama](https://ollama.com) and any OpenAI-compatible endpoint. It distills the core agent-loop ideas into a single auditable binary that runs entirely on your hardware or against a provider of your choice — no managed cloud auth layer, no MCP marketplace, no telemetry. Built as a daily-driver harness: it's small enough to understand end-to-end, powerful enough to handle real coding tasks, and designed for air-gapped or locked-down networks where Ollama is the only reachable model endpoint.
 
-> **Inspiration:** Inspired by the agent-harness ideas in xAI's [Grok Build](https://github.com/xai-org/grok-build); not affiliated. Raven keeps only the pieces that remain useful when the only model endpoint you can reach is local Ollama, so you get a real agent loop with tools, plan mode, compaction, and parallel sub-agents — in one small, auditable binary.
+> **Inspiration:** Inspired by agent-harness ideas in xAI's [Grok Build](https://github.com/xai-org/grok-build); not affiliated. Raven keeps only the pieces that remain useful when the only model endpoint you can reach is local (or your chosen cloud provider), so you get a real agent loop with tools, plan mode, structured verification, and workspace isolation — in one small, auditable binary.
 
 ---
 
 ## Why Raven?
 
-Most coding-agent harnesses assume you can reach the open internet: they phone home for telemetry, pull plugins from a marketplace, and expect a managed cloud auth layer. That assumption breaks in the environments where a local model is most valuable — **air-gapped and locked-down networks** where the only reachable model endpoint is a local Ollama instance.
+Raven is built for developers who want a **real agent loop** without the overhead of cloud infrastructure. Instead of a managed harness that collects telemetry, requires account auth, and pulls plugins from a marketplace, Raven is a single small binary you control completely.
 
-Raven is built for exactly that case. It is a **minimal harness with zero telemetry**: no usage tracking, no phone-home calls, no managed cloud auth, no MCP marketplace. Everything runs against your local (or cloud) endpoint, and the whole thing is a single small binary you can audit end-to-end. If your network policy says the only thing your machine may talk to is Ollama, Raven is the agent loop that still works.
+**For daily coding work:**
+- **Local first** — run against Ollama on your machine or dial in a cloud provider like OpenRouter. Entire agent loop runs on your hardware; only LLM requests leave your network.
+- **No telemetry** — ever. No usage tracking, no phone-home calls, no managed cloud auth layer. All session state (conversation, patches, debug events) stays local and on-disk.
+- **Auditable** — ~15K lines of Rust. You can read the whole harness. There are no proprietary plugins, no external service dependencies, no "magic" black boxes.
+- **Air-gapped ready** — the design center is "what if the only reachable model endpoint is local Ollama?" Everything still works offline, and everything still works in locked-down networks.
+- **Production-grade safety** — workspace confinement (Landlock + seccomp on Linux), shell command filters, git-worktree isolation per task, and structured verify-before-commit workflow so you never accidentally commit broken code.
 
-That constraint is the design center, not an afterthought — it's why the feature set looks the way it does (see the table below) and why the out-of-scope list is explicit.
+Raven started as a thought experiment — *what if we removed all the cloud overhead and kept only the parts that matter for local coding?* It works best for developers who have access to capable local models (Ollama on your hardware, Ollama Cloud, or a DGX) and want a practical harness for real work in focused sessions — not an autonomous loop trying to complete entire projects unsupervised.
 
 ---
 
@@ -27,13 +32,15 @@ That constraint is the design center, not an afterthought — it's why the featu
 | OS-level subprocess confinement (Landlock, seccomp network block, rlimits) | GUI / web frontend |
 | Git worktree isolation (isolated branches per task) | Container/VM isolation |
 | Windows Job Object confinement (process-tree + memory limits) | Telemetry / usage tracking |
-| Structured plan mode (parse → approve → revise → execute) |  |
-| Skills (`SKILL.md` discovery + `skill_search`/`skill_load`) |  |
-| Repo symbol map (`<repo_map>` injected for large workspaces) |  |
-| Parallel tool execution within a single model turn |  |
-| Pure-Rust token estimator for context-window management |  |
-| Context-window inference + automatic compaction (tool-result pruning) |  |
-| JSONL session persistence (`--resume`, `--list-sessions`) |  |
+| Structured plan mode (parse → approve → revise → execute) | Cloud sync of sessions |
+| Skills (`SKILL.md` discovery + `skill_search`/`skill_load`) | Chat federation or multi-provider routing |
+| Repo symbol map (`<repo_map>` injected for large workspaces) | Native IDE integration (VSCode ext, etc) |
+| Parallel tool execution within a single model turn | Plugins or marketplace auth |
+| Pure-Rust token estimator for context-window management | Managed workflow orchestration |
+| Context-window inference + automatic compaction (tool-result pruning) | |
+| JSONL session persistence + local replay (`--resume`, `--list-sessions`) | |
+| Local debug event logs per session (no networking) | |
+| Git patch snapshots per session for audit/rollback | |
 | Cross-session project memory (`.raven/MEMORY.md`) | |
 | Persistent goal + task list (`.raven/state/`, injected into the system prompt) | |
 | Model-spawnable sub-agents (`delegate_task`) + `think` tool | |
@@ -42,10 +49,11 @@ That constraint is the design center, not an afterthought — it's why the featu
 | Typed errors with retry + exponential backoff | |
 | Non-streaming fallback (`--no-stream`) | |
 | Simple ratatui TUI + headless CLI | |
-| ACP v1 stdio (`raven acp`) for editor attachment | MCP server marketplace |
-| Markdown rendering in the TUI (headings, code blocks, lists, tables, links via `pulldown-cmark`) | |
+| ACP v1 stdio (`raven acp`) for editor attachment | |
+| Markdown rendering in the TUI (headings, code blocks, lists, tables, links) | |
+| Slash-command completion (`/provider`, `/model` with live endpoint discovery) | |
 | `AGENTS.md` / `CLAUDE.md` auto-load + `--rules` session overrides | |
-| Local by default; optional Bearer auth for Ollama Cloud | |
+| Local by default; optional Bearer auth for Ollama Cloud or OpenRouter | |
 | Optional self-hosted SearXNG backend for `web_search` (falls back to DuckDuckGo) | |
 
 ---
@@ -53,14 +61,16 @@ That constraint is the design center, not an afterthought — it's why the featu
 ## Requirements
 
 - **Rust 1.88+** (MSRV; pinned to 1.97 in `rust-toolchain.toml`)
-- **Ollama** running locally (or a reachable OpenAI-compatible endpoint)
-- A coding-capable model, e.g.
+- **A model endpoint** — any of:
+  - Local [Ollama](https://ollama.com) instance (`ollama pull <model> && ollama serve`)
+  - [Ollama Cloud](https://ollama.ai/cloud) — fastest deployment, works with all Ollama models, recommended for daily use
+  - [OpenRouter](https://openrouter.ai) — for access to Grok, Gemma, and frontier models
+  - Any OpenAI-compatible API (vLLM, LocalAI, etc.)
 
-```bash
-ollama pull qwen2.5-coder:7b
-```
-
-Suggested models: `qwen2.5-coder:7b`, `qwen2.5-coder:14b`, `llama3.1:8b`, `deepseek-coder-v2`, `codestral`.
+**Recommended models:**
+- **Best all-around (Ollama Cloud):** `qwen3.5-coder` (latest, excellent), `deepseek-v4-pro:cloud` (high quality, fast)
+- **Good local fallback:** `qwen2.5-coder:14b`, `deepseek-coder-v2` (strong local performance)
+- **For frontier results (OpenRouter):** `grok-4.5` (multimodal, best reasoning), `gemma4:31b-cloud` (fast, 100% evals)
 
 ---
 
@@ -109,47 +119,106 @@ cargo install --path .
 
 ## Quick start
 
+### First run
+
 ```bash
 # Interactive TUI (default when no task is given)
 raven
+# Prompts for provider (ollama, openrouter, etc.) and model on first use.
+# Settings are saved to ~/.raven/config.toml for future runs.
+```
 
-# Headless one-shot
+### One-shot tasks (headless)
+
+```bash
+# Explain the repo structure
 raven -p "Explain the structure of this repository"
-raven "Add a README and .gitignore"
 
-# NOTE: positional args only capture the first word unless quoted.
-# `raven add a test` captures just "add" — use quotes or -p for multi-word tasks.
-raven -p "add a test"       # recommended
-raven "add a test"          # also works
+# Add a feature (quotes required for multi-word tasks)
+raven -p "Add a README and .gitignore"
 
-# Model / workspace
-raven -m qwen2.5-coder:14b -w /path/to/project -p "Fix the tests"
+# Plan mode (default): propose, approve, execute
+raven -p "Fix the failing tests"
 
-# Skip plan approval (full tools, no plan step)
+# Agent mode (skip plan): full tools immediately
 raven --mode agent -p "Refactor utils"
 
-# Fully autonomous (implies --mode agent: full tools, no plan, no confirmations)
+# Fully autonomous (no confirmations)
 raven --yolo -p "Write unit tests for auth"
+```
 
-# Append session-specific rules to the system prompt
-raven --rules "Always use TypeScript. Prefer functional components." -p "Add a dark mode toggle"
+### Daily workflows
 
-# Parallel focused sub-agents
+```bash
+# Switch providers mid-session (TUI: /provider)
+raven --provider openrouter -p "Use this task on OpenRouter"
+
+# Override model for a specific task
+raven -m qwen3.5-coder -p "This needs the big model"
+
+# Continue a previous session
+raven --resume            # resume latest
+raven --resume <id>       # resume specific session
+raven --list-sessions     # see all sessions in workspace
+
+# Append workspace rules to the system prompt
+raven --rules "Always use TypeScript. Prefer functional components." \
+       -p "Add a dark mode toggle"
+
+# Parallel sub-agents (three focused agents in parallel)
 raven --parallel \
   "Summarize the architecture of src/" \
   "List all TODOs and FIXMEs" \
   "Check for security issues in tools.rs"
+```
 
-# Resume a previous session
-raven --resume            # resume latest
-raven --resume <id>       # resume specific session
-raven --list-sessions      # list all sessions in workspace
+### Advanced
 
-# Override context window (default: inferred from model name)
+```bash
+# Override context window and compaction threshold
 raven --context-window 32768 --compact-threshold 0.5 -p "Analyze this large file"
 
-# Non-streaming mode (for models that don't support SSE)
+# Non-streaming mode (for models/endpoints that don't support SSE)
 raven --no-stream -p "Hello"
+
+# Run against a custom endpoint URL
+raven --provider ollama --provider-url http://remote-server:11434/v1 -p "Task"
+
+# Workspace-specific settings
+cd /path/to/project
+raven -p "Read my local config from .raven/config.toml"
+```
+
+### Provider setup
+
+**Ollama Cloud (recommended for daily use):**
+```bash
+# Sign up at https://ollama.ai/cloud
+# Set your API key:
+export RAVEN_API_KEY=...  # Your Ollama Cloud token
+
+# Use cloud models:
+raven --provider ollama -m qwen3.5-coder -p "Task"
+raven --provider ollama -m deepseek-v4-pro:cloud -p "Task"
+```
+
+**Ollama (local):**
+```bash
+ollama pull qwen2.5-coder:14b
+ollama serve
+# In another terminal:
+raven --provider ollama --provider-url http://localhost:11434/v1 -m qwen2.5-coder:14b -p "Task"
+```
+
+**OpenRouter (for Grok and frontier models):**
+```bash
+# Sign up at https://openrouter.ai
+export RAVEN_API_KEY=sk-or-v1-...  # Your OpenRouter key
+
+# Or add to ~/.env:
+echo "RAVEN_API_KEY=sk-or-v1-..." >> .env
+
+raven --provider openrouter -m grok-4.5 -p "Task"
 ```
 
 ---
@@ -161,23 +230,30 @@ raven --no-stream -p "Hello"
 Layered config, highest priority wins:
 
 1. **CLI flags** (highest)
-2. **Environment variables** (`RAVEN_*` prefix, with `OG_*` fallbacks)
-3. **Workspace config** (`.raven/config.toml`)
-4. **Global config** (`~/.raven/config.toml`)
-5. **Built-in defaults** (lowest)
+2. **Environment variables** (`RAVEN_*` prefix, with legacy `OG_*` fallbacks)
+3. **`.env` file** (if present in workspace root or repo root; auto-loaded, never overwrites exports)
+4. **Workspace config** (`.raven/config.toml`)
+5. **Global config** (`~/.raven/config.toml`)
+6. **Built-in defaults** (lowest)
 
 ```toml
 # ~/.raven/config.toml or .raven/config.toml
-provider = "ollama"
+provider = "ollama"          # or "openrouter"
 
 [providers.ollama]
 base_url = "http://localhost:11434/v1"
-default_model = "gemma4:latest"
+default_model = "qwen2.5-coder:14b"
+# api_key = "optional"       # for Ollama Cloud
+
+[providers.openrouter]
+base_url = "https://openrouter.ai/api/v1"
+default_model = "grok-4.5"
+api_key = "sk-or-v1-..."     # or use OPENROUTER_API_KEY env var
 
 context_window = 131072
 compact_threshold = 0.75
 max_iterations = 30
-mode = "plan"
+mode = "plan"                # or "agent" for skip-plan mode
 temperature = 0.2
 no_stream = false
 theme = "ravenwood"
@@ -189,15 +265,32 @@ theme = "ravenwood"
 
 | Variable | Description | Default |
 |---|---|---|
-| `RAVEN_PROVIDER` | Active provider name | `ollama` |
-| `RAVEN_API_KEY` | Universal Bearer token override for the active provider | none |
-| `OPENROUTER_API_KEY` | Bearer token for the `openrouter` provider | none |
-| `OLLAMA_API_KEY` | Bearer token for the `ollama` provider | none |
-| `RAVEN_CONTEXT_WINDOW` / `OG_CONTEXT_WINDOW` | Override context window size | inferred from model |
+| `RAVEN_PROVIDER` | Active provider name (`ollama`, `openrouter`, etc.) | `ollama` |
+| `RAVEN_API_KEY` | **Universal** Bearer token (highest priority) | none |
+| `OPENROUTER_API_KEY` | Bearer token for OpenRouter provider | none |
+| `OLLAMA_API_KEY` | Bearer token for Ollama Cloud | none |
+| `RAVEN_CONTEXT_WINDOW` / `OG_CONTEXT_WINDOW` | Override context window size (default: auto-detected) | inferred from model |
 | `RAVEN_COMPACT_THRESHOLD` / `OG_COMPACT_THRESHOLD` | Compaction trigger (0.0–1.0) | 0.75 |
 | `RAVEN_MAX_ITER` / `OG_MAX_ITER` | Max agent iterations per run | 30 |
 | `RAVEN_SEARXNG_URL` | Optional self-hosted SearXNG base URL for `web_search` | none |
 | `RAVEN_SEARXNG_ENGINES` | Optional comma-separated SearXNG engine list | none |
+
+**API key precedence** (highest to lowest):
+1. `RAVEN_API_KEY` (universal override, works for all providers)
+2. `<PROVIDER>_API_KEY` (provider-scoped, e.g., `OPENROUTER_API_KEY`, `OLLAMA_API_KEY`)
+3. `api_key` in config.toml
+4. None (public/local-only endpoints)
+
+**Example: OpenRouter with .env**
+```bash
+# Create .env in the workspace root (gets auto-loaded on startup)
+cat > .env << EOF
+OPENROUTER_API_KEY=sk-or-v1-abc123...
+EOF
+
+# Raven will use this key automatically
+raven --provider openrouter -p "Task"
+```
 
 ### Project instructions
 
@@ -233,12 +326,105 @@ Sessions are stored as JSONL under `.raven/sessions/`:
 
 ```
 .raven/sessions/
-  2026-08-04T12:34:56/
-    summary.json    # metadata: id, model, timestamps, title
-    messages.jsonl  # one ChatMessage per line
+  2026-08-17T12-34-56-12345-0001/          # collision-proof ID (timestamp + PID + counter)
+    summary.json                             # metadata: id, model, timestamps, title
+    messages.jsonl                           # one ChatMessage per line (append-only)
+    debug-events.jsonl                       # local-only event log (model changes, saves, etc.)
+    last.patch                               # git diff snapshot (for audit/rollback)
 ```
 
-All writes are atomic (temp file + rename). Use `--resume` to continue a previous session or `--list-sessions` to browse.
+**Local-only guarantees:**
+- All writes are atomic (temp file + rename) for crash safety.
+- **Debug events** (model changes, saves, etc.) are logged locally for reproducible debugging — never networked.
+- **Patch snapshots** (`last.patch`) are created after each session, recording the full git diff for audit or rollback decisions.
+- No telemetry, no remote reporting, no cloud sync.
+
+**Usage:**
+```bash
+raven --resume            # continue the most recent session
+raven --resume <id>       # continue a specific session by ID
+raven --list-sessions     # browse all sessions and their metadata
+```
+
+---
+
+## Workflow & tips
+
+### Plan mode (default)
+
+Plan mode is the recommended workflow for important changes:
+1. **Propose** — agent creates a step-by-step plan
+2. **Review** — you read and approve (or revise)
+3. **Execute** — agent runs the plan with full tools
+
+```bash
+raven -p "Add type safety to this handler"
+# (agent proposes a plan)
+# ── Approve? [Y]es / [n]o / [r]evise ──
+# y
+# (agent executes)
+```
+
+### Quick edits (agent mode)
+
+Skip the plan step for quick, exploratory tasks:
+```bash
+raven --mode agent -p "Refactor this function"
+```
+
+### TUI tips
+
+- **`/model`** — switch models or check the live model list for the active provider
+- **`/provider`** — switch providers (ollama, openrouter, etc.) — slash-command autocomplete shows all available
+- **`/clear`** — start a fresh turn (keeps session history)
+- **`^C`** — stop the current task (session auto-saves)
+- **Up/Down** — scroll through chat history
+
+### For large codebases
+
+Raven injects a repo symbol map for files >50KB. The map helps the agent navigate structure without reading entire files:
+```bash
+raven --context-window 131072 -p "Find all database queries and optimize them"
+```
+
+If the agent seems stuck compacting, raise the threshold:
+```bash
+raven --compact-threshold 0.85 -p "Task"
+```
+
+### Workspace memory
+
+Raven maintains a `.raven/MEMORY.md` file across sessions. The agent can read and update it:
+- Use `memory_search` to find past decisions
+- Use `memory_update` to record conventions or context
+
+Example: *"Remember we prefer async/await over promises in this codebase"*
+
+### Workspace rules
+
+Create an `AGENTS.md` or `CLAUDE.md` file in your repo root:
+```markdown
+# Coding Guidelines
+
+- Always write tests for new features
+- Use TypeScript, not JavaScript
+- Follow the style guide in docs/STYLE.md
+```
+
+Raven auto-loads this and injects it into every session. You can also override per-session:
+```bash
+raven --rules "Use Python 3.11+; no type hints optional." -p "Task"
+```
+
+### Multi-agent tasks
+
+Use `--parallel` to spawn multiple focused agents and gather results in parallel:
+```bash
+raven --parallel \
+  "Summarize the architecture" \
+  "List all TODOs" \
+  "Check for secrets in git history"
+```
 
 ---
 
@@ -256,46 +442,109 @@ The `--yolo` flag disables confirmation entirely, but the denylist still applies
 
 ## Testing
 
+### Unit & integration tests
+
 ```bash
 cargo test                    # offline unit + integration tests
-cargo test eval_suite         # Layer A agent eval harness (fake model)
+cargo test eval_suite         # Layer A (fake model) eval harness
 cargo clippy                  # zero warnings
 cargo clippy -- -W clippy::pedantic  # stricter linting
-
-# Live task evals (needs a model endpoint + built binary)
-cargo build --release
-python3 evals/run.py --smoke
-python3 evals/run.py          # full fixture suite
 ```
 
-See `docs/testing.md` and [`evals/README.md`](evals/README.md) for coverage,
-mutation testing, and the agent eval suite.
+### Live agent eval suite
+
+The eval suite runs real agent tasks against a live model endpoint and grades the results. See [`evals/README.md`](evals/README.md) for full details.
+
+```bash
+cargo build --release
+
+# Against Ollama Cloud (needs RAVEN_API_KEY)
+python3 evals/run.py --model qwen3.5-coder --host https://api.ollama.ai/api/v1
+
+# Against local Ollama
+python3 evals/run.py --model qwen2.5-coder:14b --host http://127.0.0.1:11434/v1
+
+# Against OpenRouter (needs RAVEN_API_KEY)
+python3 evals/run.py --model grok-4.5 --host https://openrouter.ai/api/v1
+
+# View results
+cat evals/out/<run-id>.md
+```
+
+**Top-performing models (current):**
+- **Ollama Cloud (daily-use recommended):** `qwen3.5-coder` (latest, excellent), `deepseek-v4-pro:cloud` (high quality)
+- **OpenRouter (frontier):** `grok-4.5` (best reasoning, multimodal), `gemma4:31b-cloud` (100% evals)
+- **Local (when cloud unavailable):** `qwen2.5-coder:14b`, `deepseek-coder-v2`
+
+See `docs/testing.md` for coverage and mutation testing details.
+
+---
+
+## Privacy & local-only operation
+
+**No telemetry, ever.** Raven is built with privacy as a hard constraint:
+
+- **No analytics or usage tracking** — nothing is collected, even anonymously
+- **No remote call home** — all agent state stays on your machine (except LLM requests to your chosen endpoint)
+- **No cloud sync** — sessions are stored locally under `.raven/sessions/`; they never leave your disk
+- **No plugin marketplace** — no dependency on external services or registries
+- **No auth layer** — you own the API key to your endpoint; Raven never stores it remotely
+
+**What network access happens:**
+1. **LLM requests** to your chosen endpoint (Ollama local, OpenRouter cloud, etc.) — you control this
+2. **Optional** `web_search` requests to DuckDuckGo or a self-hosted SearXNG instance
+3. That's it. Everything else stays local.
+
+**Session audit trail:**
+- Each session stores a local debug-events log (`debug-events.jsonl`) for reproducible debugging
+- Git diffs are snapshotted (`last.patch`) so you can review or rollback changes
+- All session state is stored as plain JSONL and JSON — auditable, portable, no binary blobs
 
 ---
 
 ## Project layout
 
+
 ```
 src/
-  main.rs       # CLI, headless runner, session management
-  lib.rs        # Library re-exports for benchmarks/integration tests
-  agent/         # Streaming agent loop (core, stream, tools_exec, loop_control, parallel, types)
-  commands.rs   # Slash-command registry + parsing for the TUI
-  tools/        # Tool modules: definitions, dispatch, document, git, patch, sandbox
-  tui/          # ratatui TUI (mod, render, markdown, blocks, status, selection)
-  config/mod.rs  # Settings, config.toml loading, context window inference
-  context.rs    # Compaction strategy, tool-result pruning
-  tokenizer.rs  # Pure-Rust token estimator (no external vocab)
-  session.rs    # JSONL session persistence, resume, list
-  plan.rs       # Structured plan mode, parse_plan, format_plan
-  memory.rs     # Cross-session MEMORY.md
-  state.rs      # Persistent agent state (.raven/state/todos.json + goal.json)
-  skills.rs     # SKILL.md discovery + skill_search/skill_load
-  repomap/mod.rs # Lightweight repo symbol map
-  web.rs        # Web tools (web_search, web_fetch)
-  error.rs      # Typed AgentError enum
-  runner.rs     # Shared event-draining and plan-approval flow
-evals/          # Agent eval suite (fixtures, run.py, baselines)
+  main.rs           # CLI, TUI, headless runner, session management
+  lib.rs            # Library re-exports for benchmarks/integration tests
+  agent/            # Core agent loop
+    core.rs         # Agent struct, LLM streaming, tool dispatch
+    tools_exec.rs   # Parallel tool execution, verification gates
+    stream.rs       # OpenAI-compatible response parsing
+    loop_control.rs # Iteration counting, early-stop logic
+    parallel.rs     # Sub-agent spawning and delegation
+    types.rs        # ChatMessage, AgentEvent, AgentError
+  commands.rs       # Slash-command registry (/provider, /model, /clear, etc.)
+  tools/            # Tool implementations (25 total)
+    definitions.rs  # JSON schema for all tools
+    dispatch.rs     # Tool execution router
+    sandbox/        # Sandboxing (Landlock, seccomp, Job Object, rlimits)
+    git.rs          # git_status, git_diff, git_log, git_commit
+  tui/              # ratatui TUI
+    mod.rs          # Event loop, input handling, TUI state
+    completion.rs   # Slash-command completion (commands, args, models)
+    render.rs       # Terminal rendering
+    markdown.rs     # Markdown parsing and rendering
+  config/           # Configuration
+    mod.rs          # Settings, config.toml loading, layered config
+    provider.rs     # Provider presets (Ollama, OpenRouter, etc.)
+  context.rs        # Context-window management and compaction
+  tokenizer.rs      # Pure-Rust token counter (no vocab file)
+  session.rs        # JSONL persistence, resume, list, local event logging
+  plan.rs           # Structured plan mode (parse, format, execute)
+  memory.rs         # Cross-session `.raven/MEMORY.md`
+  state.rs          # Persistent `.raven/state/` (goals, todos)
+  skills.rs         # SKILL.md discovery and skill_search/skill_load
+  repomap/          # Lightweight repo symbol map for large codebases
+  web.rs            # web_search and web_fetch (DuckDuckGo or SearXNG)
+  error.rs          # Typed error enums with retry logic
+  runner.rs         # Shared event-draining and plan-approval flow
+evals/              # Agent evaluation suite
+  run.py            # Test harness (fixtures, grading, reporting)
+  cases/            # Eval fixtures (013+ cases covering core functionality)
+docs/               # Documentation
 ```
 
 ---

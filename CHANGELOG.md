@@ -6,6 +6,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-08-17
+
+### Added
+
+- **Local-only session event logging** — each session now maintains a
+  `debug-events.jsonl` file recording model changes, summary updates, and
+  message saves with timestamps. Purely local; enables reproducible
+  debugging without any remote telemetry.
+- **Git patch snapshots** — session directories include a `last.patch` file
+  containing the full `git diff` after each task completes. Suitable for
+  audit trails or rollback decisions; stored locally on-disk.
+- **Slash-command completion for `/provider` and `/model`** — the TUI now
+  shows live provider names from configuration and fetches available models
+  from the active provider's endpoint (e.g., `/api/models` for Ollama,
+  `/models` for cloud) with static fallbacks for offline scenarios.
+
+### Changed
+
+- **README modernized for daily-driver use** — Ollama Cloud is now highlighted
+  as the recommended endpoint for production work; model recommendations
+  updated to reflect current landscape (`qwen3.5-coder`, `deepseek-v4-pro:cloud`,
+  `grok-4.5` for frontier tasks). Removed outdated model suggestions.
+- **Provider setup documentation** — Ollama Cloud workflow now documented
+  first, followed by local Ollama and OpenRouter for specific use cases.
+
 ## [0.2.4] - 2026-08-16
 
 ### Added
