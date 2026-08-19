@@ -47,12 +47,20 @@ impl Sandbox {
         cmd.stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
+        // Sanctioned test runners (vitest/jest/mocha/npm test/cargo test/pytest/
+        // tsc/eslint/...) open AF_INET sockets for coverage/worker IPC, which the
+        // seccomp network block SIGSYS-kills. `run_tests` already exempts npm
+        // projects; mirror that here so a sanctioned test command run through the
+        // shell is not killed. The predicate is the same one the enforced-verify
+        // gate uses to credit shell-based verification, so the exemption is
+        // limited to user-sanctioned commands, not arbitrary model output.
+        let skip_network_block = Self::is_verification_command(command);
         run_confined(
             &mut cmd,
             &self.workspace,
             timeout_secs,
             &self.extra_rw,
-            false,
+            skip_network_block,
         )
     }
 }
