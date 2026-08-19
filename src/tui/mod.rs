@@ -195,15 +195,13 @@ pub fn completion_arg_candidates(
                 push_unique(&name);
             }
             for candidate in [
+                "qwen3.8:latest",
                 "gemma4:latest",
-                "qwen2.5-coder:7b",
-                "qwen2.5-coder:14b",
-                "llama3.1:8b",
-                "deepseek-coder-v2",
-                "codestral",
                 "deepseek-v4-flash:cloud",
                 "deepseek-v4-pro:cloud",
-                "gemma3:12b",
+                "glm-5.2:cloud",
+                "x-ai/grok-4.5",
+                "x-ai/grok-4.6",
             ] {
                 push_unique(candidate);
             }
