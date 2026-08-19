@@ -189,6 +189,44 @@ fn git_commit_checkpoint_preserves_additions_but_not_deletions() {
 }
 
 #[test]
+fn git_commit_checkpoint_excludes_stray_temp_files() {
+    // Finding 35 / Finding 30 repeat: a checkpoint must not sweep stray
+    // untracked temp/scratch files the model's tooling drops in the
+    // workspace root into the commit.
+    let (_tmp, sb) = git_sandbox();
+    // Seed a tracked file, then commit it so it's in HEAD.
+    sb.write_file("README.md", "# raven\n").unwrap();
+    sb.git_commit("seed readme").unwrap();
+    // Real code work plus a stray 0-byte scratch file in the workspace root.
+    sb.write_file("src/main.rs", "fn main() {}").unwrap();
+    std::fs::write(sb.workspace.join("err.txt"), "").unwrap();
+    let out = sb
+        .git_commit_checkpoint("checkpoint: uncommitted work")
+        .unwrap();
+    assert!(!out.contains("Error"), "checkpoint should succeed: {out}");
+    let log = sb.git_log(5).unwrap();
+    assert!(log.contains("checkpoint: uncommitted work"), "log: {log}");
+    // The checkpoint commit must contain the source work...
+    let head_has_src = sb.run_git(&["cat-file", "-e", "HEAD:src/main.rs"]).unwrap();
+    assert!(
+        !head_has_src.contains("fatal"),
+        "src/main.rs should be in HEAD after checkpoint: {head_has_src}"
+    );
+    // ...but NOT the stray err.txt.
+    let head_has_err = sb.run_git(&["cat-file", "-e", "HEAD:err.txt"]).unwrap();
+    assert!(
+        head_has_err.contains("fatal"),
+        "stray err.txt must NOT be in HEAD: {head_has_err}"
+    );
+    // The stray file should remain untracked afterward.
+    let status = sb.git_status().unwrap();
+    assert!(
+        status.contains("err.txt"),
+        "stray err.txt should remain untracked: {status}"
+    );
+}
+
+#[test]
 fn worktree_isolates_commits_between_branches() {
     let (_tmp, sb) = git_sandbox();
     let main_ws = sb.workspace.clone();

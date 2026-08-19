@@ -77,28 +77,32 @@ impl Sandbox {
             ":!.env.*",
         ])?;
         if !include_deletions {
-            // Unstage deletions of tracked files so a checkpoint never commits
-            // collateral file removal. `git diff --cached --name-status` lists
-            // what `git add -A` just staged; `D` entries are tracked-file
-            // deletions. Restore them to the index (keeping the working-tree
-            // deletion) so they don't enter the checkpoint commit.
+            // Unstage deletions of tracked files and stray untracked temp
+            // files so a checkpoint never commits collateral file removal or
+            // accidental junk. `git diff --cached --name-status` lists what
+            // `git add -A` just staged; `D` entries are tracked-file deletions
+            // and `A` entries matching a stray-temp pattern are scratch files
+            // the model's tooling dropped in the workspace. Restore them to
+            // the index (keeping the working-tree change) so they don't enter
+            // the checkpoint commit.
             let staged = self.run_git(&["diff", "--cached", "--name-status"])?;
-            let deleted: Vec<&str> = staged
-                .lines()
-                .filter_map(|l| {
-                    let mut it = l.splitn(2, '\t');
-                    let status = it.next().unwrap_or("").trim();
-                    let path = it.next().unwrap_or("").trim();
-                    if status == "D" && !path.is_empty() {
-                        Some(path)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            if !deleted.is_empty() {
+            let mut unstaged: Vec<&str> = Vec::new();
+            for line in staged.lines() {
+                let mut it = line.splitn(2, '\t');
+                let status = it.next().unwrap_or("").trim();
+                let path = it.next().unwrap_or("").trim();
+                if path.is_empty() {
+                    continue;
+                }
+                let is_deletion = status == "D";
+                let is_stray_addition = status == "A" && Self::is_stray_temp(path);
+                if is_deletion || is_stray_addition {
+                    unstaged.push(path);
+                }
+            }
+            if !unstaged.is_empty() {
                 let mut args = vec!["restore", "--staged", "--"];
-                args.extend(deleted.iter().copied());
+                args.extend(unstaged.iter().copied());
                 let _ = self.run_git(&args)?;
             }
         }
@@ -107,6 +111,18 @@ impl Sandbox {
             return Ok(commit_out);
         }
         self.git_log(1)
+    }
+
+    /// Whether a path is a stray temp/scratch file the model's tooling may
+    /// drop in the workspace root. These must never be swept into a checkpoint
+    /// commit.
+    fn is_stray_temp(path: &str) -> bool {
+        let name = path.rsplit('/').next().unwrap_or(path);
+        name == "err.txt"
+            || name == "out.txt"
+            || name == "testout.txt"
+            || name.starts_with("_tmp_")
+            || name.ends_with(".log")
     }
 
     /// Undo the last commit, keeping changes in the working tree
