@@ -47,7 +47,7 @@ impl Provider {
                 base_url: "https://openrouter.ai/api/v1".into(),
                 api_key: None,
                 api_key_env: Some("OPENROUTER_API_KEY".into()),
-                default_model: "deepseek-v4-flash:cloud".into(),
+                default_model: "x-ai/grok-4.5".into(),
             }),
             _ => None,
         }
@@ -203,7 +203,7 @@ mod tests {
 
         let or = Provider::builtin("openrouter").expect("openrouter builtin");
         assert_eq!(or.base_url, "https://openrouter.ai/api/v1");
-        assert_eq!(or.default_model, "deepseek-v4-flash:cloud");
+        assert_eq!(or.default_model, "x-ai/grok-4.5");
         assert!(
             or.api_key.is_none(),
             "key comes from env/config, not the preset"
