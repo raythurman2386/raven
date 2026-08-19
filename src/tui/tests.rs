@@ -732,7 +732,7 @@ fn slash_command_completes_provider_and_model_names() {
     assert!(provider.candidates.iter().any(|s| s == "ollama"));
 
     let model = candidates_for("/model q", &arg_candidates).unwrap();
-    assert!(model.candidates.iter().any(|s| s == "qwen2.5-coder:14b"));
+    assert!(model.candidates.iter().any(|s| s == "qwen3.8:latest"));
 }
 
 #[tokio::test]
