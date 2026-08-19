@@ -267,6 +267,46 @@ fn confined_child_cannot_read_outside_workspace() {
 
 #[test]
 #[cfg(target_os = "linux")]
+fn run_shell_verification_command_skips_seccomp_network_block() {
+    // Regression for #155: `run_shell` hardcoded `skip_network_block = false`,
+    // so a sanctioned test runner (vitest/v8) that opens an AF_INET socket for
+    // coverage/worker IPC was SIGSYS-killed (exit 159). `run_tests` already
+    // exempts npm projects; `run_shell` must do the same for commands the
+    // enforced-verify gate credits as verification.
+    if std::process::Command::new("node")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| !s.success())
+        .unwrap_or(true)
+    {
+        eprintln!("node not available; skipping run_shell network-block regression test");
+        return;
+    }
+
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("package.json"),
+        r#"{"scripts": {"test": "node -e \"require('net').createServer(()=>{}).listen(0,'127.0.0.1',()=>{console.log('BIND_OK');process.exit(0)})\""}}"#,
+    )
+    .unwrap();
+    let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
+    // `npm test` is a verification command; the child binds an AF_INET socket
+    // (127.0.0.1) and must succeed, not be SIGSYS-killed.
+    let out = sb.run_shell("npm test", 10).unwrap();
+    assert!(
+        !out.contains("killed by signal"),
+        "run_shell verification command must skip the seccomp network block, got: {out}"
+    );
+    assert!(
+        out.contains("BIND_OK"),
+        "run_shell verification command must let the child bind an AF_INET socket, got: {out}"
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
 fn confined_child_network_blocked() {
     let tmp = tempfile::tempdir().unwrap();
     let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
