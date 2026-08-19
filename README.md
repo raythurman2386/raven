@@ -68,9 +68,10 @@ Raven started as a thought experiment — *what if we removed all the cloud over
   - Any OpenAI-compatible API (vLLM, LocalAI, etc.)
 
 **Recommended models:**
-- **Best all-around (Ollama Cloud):** `qwen3.5-coder` (latest, excellent), `deepseek-v4-pro:cloud` (high quality, fast)
+- **Best all-around (Ollama Cloud):** `qwen3.8` (latest, excellent), `deepseek-v4-pro:cloud` (high quality, fast), `deepseek-v4-flash:cloud` (efficient)
+- **Long-horizon (Ollama Cloud):** `glm-5.2:cloud` (optimized for long-horizon tasks)
 - **Good local fallback:** `qwen2.5-coder:14b`, `deepseek-coder-v2` (strong local performance)
-- **For frontier results (OpenRouter):** `grok-4.5` (multimodal, best reasoning), `gemma4:31b-cloud` (fast, 100% evals)
+- **For frontier results (OpenRouter):** `x-ai/grok-4.5` (multimodal, best reasoning), `x-ai/grok-4.6` (frontier)
 
 ---
 
@@ -154,7 +155,7 @@ raven --yolo -p "Write unit tests for auth"
 raven --provider openrouter -p "Use this task on OpenRouter"
 
 # Override model for a specific task
-raven -m qwen3.5-coder -p "This needs the big model"
+raven -m qwen3.8 -p "This needs the big model"
 
 # Continue a previous session
 raven --resume            # resume latest
@@ -198,7 +199,7 @@ raven -p "Read my local config from .raven/config.toml"
 export RAVEN_API_KEY=...  # Your Ollama Cloud token
 
 # Use cloud models:
-raven --provider ollama -m qwen3.5-coder -p "Task"
+raven --provider ollama -m qwen3.8 -p "Task"
 raven --provider ollama -m deepseek-v4-pro:cloud -p "Task"
 ```
 
@@ -459,7 +460,7 @@ The eval suite runs real agent tasks against a live model endpoint and grades th
 cargo build --release
 
 # Against Ollama Cloud (needs RAVEN_API_KEY)
-python3 evals/run.py --model qwen3.5-coder --host https://api.ollama.ai/api/v1
+python3 evals/run.py --model qwen3.8 --host https://api.ollama.ai/api/v1
 
 # Against local Ollama
 python3 evals/run.py --model qwen2.5-coder:14b --host http://127.0.0.1:11434/v1
@@ -472,8 +473,8 @@ cat evals/out/<run-id>.md
 ```
 
 **Top-performing models (current):**
-- **Ollama Cloud (daily-use recommended):** `qwen3.5-coder` (latest, excellent), `deepseek-v4-pro:cloud` (high quality)
-- **OpenRouter (frontier):** `grok-4.5` (best reasoning, multimodal), `gemma4:31b-cloud` (100% evals)
+- **Ollama Cloud (daily-use recommended):** `qwen3.8` (latest, excellent), `deepseek-v4-pro:cloud` (high quality), `deepseek-v4-flash:cloud` (efficient), `glm-5.2:cloud` (long-horizon)
+- **OpenRouter (frontier):** `x-ai/grok-4.5` (best reasoning, multimodal), `x-ai/grok-4.6` (frontier)
 - **Local (when cloud unavailable):** `qwen2.5-coder:14b`, `deepseek-coder-v2`
 
 See `docs/testing.md` for coverage and mutation testing details.
