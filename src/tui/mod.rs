@@ -1050,6 +1050,11 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState)
         ),
         Span::styled("  ·  ", Style::default().fg(theme.dim)),
         Span::styled(
+            settings.provider.name.clone(),
+            Style::default().fg(theme.dim),
+        ),
+        Span::styled("  ·  ", Style::default().fg(theme.dim)),
+        Span::styled(
             format!(
                 "{}/{} ({:.0}%)",
                 fmt_tokens(state.cached_est_tokens as u64),
