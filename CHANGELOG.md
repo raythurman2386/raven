@@ -6,6 +6,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-08-20
+
+### Fixed
+
+- **Stream interruptions no longer lose your partial reply** — if the model
+  produces text and the stream breaks mid-response (connection reset, provider
+  hiccup), Raven now keeps what was written and appends a
+  `[stream interrupted — retry or use --no-stream]` hint instead of dropping
+  the turn. Retry the prompt, or use `--no-stream` for endpoints that don't
+  reliably support streaming.
+
+### Docs
+
+- **New troubleshooting guide** (`docs/troubleshooting.md`) — covers the common
+  failure modes: Windows `.exe` / "open with?" / PATH, stream decode and
+  "stream interrupted" errors, sandbox denies and their escape hatches,
+  SearXNG→DuckDuckGo fallback, the ACP one-liner, and first-run provider
+  errors.
+- **README install snippets corrected** — removed the stale `--provider-url`
+  flag (replaced with the `[providers.ollama] base_url` config approach) and
+  bumped the version-pin example to the current release.
+- **ROADMAP restructured** — the phase-by-phase build log (which described
+  shipped features as future work) is now a clean **Done / Next (polish) /
+  Non-goals** layout matching the 0.3 release gate.
+
 ## [0.2.6] - 2026-08-19
 
 ### Added
@@ -609,7 +634,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Ratatui 0.30, crossterm 0.29.
 
-[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.2.6...HEAD
+[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.2.7...HEAD
+[0.2.7]: https://github.com/raythurman2386/raven/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/raythurman2386/raven/compare/v0.2.5...v0.2.6
 [0.2.2]: https://github.com/raythurman2386/raven/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/raythurman2386/raven/compare/v0.2.0...v0.2.1
