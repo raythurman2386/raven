@@ -591,13 +591,26 @@ pub async fn run_tui(
                             }
                         }
                         KeyCode::Home => {
-                            if !state.running || state.pending_question.is_some() {
+                            if state.input.is_empty() {
+                                // Empty input: Home jumps to the top of the
+                                // transcript (detaches from the live tail).
+                                state.scroll = u16::MAX;
+                                state.auto_scroll = false;
+                                state.input_dirty = true;
+                            } else if !state.running || state.pending_question.is_some() {
                                 state.cursor = 0;
                                 state.input_dirty = true;
                             }
                         }
                         KeyCode::End => {
-                            if !state.running || state.pending_question.is_some() {
+                            if state.input.is_empty() {
+                                // Empty input: End jumps back to the live tail
+                                // (reattaches auto-follow without scrolling all
+                                // the way back down).
+                                state.scroll = 0;
+                                state.auto_scroll = true;
+                                state.input_dirty = true;
+                            } else if !state.running || state.pending_question.is_some() {
                                 state.cursor = state.input.len();
                                 state.input_dirty = true;
                             }
