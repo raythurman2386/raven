@@ -6,6 +6,36 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-08-19
+
+### Added
+
+- **Batch eval runner** — `evals/run_all_models.py` runs the eval suite
+  against multiple models (`--list-only`, `--models`, `--host`), saving
+  per-model reports to `evals/out/<timestamp>.{json,md}` for analysis.
+- **Recommended-models documentation** — `evals/README.md` now lists model
+  status (Recommended / Passing / Partial / Flaky) plus daily-driver and
+  frontier selection guidance.
+
+### Fixed
+
+- **`run_shell` no longer kills sanctioned test runners** — it hardcoded
+  `skip_network_block=false`, so the seccomp network block SIGSYS-killed
+  npm/vitest/cargo-test style commands. It now reuses the
+  verification-command predicate to exempt user-sanctioned test commands.
+- **Checkpoint commits no longer sweep stray temp files** — `git_commit`
+  (checkpoint mode) now un-stages scratch files (`err.txt`, `out.txt`,
+  `testout.txt`, `_tmp_*`, `*.log`) dropped by model tooling, alongside
+  deletions.
+- **OpenRouter builtin default model corrected** — was
+  `deepseek-v4-flash:cloud` (an Ollama model, not a valid OpenRouter model);
+  now `x-ai/grok-4.5`.
+- **`/model` autocomplete candidates updated** — stale list replaced with
+  current models (`qwen3.8`, `glm-5.2:cloud`, `x-ai/grok-4.5`,
+  `x-ai/grok-4.6`).
+- **README recommended-model sections updated** — refreshed to the current
+  landscape and removed stale suggestions.
+
 ## [0.2.5] - 2026-08-17
 
 ### Added
@@ -579,7 +609,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Ratatui 0.30, crossterm 0.29.
 
-[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.2.6...HEAD
+[0.2.6]: https://github.com/raythurman2386/raven/compare/v0.2.5...v0.2.6
 [0.2.2]: https://github.com/raythurman2386/raven/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/raythurman2386/raven/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/raythurman2386/raven/compare/v0.1.10...v0.2.0

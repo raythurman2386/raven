@@ -141,7 +141,7 @@ python3 evals/run_all_models.py --list-only
 python3 evals/run_all_models.py
 
 # Test specific models
-python3 evals/run_all_models.py --models qwen3.5-coder,deepseek-v4-pro:cloud,grok-4.5
+python3 evals/run_all_models.py --models qwen3.8,deepseek-v4-pro:cloud,grok-4.5
 
 # Local Ollama only
 python3 evals/run_all_models.py --host http://127.0.0.1:11434/v1
