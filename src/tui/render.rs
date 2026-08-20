@@ -62,8 +62,15 @@ pub fn render_blocks(blocks: &[BlockKind], tick: u64, theme: Theme) -> (Vec<Line
                 } else {
                     String::new()
                 };
+                // Distinct tool block: a dim bordered box with a label so a
+                // tool call reads as "working", not as model prose.
+                let label = if t.name.is_empty() { "tool" } else { &t.name };
                 lines.push(Line::from(Span::styled(
-                    format!("{prefix}{}", t.text()),
+                    format!("┌─ {label} "),
+                    Style::default().fg(theme.dim),
+                )));
+                lines.push(Line::from(Span::styled(
+                    format!("│ {prefix}{}", t.text()),
                     style,
                 )));
                 if let Some(preview) = t.preview.as_ref() {
@@ -73,11 +80,15 @@ pub fn render_blocks(blocks: &[BlockKind], tick: u64, theme: Theme) -> (Vec<Line
                             continue;
                         }
                         lines.push(Line::from(Span::styled(
-                            format!("  {snip}"),
+                            format!("│   {snip}"),
                             Style::default().fg(theme.dim),
                         )));
                     }
                 }
+                lines.push(Line::from(Span::styled(
+                    "└─",
+                    Style::default().fg(theme.dim),
+                )));
                 last_assistant_start = None;
             }
             BlockKind::System(s) => {
@@ -489,16 +500,18 @@ mod tests {
         tb.active = true;
         let blocks = vec![BlockKind::Tool(tb)];
         let (lines, _tail) = render_blocks(&blocks, 0, Theme::RAVENWOOD);
-        let text = lines[0].to_string();
+        let text = lines[1].to_string();
         assert!(
             text.contains("⇢ read_file(x)"),
             "tool text should render, got {text:?}"
         );
         // Active tool should be bold (glimmer).
-        assert!(lines[0].spans[0]
+        assert!(lines[1].spans[0]
             .style
             .add_modifier
             .contains(Modifier::BOLD));
+        assert!(lines[0].to_string().contains("┌─"));
+        assert!(lines[2].to_string().contains("└─"));
     }
 
     #[test]
@@ -512,7 +525,11 @@ mod tests {
         let blocks = vec![BlockKind::Tool(tb1), BlockKind::Tool(tb2)];
         let (lines, _tail) = render_blocks(&blocks, 0, Theme::RAVENWOOD);
 
-        assert_eq!(lines.len(), 2, "both tool lines should render");
+        assert_eq!(
+            lines.len(),
+            6,
+            "both tool blocks should render (3 lines each)"
+        );
         let rendered = lines.iter().map(|l| l.to_string()).collect::<Vec<_>>();
         assert!(
             rendered.iter().any(|l| l.contains("search_code(b)")),
@@ -524,14 +541,14 @@ mod tests {
         );
         // Newest active tool glimmers (bold + spinner prefix).
         assert!(
-            lines[1].spans[0]
+            lines[4].spans[0]
                 .style
                 .add_modifier
                 .contains(Modifier::BOLD),
             "newest active tool should be bold, got {rendered:?}"
         );
         assert!(
-            rendered[1].starts_with('⠋'),
+            rendered[4].contains('⠋'),
             "newest active tool should carry a spinner prefix, got {rendered:?}"
         );
     }
@@ -544,7 +561,7 @@ mod tests {
         tb.end_tick = Some(0);
         let blocks = vec![BlockKind::Tool(tb)];
         let (lines, _tail) = render_blocks(&blocks, 10, Theme::RAVENWOOD);
-        let style = lines[0].spans[0].style;
+        let style = lines[1].spans[0].style;
         assert!(
             !style.add_modifier.contains(Modifier::BOLD),
             "finished tool should not be bold"
@@ -556,6 +573,6 @@ mod tests {
         tb2.end_tick = Some(0);
         let blocks2 = vec![BlockKind::Tool(tb2)];
         let (lines2, _tail) = render_blocks(&blocks2, 1000, Theme::RAVENWOOD);
-        assert_eq!(lines2[0].spans[0].style.fg, Some(Theme::RAVENWOOD.dim));
+        assert_eq!(lines2[1].spans[0].style.fg, Some(Theme::RAVENWOOD.dim));
     }
 }
