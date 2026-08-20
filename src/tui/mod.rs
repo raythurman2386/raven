@@ -265,7 +265,8 @@ impl TuiState {
             blocks: vec![
                 BlockKind::System(SystemBlock::new(format!(
                     "{app_name} · {} · {}",
-                    settings.model, settings.base_url()
+                    settings.model,
+                    settings.base_url()
                 ))),
                 BlockKind::System(SystemBlock::new(format!(
                     "workspace {}",
@@ -277,9 +278,6 @@ impl TuiState {
                     fmt_tokens(compact_at as u64),
                 ))),
                 BlockKind::System(SystemBlock::new(String::new())),
-                BlockKind::System(SystemBlock::new(
-                    "enter submit · /help · /model · /new · shift+tab mode · ctrl+c quit · wheel/pgup scroll".to_string(),
-                )),
             ],
             log_dirty: true,
             cached_log_lines: Vec::new(),
@@ -416,9 +414,6 @@ pub async fn run_tui(
             }
         }
         state.push_system(String::new());
-        state.push_system(
-            "resumed · enter submit · /help · /model · /new · shift+tab mode · ctrl+c quit · wheel/pgup scroll",
-        );
         state.log_dirty = true;
         s
     } else {
@@ -530,14 +525,7 @@ pub async fn run_tui(
                             }
                         }
                         KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            reset_session(
-                                &mut state,
-                                &mut session,
-                                &store,
-                                &settings,
-                                app_name,
-                                "new session · enter submit · ctrl+n new · shift+tab mode · ctrl+c quit",
-                            )?;
+                            reset_session(&mut state, &mut session, &store, &settings, app_name)?;
                         }
                         KeyCode::Up => {
                             state.scroll = state.scroll.saturating_add(1);
@@ -965,6 +953,19 @@ fn show_plan(state: &TuiState) -> bool {
     !state.plan_preview.is_empty() && (state.plan_pending || state.running)
 }
 
+/// Context-sensitive keyhint footer text, shown in the bottom row.
+fn keyhint(state: &TuiState) -> String {
+    if state.pending_question_text.is_some() {
+        "enter answer · esc dismiss".to_string()
+    } else if state.plan_pending {
+        "yes approve · type revise · esc dismiss".to_string()
+    } else if state.running {
+        "enter interrupt · ctrl+c quit".to_string()
+    } else {
+        "enter send · /help · /model · /new · shift+tab mode · ctrl+c quit · wheel/pgup scroll · home/end jump".to_string()
+    }
+}
+
 /// Count completed vs total plan steps for the status-strip progress readout.
 /// A step counts as done when `Completed` or `Skipped`.
 fn plan_step_progress(plan: &crate::plan::Plan) -> (usize, usize) {
@@ -1004,6 +1005,7 @@ fn compute_layout(area: Rect, state: &TuiState) -> Vec<Rect> {
             Constraint::Length(1),
             Constraint::Length(completion_h),
             Constraint::Length(input_h),
+            Constraint::Length(1),
         ])
         .split(area)
         .to_vec()
@@ -1274,6 +1276,15 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState)
 
     let (cx, cy) = input_cursor_position(&state.input, prompt, state.cursor, chunks[5]);
     f.set_cursor_position((cx, cy));
+
+    // Context-sensitive keyhint footer.
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            keyhint(state),
+            Style::default().fg(theme.dim),
+        ))),
+        chunks[6],
+    );
 }
 
 /// Word-wrap `s` to `width` display cells (`trim: false`).
@@ -1643,7 +1654,6 @@ fn reset_session(
     store: &SessionStore,
     settings: &Settings,
     app_name: &str,
-    hint: &str,
 ) -> Result<()> {
     abort_current_turn(state);
     let _ = store.save_all_messages(session, &state.session_messages);
@@ -1660,7 +1670,6 @@ fn reset_session(
     ));
     state.push_system(format!("workspace {}", settings.workspace.display()));
     state.push_system(String::new());
-    state.push_system(hint);
     state.log_dirty = true;
     state.plan_preview.clear();
     state.plan_pending = false;
@@ -1875,14 +1884,7 @@ async fn dispatch_slash_command(
             state.log_dirty = true;
         }
         "new" => {
-            reset_session(
-                state,
-                session,
-                store,
-                settings,
-                "raven",
-                "new session · enter submit · /model · /new · /help · /quit",
-            )?;
+            reset_session(state, session, store, settings, "raven")?;
         }
         "clear" => {
             state.blocks.clear();
