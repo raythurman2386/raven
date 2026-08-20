@@ -422,6 +422,74 @@ async fn stream_text_only_reaches_done() {
 }
 
 #[tokio::test]
+async fn stream_interruption_preserves_partial_text() {
+    // A4: a mid-stream failure after some content was produced must keep the
+    // partial assistant text (with an interruption hint) and finish via `Done`
+    // so the session persists it — not drop the turn with an `Error`.
+    let tmp = tempfile::tempdir().unwrap();
+    let body = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"Partial answer\"}}]}\n\n",
+        "data: {\"error\":{\"message\":\"stream interrupted\"}}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let (base, _h) = spawn_mock(vec![body]).await;
+    let mut agent = Agent::new(settings_for(tmp.path(), &base)).unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+    agent.run("explain", tx).await.unwrap();
+    let mut events = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        events.push(ev);
+    }
+
+    // The partial text was streamed to the user.
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, AgentEvent::TextDelta(s) if s == "Partial answer")));
+    // The turn finished cleanly (Done), not as an Error.
+    assert!(events.iter().any(|e| matches!(e, AgentEvent::Done)));
+    assert!(!events.iter().any(|e| matches!(e, AgentEvent::Error(_))));
+    // The partial text + interruption hint was persisted as an assistant turn.
+    let last = agent.messages.last().unwrap();
+    assert_eq!(last.role, "assistant");
+    let content = last.content.as_deref().unwrap_or("");
+    assert!(content.contains("Partial answer"), "content: {content}");
+    assert!(
+        content.contains("stream interrupted"),
+        "should carry the interruption hint: {content}"
+    );
+}
+
+#[tokio::test]
+async fn stream_error_with_no_content_still_aborts() {
+    // A4: a stream error with NO partial content must still abort via `Error`
+    // (nothing to preserve), not fabricate an empty assistant turn.
+    let tmp = tempfile::tempdir().unwrap();
+    let body = concat!(
+        "data: {\"error\":{\"message\":\"connection reset\"}}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let (base, _h) = spawn_mock(vec![body]).await;
+    let mut agent = Agent::new(settings_for(tmp.path(), &base)).unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+    agent.run("explain", tx).await.unwrap();
+    let mut events = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        events.push(ev);
+    }
+
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, AgentEvent::Error(msg) if msg.contains("connection reset"))));
+    assert!(!events.iter().any(|e| matches!(e, AgentEvent::Done)));
+    // No assistant turn was fabricated.
+    assert!(!agent.messages.iter().any(|m| m.role == "assistant"
+        && m.content
+            .as_deref()
+            .unwrap_or("")
+            .contains("stream interrupted")));
+}
+
+#[tokio::test]
 async fn stream_tool_call_then_answer() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("a.rs"), "fn main() {}\n").unwrap();

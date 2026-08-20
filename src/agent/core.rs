@@ -651,6 +651,25 @@ impl Agent {
             } else {
                 err
             };
+            // Preserve partial assistant text on a mid-stream failure instead
+            // of dropping the turn. When the model produced some content
+            // before the stream broke, push it as an assistant message and
+            // finish with a `Done` so the session persists what was written,
+            // with a hint that the stream was interrupted. A genuine error
+            // with no partial content still aborts via `Error`.
+            if !parsed.content.trim().is_empty() {
+                let partial = parsed.content;
+                self.messages.push(ChatMessage {
+                    role: "assistant".into(),
+                    content: Some(format!(
+                        "{partial}\n\n[stream interrupted — retry or use --no-stream]"
+                    )),
+                    tool_calls: None,
+                    tool_call_id: None,
+                });
+                let _ = tx.send(AgentEvent::Done).await;
+                return Ok(IterationOutcome::Finished);
+            }
             let _ = tx.send(AgentEvent::Error(msg)).await;
             return Ok(IterationOutcome::Finished);
         }
