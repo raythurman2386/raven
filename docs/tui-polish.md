@@ -43,22 +43,12 @@ agent-loop behavior change unless fixing a TUI bug.
 
 Each slice = one focused conventional commit + full gate + a live TUI look.
 
-1. **Tool blocks visually distinct** (Phase 2/3) — highest-value gap. Tool
-   calls are inline colored lines (`⇢ read_file(x)`), not distinct from prose.
-   Give them a bordered/labeled/dimmed block so "working" reads at a glance.
-   Reuse `ToolBlock`/`render_blocks`/`tool_style`; do not redefine.
-2. **Code block language label** (Phase 3) — `┌─ rust` instead of `┌─ code`.
-   Pairs with #1 in the same render pass.
-3. **Jump-to-live key + robust scroll reattach** (Phase 1) — a key (e.g. `End`
-   or `g`) that sets `scroll=0; auto_scroll=true`; reattach must not require
-   scrolling all the way back to 0.
-4. **Context-sensitive keyhints footer** (Phase 4) — replace the static top
-   SystemBlock keyhint with a footer that changes with state (plan pending →
-   "yes approve · type revise", ask_user → "answer", running → "enter
-   interrupt").
-5. **Provider in status line** (Phase 4) — add provider name next to model.
-6. **Empty-state "what to try" + error recovery line** (Phase 6) — one short
-   guidance line on empty transcript; one recovery action under `✗`.
+- [x] **1. Tool blocks visually distinct** (Phase 2/3) — `feat(tui): render tool calls as distinct bordered blocks`. Tool calls now render as a dim bordered box with a label (`┌─ read_file` / `│ ⇢ read_file(x)` / `└─`), distinct from model prose.
+- [x] **2. Code block language label** (Phase 3) — `feat(tui): label code blocks with their language tag`. `┌─ rust` instead of `┌─ code`; falls back to `code` when no language.
+- [x] **3. Jump-to-live key + robust scroll reattach** (Phase 1) — `feat(tui): Home/End jump to top/live when input is empty`. Empty input: Home jumps to top, End reattaches to the live tail.
+- [x] **4. Context-sensitive keyhints footer** (Phase 4) — `feat(tui): context-sensitive keyhint footer`. Static top SystemBlock replaced by a bottom footer that changes with state (answer / approve / interrupt / idle).
+- [x] **5. Provider in status line** (Phase 4) — `feat(tui): show provider name in top bar`. Top bar is now `app · model · provider · ctx% · mode`.
+- [x] **6. Empty-state "what to try" + error recovery line** (Phase 6) — `feat(tui): empty-state guidance and error recovery line`. Guidance line on empty transcript; recovery action under `✗`.
 
 ## Acceptance per slice
 
