@@ -12,7 +12,7 @@
 //! half-typed `**bold`) to literal text, so a mid-stream re-render never
 //! flashes garbage — the unclosed span just stays plain until it closes.
 
-use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
@@ -62,6 +62,8 @@ struct Renderer {
     in_quote: bool,
     /// Destination URL of the link currently being rendered (if any).
     link_url: Option<String>,
+    /// Language tag of the code block currently being rendered (if any).
+    code_lang: Option<String>,
     /// The active color theme.
     theme: Theme,
 }
@@ -76,6 +78,7 @@ impl Renderer {
             list_counters: Vec::new(),
             in_quote: false,
             link_url: None,
+            code_lang: None,
             theme,
         }
     }
@@ -116,10 +119,11 @@ impl Renderer {
     }
 
     /// Render a fenced/indented code block (already collected as `code`).
-    fn code_block(&mut self, code: &str) {
+    fn code_block(&mut self, code: &str, lang: Option<String>) {
         self.flush();
+        let label = lang.unwrap_or_else(|| "code".to_string());
         self.lines.push(Line::from(Span::styled(
-            "┌─ code",
+            format!("┌─ {label}"),
             Style::default().fg(self.theme.dim),
         )));
         for line in code.lines() {
@@ -211,8 +215,15 @@ impl Renderer {
             Tag::BlockQuote(_) => {
                 self.in_quote = true;
             }
-            Tag::CodeBlock(_) => {
-                // Code text accumulates into `cur`; rendered on End.
+            Tag::CodeBlock(kind) => {
+                // Capture the language tag (e.g. `rust`) so the block's top border
+                // can label it. Code text accumulates into `cur`; rendered on End.
+                self.code_lang = match kind {
+                    CodeBlockKind::Fenced(info) if !info.trim().is_empty() => {
+                        Some(info.trim().to_string())
+                    }
+                    _ => None,
+                };
             }
             Tag::List(Some(_)) => {
                 self.list_depth += 1;
@@ -292,7 +303,8 @@ impl Renderer {
                 // out and render as a bordered block.
                 let code: String = self.cur.iter().map(|s| s.content.as_ref()).collect();
                 self.cur.clear();
-                self.code_block(&code);
+                let lang = self.code_lang.take();
+                self.code_block(&code, lang);
             }
             TagEnd::List(_) => {
                 self.list_depth = self.list_depth.saturating_sub(1);
@@ -386,9 +398,16 @@ mod tests {
     fn renders_code_block_bordered() {
         let lines = render("```rust\nfn main() {}\n```");
         let text = plain(&lines);
-        assert!(text.iter().any(|l| l.contains("┌─")));
+        assert!(text.iter().any(|l| l.contains("┌─ rust")));
         assert!(text.iter().any(|l| l.contains("fn main() {}")));
         assert!(text.iter().any(|l| l.contains("└─")));
+    }
+
+    #[test]
+    fn renders_code_block_without_language_defaults_to_code() {
+        let lines = render("```\nplain\n```");
+        let text = plain(&lines);
+        assert!(text.iter().any(|l| l.contains("┌─ code")));
     }
 
     #[test]
