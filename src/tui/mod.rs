@@ -278,6 +278,10 @@ impl TuiState {
                     fmt_tokens(compact_at as u64),
                 ))),
                 BlockKind::System(SystemBlock::new(String::new())),
+                BlockKind::System(SystemBlock::new(
+                    "try: describe a task, e.g. \"add auth middleware\" · /help for commands"
+                        .to_string(),
+                )),
             ],
             log_dirty: true,
             cached_log_lines: Vec::new(),

@@ -109,6 +109,10 @@ pub fn render_blocks(blocks: &[BlockKind], tick: u64, theme: Theme) -> (Vec<Line
                         .fg(theme.error)
                         .add_modifier(Modifier::BOLD),
                 )));
+                lines.push(Line::from(Span::styled(
+                    "  retry with a fresh prompt, or /new to reset the session",
+                    Style::default().fg(theme.dim),
+                )));
                 last_assistant_start = None;
             }
         }
@@ -345,7 +349,7 @@ pub fn message_to_block(msg: &ChatMessage) -> Option<BlockKind> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::blocks::AssistantBlock;
+    use crate::tui::blocks::{AssistantBlock, ErrorBlock};
 
     fn mk(texts: &[&str]) -> Vec<Line<'static>> {
         texts
@@ -470,6 +474,23 @@ mod tests {
         let row1: String = (2..6).map(|x| buf[(x, 1)].symbol().to_string()).collect();
         assert_eq!(row0, "bbbb", "row 0 should be 'bbbb', got {row0:?}");
         assert_eq!(row1, "cccc", "row 1 should be 'cccc', got {row1:?}");
+    }
+
+    #[test]
+    fn render_blocks_error_has_recovery_line() {
+        let blocks = vec![BlockKind::Error(ErrorBlock::new("boom".to_string()))];
+        let (lines, _tail) = render_blocks(&blocks, 0, Theme::RAVENWOOD);
+        let rendered = lines.iter().map(|l| l.to_string()).collect::<Vec<_>>();
+        assert!(
+            rendered.iter().any(|l| l.contains("✗ boom")),
+            "error line should render, got {rendered:?}"
+        );
+        assert!(
+            rendered
+                .iter()
+                .any(|l| l.contains("retry with a fresh prompt")),
+            "recovery line should render, got {rendered:?}"
+        );
     }
 
     #[test]
