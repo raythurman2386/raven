@@ -7,6 +7,7 @@ User and contributor guides for **Raven**. Start with the [root README](../READM
 | Guide | Audience | Contents |
 |---|---|---|
 | [usage.md](usage.md) | Users | Day-to-day workflows, examples, plan mode, parallel sub-agents |
+| [troubleshooting.md](troubleshooting.md) | Users | Common failure modes: Windows `.exe`, stream errors, sandbox denies, SearXNG fallback, ACP |
 | [../evals/README.md](../evals/README.md) | Contributors | Agent eval suite (offline + live task fixtures) |
 | [configuration.md](configuration.md) | Users | Env vars, CLI flags, context window, API keys, AGENTS.md |
 | [architecture.md](architecture.md) | Contributors | Design, agent loop, compaction, sandbox, module map |

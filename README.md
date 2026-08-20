@@ -97,7 +97,7 @@ GitHub Releases, verifies the SHA-256 checksum, and installs to `~/.cargo/bin`.
 Options:
 
 ```bash
-curl -fsSL .../install.sh | sh -s -- --version 0.1.6   # pin a version
+curl -fsSL .../install.sh | sh -s -- --version 0.2.6   # pin a version
 curl -fsSL .../install.sh | sh -s -- --to /usr/local/bin  # custom install dir
 curl -fsSL .../install.sh | sh -s -- --force              # overwrite existing
 ```
@@ -182,8 +182,10 @@ raven --context-window 32768 --compact-threshold 0.5 -p "Analyze this large file
 # Non-streaming mode (for models/endpoints that don't support SSE)
 raven --no-stream -p "Hello"
 
-# Run against a custom endpoint URL
-raven --provider ollama --provider-url http://remote-server:11434/v1 -p "Task"
+# Point the ollama provider at a custom endpoint (via config.toml)
+#   [providers.ollama]
+#   base_url = "http://remote-server:11434/v1"
+raven --provider ollama -p "Task"
 
 # Workspace-specific settings
 cd /path/to/project
@@ -208,7 +210,7 @@ raven --provider ollama -m deepseek-v4-pro:cloud -p "Task"
 ollama pull qwen2.5-coder:14b
 ollama serve
 # In another terminal:
-raven --provider ollama --provider-url http://localhost:11434/v1 -m qwen2.5-coder:14b -p "Task"
+raven --provider ollama -m qwen2.5-coder:14b -p "Task"
 ```
 
 **OpenRouter (for Grok and frontier models):**
@@ -478,6 +480,10 @@ cat evals/out/<run-id>.md
 - **Local (when cloud unavailable):** `qwen2.5-coder:14b`, `deepseek-coder-v2`
 
 See `docs/testing.md` for coverage and mutation testing details.
+
+**Troubleshooting:** common failure modes (Windows `.exe`, stream errors,
+sandbox denies, SearXNG fallback, ACP) are covered in
+[`docs/troubleshooting.md`](docs/troubleshooting.md).
 
 ---
 
