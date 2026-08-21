@@ -198,6 +198,25 @@ impl Settings {
         let raw = context_window / 8;
         raw.clamp(1024, 32_768) as u32
     }
+
+    /// Temperature rounded to 4 decimal places for JSON serialization.
+    ///
+    /// f32 → f64 conversion produces artifacts like `0.20000000298023224`,
+    /// which some OpenRouter providers (e.g. Stealth) reject with HTTP 400.
+    pub fn temperature_json(&self) -> f64 {
+        round_temperature(self.temperature)
+    }
+}
+
+/// Round an f32 temperature to 4 decimal places, returning a clean f64.
+pub(crate) fn round_temperature(t: f32) -> f64 {
+    let v = (f64::from(t) * 10_000.0).round() / 10_000.0;
+    // Normalize -0.0 to 0.0
+    if v == 0.0 {
+        0.0
+    } else {
+        v
+    }
 }
 
 /// A named model endpoint (Ollama, OpenRouter, Ollama Cloud, …).

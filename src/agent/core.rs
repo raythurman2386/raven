@@ -552,7 +552,7 @@ impl Agent {
                 "messages": request_messages_json(&self.messages),
                 "tools": self.tools_value(),
                 "tool_choice": "auto",
-                "temperature": self.settings.temperature,
+                "temperature": self.settings.temperature_json(),
                 "max_tokens": clamped_max,
                 "stream": !self.settings.no_stream,
             })
@@ -571,7 +571,7 @@ impl Agent {
                 "messages": request_messages_json(&request_messages),
                 "tools": self.tools_value(),
                 "tool_choice": "auto",
-                "temperature": self.settings.temperature,
+                "temperature": self.settings.temperature_json(),
                 "max_tokens": clamped_max,
                 "stream": !self.settings.no_stream,
             })
