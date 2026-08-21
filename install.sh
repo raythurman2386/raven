@@ -159,7 +159,10 @@ main() {
     fi
 
     local expected
-    expected="$(grep "$artifact" "$tmp_dir/checksums.txt" | awk '{print $1}')"
+    # Anchor to the exact artifact name (end of line) so the raw-binary entry
+    # isn't shadowed by the matching .tar.gz/.zip archive entry that the
+    # release workflow now also writes to checksums.txt.
+    expected="$(grep -E "^[0-9a-f]{64}  ${artifact}$" "$tmp_dir/checksums.txt" | awk '{print $1}')"
     if [[ -z "$expected" ]]; then
         echo "Error: no checksum entry found for $artifact in checksums.txt" >&2
         echo "Refusing to install an unverified binary." >&2

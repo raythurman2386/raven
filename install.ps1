@@ -123,7 +123,7 @@ try {
         $checksums = Get-Content $checksumPath
         $expected = $null
         foreach ($line in $checksums) {
-            if ($line -match "^\s*([a-f0-9]+)\s+.*$([regex]::Escape($artifact))") {
+            if ($line -match "^\s*([a-f0-9]+)\s+$([regex]::Escape($artifact))$") {
                 $expected = $Matches[1]
                 break
             }
