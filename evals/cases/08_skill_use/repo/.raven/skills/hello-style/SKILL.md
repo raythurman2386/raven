@@ -1,3 +1,8 @@
+---
+name: hello-style
+description: Specifies the exact contents for src/hello.txt
+---
+
 # hello-style
 
 When asked to apply hello-style, create `src/hello.txt` whose entire contents
