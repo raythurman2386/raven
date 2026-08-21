@@ -184,7 +184,17 @@ pub fn discover(workspace: &Path) -> Vec<Skill> {
         let Ok(content) = std::fs::read_to_string(&path) else {
             continue;
         };
-        let (name, description, _body) = parse_skill_file(&content);
+        let (mut name, description, _body) = parse_skill_file(&content);
+        if name.is_empty() {
+            // No frontmatter name — fall back to the skill directory name
+            // (e.g. `.raven/skills/hello-style/SKILL.md` → "hello-style").
+            // Skills written as plain markdown without YAML are still valid.
+            name = path
+                .parent()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+        }
         if name.is_empty() {
             continue;
         }
@@ -331,13 +341,15 @@ mod tests {
     }
 
     #[test]
-    fn discover_skips_skill_without_name() {
+    fn discover_falls_back_to_directory_name_without_frontmatter() {
         with_hermetic_home(|| {
             let tmp = tempfile::tempdir().unwrap();
             let d = tmp.path().join(".raven").join("skills").join("nope");
             std::fs::create_dir_all(&d).unwrap();
             std::fs::write(d.join("SKILL.md"), "no frontmatter here").unwrap();
-            assert!(discover(tmp.path()).is_empty());
+            let skills = discover(tmp.path());
+            assert_eq!(skills.len(), 1);
+            assert_eq!(skills[0].name, "nope");
         });
     }
 
