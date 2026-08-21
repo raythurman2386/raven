@@ -1,6 +1,6 @@
 //! ACP v1 stdio agent: JSON-RPC over newline-delimited stdin/stdout.
 //!
-//! Editors spawn `raven acp` and talk ACP. Raven owns its own sandbox and
+//! Editors spawn `raven --acp` and talk ACP. Raven owns its own sandbox and
 //! tools; MCP servers on `session/new` are ignored. Client `fs/*` /
 //! `terminal/*` are not used.
 //!
@@ -32,7 +32,7 @@ pub trait FrameWrite: Send {
     fn write_frame(&mut self, msg: &Value) -> Result<()>;
 }
 
-/// Stdout NDJSON writer used by `raven acp`.
+/// Stdout NDJSON writer used by `raven --acp`.
 pub struct StdoutWriter<W: Write + Send> {
     inner: W,
 }
@@ -686,7 +686,7 @@ where
     Ok(())
 }
 
-/// Run `raven acp` on real stdin/stdout.
+/// Run `raven --acp` on real stdin/stdout.
 pub async fn run_stdio(settings: Settings) -> Result<()> {
     let server = AcpServer::new(settings);
     serve_io(

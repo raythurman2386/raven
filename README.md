@@ -49,7 +49,7 @@ Raven started as a thought experiment — *what if we removed all the cloud over
 | Typed errors with retry + exponential backoff | |
 | Non-streaming fallback (`--no-stream`) | |
 | Simple ratatui TUI + headless CLI | |
-| ACP v1 stdio (`raven acp`) for editor attachment | |
+| ACP v1 stdio (`raven --acp`) for editor attachment | |
 | Markdown rendering in the TUI (headings, code blocks, lists, tables, links) | |
 | Slash-command completion (`/provider`, `/model` with live endpoint discovery) | |
 | `AGENTS.md` / `CLAUDE.md` auto-load + `--rules` session overrides | |

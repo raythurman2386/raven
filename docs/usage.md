@@ -16,9 +16,9 @@ Force headless with no task using `--headless` (exits with an error if no prompt
 
 ### ACP (editor attachment)
 
-`raven acp` speaks [Agent Client Protocol](https://agentclientprotocol.com/) v1
+`raven --acp` speaks [Agent Client Protocol](https://agentclientprotocol.com/) v1
 on stdin/stdout. Point an ACP-capable editor at the `raven` binary with the
-`acp` flag (for example Zed's custom agent command: `raven acp`).
+`acp` flag (for example Zed's custom agent command: `raven --acp`).
 
 Supported: `initialize`, `authenticate`, `session/new`, `session/prompt`,
 `session/cancel`, `session/load` (replays history), `session/resume`,
