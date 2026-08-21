@@ -6,6 +6,7 @@
 
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
+use unicode_width::UnicodeWidthChar;
 
 use crate::agent::ChatMessage;
 
@@ -192,12 +193,18 @@ pub fn prewrap_lines(lines: &[Line<'static>], width: usize) -> Vec<Line<'static>
                     chars.next();
                     break;
                 }
-                if took == width {
+                let cw = c.width().unwrap_or(0);
+                // Break before a wide char that would overflow the row, so it
+                // starts cleanly on the next line (matches the input path).
+                if took > 0 && took + cw > width {
+                    break;
+                }
+                if took == width || took + cw > width {
                     break;
                 }
                 seg.push(c);
                 chars.next();
-                took += 1;
+                took += cw;
             }
             if seg.is_empty() && chars.peek().is_none() {
                 break;
@@ -228,13 +235,19 @@ fn wrapped_row_count(text: &str, width: usize) -> usize {
                 chars.next();
                 break;
             }
-            if took == w {
+            let cw = c.width().unwrap_or(0);
+            if took > 0 && took + cw > w {
+                break;
+            }
+            if took == w || took + cw > w {
                 break;
             }
             seg.push(c);
             chars.next();
-            took += 1;
+            took += cw;
         }
+        // Mirror `prewrap_lines`: an empty segment with nothing left emits
+        // nothing (e.g. a lone or trailing newline yields 0 rows).
         if seg.is_empty() && chars.peek().is_none() {
             break;
         }
@@ -430,6 +443,36 @@ mod tests {
                 wrapped.len()
             );
         }
+    }
+
+    #[test]
+    fn prewrap_widths_wide_chars_match_row_count() {
+        // CJK chars are display-width 2. "你"x6 at width 4 wraps into 3 rows
+        // (2 wide chars per row). The wrap math and row count must agree and
+        // must break on the display-width boundary.
+        let text = "你你你你你你"; // 6 wide chars, display width 12
+        let line = Line::from(Span::styled(text.to_string(), Style::default()));
+        let wrapped = prewrap_lines(std::slice::from_ref(&line), 4);
+        let count = wrapped_row_count(text, 4);
+        assert_eq!(count, wrapped.len(), "row count must match prewrap output");
+        // 6 wide chars at width 4 => 2 chars per row => 3 rows.
+        assert_eq!(count, 3, "expected 3 rows for 6 width-2 chars at width 4");
+        // No row should be wider than the budget (4 display columns).
+        for row in &wrapped {
+            let w: usize = row
+                .to_string()
+                .chars()
+                .map(|c| c.width().unwrap_or(0))
+                .sum();
+            assert!(w <= 4, "row width {w} exceeds budget 4");
+        }
+        // Mixed ASCII + CJK: "ab你cd" at width 4 should not split "你" across rows.
+        let mixed = "ab你cd";
+        let line2 = Line::from(Span::styled(mixed.to_string(), Style::default()));
+        let w2 = prewrap_lines(std::slice::from_ref(&line2), 4);
+        let c2 = wrapped_row_count(mixed, 4);
+        assert_eq!(c2, w2.len());
+        assert!(c2 >= 2, "ab(2) + 你(2) = 4 fits row 1, c(1) wraps to row 2");
     }
 
     #[test]
