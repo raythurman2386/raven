@@ -60,7 +60,9 @@ pub use theme::Theme;
 
 use blocks::{AssistantBlock, BlockKind, ErrorBlock, SystemBlock, ToolBlock, UserBlock};
 use completion::{apply as apply_completion, candidates_for, Completion};
-use render::{message_to_block, prewrap_visible, render_assistant_lines, render_blocks};
+use render::{
+    message_to_block, prewrap_visible, render_assistant_lines, render_blocks, total_rows,
+};
 use selection::{
     apply_selection_highlight, copy_to_clipboard, selection_text, word_bounds, DisplayPos,
     Selection,
@@ -218,6 +220,12 @@ struct TuiState {
     blocks: Vec<BlockKind>,
     log_dirty: bool,
     cached_log_lines: Vec<Line<'static>>,
+    /// Sum of per-line wrapped-row counts for `cached_log_lines`. Recomputed
+    /// only when the log content changes, so virtualization stays O(viewport).
+    log_total_rows: usize,
+    /// Width (in columns) used to compute `log_total_rows`. Tracked so the
+    /// total is recomputed on terminal resize.
+    log_width: usize,
     last_assistant_lines: usize,
     stream_patch: bool,
     cached_est_tokens: usize,
@@ -290,6 +298,8 @@ impl TuiState {
             ],
             log_dirty: true,
             cached_log_lines: Vec::new(),
+            log_total_rows: 0,
+            log_width: 0,
             last_assistant_lines: 0,
             stream_patch: false,
             cached_est_tokens: 0,
@@ -371,6 +381,16 @@ impl TuiState {
         self.blocks
             .push(BlockKind::Error(ErrorBlock::new(text.into())));
         self.log_dirty = true;
+    }
+
+    /// Recompute the cached total row count when the log content or viewport
+    /// width changes. Call this after any log re-render or terminal resize.
+    fn refresh_log_rows(&mut self, width: usize) {
+        if self.log_width == width && !self.log_dirty {
+            return;
+        }
+        self.log_width = width;
+        self.log_total_rows = total_rows(&self.cached_log_lines, width.max(1));
     }
 }
 
@@ -503,7 +523,7 @@ pub async fn run_tui(
                 state.tick = state.tick.wrapping_add(1);
             }
             terminal.draw(|f| {
-                draw_ui(f, app_name, &settings, &state);
+                draw_ui(f, app_name, &settings, &mut state);
             })?;
             state.input_dirty = false;
             last_draw = std::time::Instant::now();
@@ -1137,7 +1157,7 @@ fn compute_layout(area: Rect, state: &TuiState) -> Vec<Rect> {
         .to_vec()
 }
 
-fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState) {
+fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &mut TuiState) {
     let theme = state.theme;
     let pct = if settings.context_window > 0 {
         (state.cached_est_tokens as f64 / settings.context_window as f64) * 100.0
@@ -1211,8 +1231,10 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &TuiState)
     // the viewport) plus the scroll offset. The offset is used only for mouse
     // hit-testing (`current_display`); the Paragraph must NOT scroll again,
     // or the visible window would be pushed off-screen.
+    state.refresh_log_rows(content_width.max(1));
     let (display_lines, _offset) = prewrap_visible(
         &state.cached_log_lines,
+        state.log_total_rows,
         content_width.max(1),
         state.scroll as usize,
         log_h,
@@ -1604,13 +1626,15 @@ fn mouse_to_display_pos(m: &MouseEvent, log_rect: Rect) -> Option<DisplayPos> {
 
 /// Compute the display lines + scroll offset currently rendered, matching the
 /// draw path so hit-testing agrees.
-fn current_display(state: &TuiState, log_rect: Rect) -> (Vec<Line<'static>>, u16) {
+fn current_display(state: &mut TuiState, log_rect: Rect) -> (Vec<Line<'static>>, u16) {
     let content_width = (log_rect.width.saturating_sub(4)) as usize;
     // Match `draw_ui`: the log block has LEFT|RIGHT|BOTTOM borders (no top),
     // so only the bottom border consumes a content row.
     let log_h = log_rect.height.saturating_sub(1) as usize;
+    state.refresh_log_rows(content_width.max(1));
     prewrap_visible(
         &state.cached_log_lines,
+        state.log_total_rows,
         content_width.max(1),
         state.scroll as usize,
         log_h,

@@ -497,6 +497,8 @@ fn dummy_state() -> TuiState {
         blocks: Vec::new(),
         log_dirty: false,
         cached_log_lines: Vec::new(),
+        log_total_rows: 0,
+        log_width: 0,
         last_assistant_lines: 0,
         stream_patch: false,
         cached_est_tokens: 0,
