@@ -52,6 +52,7 @@ Each slice = one focused conventional commit + full gate + a live TUI look.
 - [x] **7. Prompt history recall** (Phase 4) — `feat(tui): prompt history recall with up/down on empty input`. Empty input: Up recalls the previous prompt, Down recalls forward; bounded to 100 entries; resets when typing.
 - [x] **8. Table cell width cap** (Phase 3) — `feat(tui): cap markdown table cell width`. Cells truncate to a 32-char budget with a `…` marker so wide tables wrap on cell boundaries instead of blowing out a row.
 - [x] **9. Compact tool-call args** (Phase 2/4) — `feat(tui): compact key=value tool-call args`. Tool blocks read `read_file path=src/main.rs line=1-40` instead of raw JSON braces; long values truncated.
+- [x] **10. Width-aware transcript wrap/scroll** (Phase 2, correctness) — `fix(tui): width-aware transcript wrap/scroll (CJK/emoji)`. The transcript wrap/scroll math now uses display width (`unicode_width`), so CJK/emoji content scrolls correctly instead of drifting. Stays in lockstep with the already-correct input path.
 
 ## Acceptance per slice
 
