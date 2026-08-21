@@ -6,6 +6,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-21
+
+### Fixed
+
+- **Temperature no longer serialized with f32→f64 artifacts** — `Settings.temperature`
+  is stored as an `f32`, and serializing it directly widened to long values like
+  `0.20000000298023224`, which some OpenRouter providers (e.g. Stealth)
+  strict-schema-validate and reject with HTTP 400. Temperature is now rounded to
+  4 decimal places at all three request-body sites (streaming, non-streaming, and
+  retry paths) so it serializes cleanly (`0.2`, `0.7`, `0.33`, …).
+- **SKILL.md files without YAML frontmatter are no longer silently skipped** —
+  skill discovery previously dropped any skill whose `SKILL.md` lacked a
+  frontmatter `name:`, so `skill_search` reported "No skills found" even though
+  the file existed. Discovery now falls back to the skill directory name,
+  matching how Claude Code / agent skills treat plain-markdown skills.
+
 ## [0.3.0] - 2026-08-20
 
 ### Added
@@ -682,7 +698,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Ratatui 0.30, crossterm 0.29.
 
-[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/raythurman2386/raven/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/raythurman2386/raven/compare/v0.2.7...v0.3.0
 [0.2.7]: https://github.com/raythurman2386/raven/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/raythurman2386/raven/compare/v0.2.5...v0.2.6
