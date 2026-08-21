@@ -1,8 +1,8 @@
 //! Offline ACP protocol + in-process client tests.
 
 use super::protocol::{
-    agent_capabilities, extract_prompt_text, map_event, permission_allowed, tool_kind, Incoming,
-    StopReason,
+    agent_capabilities, auth_methods, extract_prompt_text, map_event, permission_allowed,
+    tool_kind, Incoming, StopReason, AUTH_METHOD_ID,
 };
 use super::server::{dispatch, AcpServer, FrameWrite};
 use crate::agent::AgentEvent;
@@ -224,6 +224,10 @@ async fn initialize_then_session_new_and_list() {
         frames[0]["result"]["agentCapabilities"]["loadSession"],
         true
     );
+    // Registry gate: authMethods must carry a type "agent" (or "terminal").
+    let auth = &frames[0]["result"]["authMethods"];
+    assert_eq!(auth[0]["type"], "agent");
+    assert_eq!(auth[0]["id"], "agent-auth");
     let sid = frames[1]["result"]["sessionId"].as_str().unwrap();
     assert!(!sid.is_empty());
     assert_eq!(frames[1]["result"]["modes"]["currentModeId"], "agent");
@@ -451,4 +455,143 @@ async fn load_replays_history() {
     assert!(frames
         .iter()
         .any(|f| f.get("id") == Some(&json!(2)) && f.get("result").is_some()));
+}
+
+#[test]
+fn auth_methods_advertise_single_agent_method() {
+    let methods = auth_methods();
+    let arr = methods.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["id"], "agent-auth");
+    assert_eq!(arr[0]["type"], "agent");
+    assert!(arr[0]["name"].is_string());
+    assert!(arr[0]["description"].is_string());
+}
+
+#[tokio::test]
+async fn authenticate_accepts_advertised_method_and_rejects_unknown() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().canonicalize().unwrap();
+    let server = Arc::new(Mutex::new(AcpServer::new(settings(&ws))));
+    let buf = Arc::new(StdMutex::new(Vec::new()));
+    let writer: Arc<Mutex<dyn FrameWrite>> = Arc::new(Mutex::new(BufWriter { buf: buf.clone() }));
+
+    send(
+        &server,
+        &writer,
+        req(1, "initialize", json!({"protocolVersion": 1})),
+    )
+    .await;
+    send(
+        &server,
+        &writer,
+        req(2, "authenticate", json!({"methodId": AUTH_METHOD_ID})),
+    )
+    .await;
+    send(
+        &server,
+        &writer,
+        req(3, "authenticate", json!({"methodId": "bogus"})),
+    )
+    .await;
+    let frames = frames_from(&buf);
+    assert!(frames[1]["result"].is_object());
+    assert_eq!(frames[2]["error"]["code"], -32602);
+}
+
+#[tokio::test]
+async fn set_model_updates_session_and_rejects_unknown_session() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().canonicalize().unwrap();
+    let server = Arc::new(Mutex::new(AcpServer::new(settings(&ws))));
+    let buf = Arc::new(StdMutex::new(Vec::new()));
+    let writer: Arc<Mutex<dyn FrameWrite>> = Arc::new(Mutex::new(BufWriter { buf: buf.clone() }));
+
+    send(
+        &server,
+        &writer,
+        req(1, "initialize", json!({"protocolVersion": 1})),
+    )
+    .await;
+    send(
+        &server,
+        &writer,
+        req(
+            2,
+            "session/new",
+            json!({"cwd": ws.display().to_string(), "mcpServers": []}),
+        ),
+    )
+    .await;
+    let sid = frames_from(&buf)[1]["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    send(
+        &server,
+        &writer,
+        req(
+            3,
+            "session/set_model",
+            json!({"sessionId": sid, "model": "glm-5.2:cloud"}),
+        ),
+    )
+    .await;
+    send(
+        &server,
+        &writer,
+        req(
+            4,
+            "session/set_model",
+            json!({"sessionId": "missing", "model": "glm-5.2:cloud"}),
+        ),
+    )
+    .await;
+    let frames = frames_from(&buf);
+    assert!(frames[2]["result"].is_object());
+    assert_eq!(frames[3]["error"]["code"], -32602);
+}
+
+#[tokio::test]
+async fn set_model_rejects_missing_or_empty_model() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().canonicalize().unwrap();
+    let server = Arc::new(Mutex::new(AcpServer::new(settings(&ws))));
+    let buf = Arc::new(StdMutex::new(Vec::new()));
+    let writer: Arc<Mutex<dyn FrameWrite>> = Arc::new(Mutex::new(BufWriter { buf: buf.clone() }));
+
+    send(
+        &server,
+        &writer,
+        req(1, "initialize", json!({"protocolVersion": 1})),
+    )
+    .await;
+    send(
+        &server,
+        &writer,
+        req(
+            2,
+            "session/new",
+            json!({"cwd": ws.display().to_string(), "mcpServers": []}),
+        ),
+    )
+    .await;
+    let sid = frames_from(&buf)[1]["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    send(
+        &server,
+        &writer,
+        req(3, "session/set_model", json!({"sessionId": sid})),
+    )
+    .await;
+    let frames = frames_from(&buf);
+    assert_eq!(frames[2]["error"]["code"], -32602);
+}
+
+#[tokio::test]
+async fn capabilities_advertise_set_capability() {
+    let caps = agent_capabilities();
+    assert!(caps["sessionCapabilities"]["set"].is_object());
 }

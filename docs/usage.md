@@ -20,10 +20,13 @@ Force headless with no task using `--headless` (exits with an error if no prompt
 on stdin/stdout. Point an ACP-capable editor at the `raven` binary with the
 `acp` flag (for example Zed's custom agent command: `raven acp`).
 
-Supported: `initialize`, `session/new`, `session/prompt`, `session/cancel`,
-`session/load` (replays history), `session/resume`, `session/list`,
-`session/close`, `session/set_mode` (`plan` / `agent` / `chat`).
-`ask_user` and shell confirmation become `session/request_permission`.
+Supported: `initialize`, `authenticate`, `session/new`, `session/prompt`,
+`session/cancel`, `session/load` (replays history), `session/resume`,
+`session/list`, `session/close`, `session/set_mode` (`plan` / `agent` / `chat`),
+`session/set_model`. `ask_user` and shell confirmation become
+`session/request_permission`. `initialize` advertises a single `agent`-type
+auth method (`agent-auth`): credentials are already resolved in-process, so
+`authenticate` is a no-op acknowledgement.
 
 Not advertised: MCP servers, images/audio, client `fs/*` / `terminal/*`.
 Raven keeps its own sandbox. Other CLI flags (`--provider`, `--model`,

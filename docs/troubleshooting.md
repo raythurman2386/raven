@@ -113,10 +113,13 @@ agent command:
 raven acp
 ```
 
-- **Supported methods:** `initialize`, `session/new`, `session/prompt`,
-  `session/cancel`, `session/load`, `session/resume`, `session/list`,
-  `session/close`, `session/set_mode` (`plan`/`agent`/`chat`). `ask_user` and
-  shell confirmation become `session/request_permission`.
+- **Supported methods:** `initialize`, `authenticate`, `session/new`,
+  `session/prompt`, `session/cancel`, `session/load`, `session/resume`,
+  `session/list`, `session/close`, `session/set_mode` (`plan`/`agent`/`chat`),
+  `session/set_model`. `ask_user` and shell confirmation become
+  `session/request_permission`. `initialize` advertises one `agent`-type auth
+  method (`agent-auth`); `authenticate` acknowledges it (credentials are
+  resolved in-process).
 - **Not advertised:** MCP servers, images/audio, client `fs/*`/`terminal/*`.
   Raven keeps its own sandbox.
 - **Other CLI flags still apply** to the ACP process: `--provider`, `--model`,
