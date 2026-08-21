@@ -528,6 +528,8 @@ fn dummy_state() -> TuiState {
         last_click: None,
         copy_status: None,
         theme: Theme::RAVENWOOD,
+        prompt_history: Vec::new(),
+        hist_idx: 0,
     }
 }
 
@@ -810,4 +812,29 @@ async fn theme_command_switches_theme_and_lists() {
         Theme::NORD,
         "unknown theme must not change theme"
     );
+}
+
+#[test]
+fn history_recall_up_returns_previous() {
+    let hist = vec!["first".to_string(), "second".to_string()];
+    let (p, idx) = history_recall_up(&hist, 2).unwrap();
+    assert_eq!(p, "second");
+    assert_eq!(idx, 1);
+    assert_eq!(history_recall_up(&hist, 0), None);
+    assert_eq!(history_recall_up(&[], 0), None);
+}
+
+#[test]
+fn history_recall_down_moves_forward_then_baseline() {
+    let hist = vec!["first".to_string(), "second".to_string()];
+    // from index 1 -> live baseline (empty)
+    let (p, idx) = history_recall_down(&hist, 1).unwrap();
+    assert_eq!(p, "");
+    assert_eq!(idx, 2);
+    // from baseline -> None
+    assert_eq!(history_recall_down(&hist, 2), None);
+    // from 0 -> index 1
+    let (p, idx) = history_recall_down(&hist, 0).unwrap();
+    assert_eq!(p, "second");
+    assert_eq!(idx, 1);
 }

@@ -257,6 +257,11 @@ struct TuiState {
     last_click: Option<(u64, DisplayPos)>,
     copy_status: Option<(u64, String)>,
     theme: Theme,
+    /// Most-recently-submitted prompts, oldest first. Bounded to HISTORY_MAX.
+    prompt_history: Vec<String>,
+    /// Recall cursor into `prompt_history`; `== prompt_history.len()` means
+    /// "live" (the empty baseline). Up decrements, Down increments.
+    hist_idx: usize,
 }
 
 impl TuiState {
@@ -317,6 +322,8 @@ impl TuiState {
             last_click: None,
             copy_status: None,
             theme: Theme::by_name(&settings.theme).unwrap_or_else(Theme::default_theme),
+            prompt_history: Vec::new(),
+            hist_idx: 0,
         }
     }
 
@@ -532,16 +539,41 @@ pub async fn run_tui(
                             reset_session(&mut state, &mut session, &store, &settings, app_name)?;
                         }
                         KeyCode::Up => {
-                            state.scroll = state.scroll.saturating_add(1);
-                            state.auto_scroll = false;
-                            state.input_dirty = true;
+                            if state.input.is_empty() {
+                                // Empty input: Up recalls the previous prompt.
+                                if let Some((recalled, idx)) =
+                                    history_recall_up(&state.prompt_history, state.hist_idx)
+                                {
+                                    state.input = recalled;
+                                    state.cursor = state.input.len();
+                                    state.hist_idx = idx;
+                                    state.input_dirty = true;
+                                }
+                            } else {
+                                state.scroll = state.scroll.saturating_add(1);
+                                state.auto_scroll = false;
+                                state.input_dirty = true;
+                            }
                         }
                         KeyCode::Down => {
-                            state.scroll = state.scroll.saturating_sub(1);
-                            if state.scroll == 0 {
-                                state.auto_scroll = true;
+                            if state.input.is_empty() {
+                                // Empty input: Down recalls forward (toward
+                                // the empty baseline), or stays empty at live.
+                                if let Some((recalled, idx)) =
+                                    history_recall_down(&state.prompt_history, state.hist_idx)
+                                {
+                                    state.input = recalled;
+                                    state.cursor = state.input.len();
+                                    state.hist_idx = idx;
+                                    state.input_dirty = true;
+                                }
+                            } else {
+                                state.scroll = state.scroll.saturating_sub(1);
+                                if state.scroll == 0 {
+                                    state.auto_scroll = true;
+                                }
+                                state.input_dirty = true;
                             }
-                            state.input_dirty = true;
                         }
                         KeyCode::PageUp => {
                             state.scroll = state.scroll.saturating_add(10);
@@ -634,6 +666,7 @@ pub async fn run_tui(
                                 state.cursor += c.len_utf8();
                                 state.input_dirty = true;
                             }
+                            state.hist_idx = state.prompt_history.len();
                             state.completion = candidates_for(&state.input, &arg_candidates);
                         }
                         KeyCode::Backspace => {
@@ -706,6 +739,16 @@ pub async fn run_tui(
                                 continue;
                             }
 
+                            // Record the prompt for Up/Down recall. Only real
+                            // task prompts / plan revisions land here — slash
+                            // commands and ask_user answers `continue` earlier.
+                            if !text.is_empty() {
+                                state.prompt_history.push(text.clone());
+                                if state.prompt_history.len() > MAX_HISTORY {
+                                    state.prompt_history.remove(0);
+                                }
+                            }
+                            state.hist_idx = state.prompt_history.len();
                             if state.plan_pending {
                                 handle_plan_response(
                                     &mut state, &text, &settings, &store, &session,
@@ -752,6 +795,7 @@ pub async fn run_tui(
                             state.input.insert_str(at, &pasted);
                             state.cursor = at + pasted.len();
                             state.input_dirty = true;
+                            state.hist_idx = state.prompt_history.len();
                             state.completion = candidates_for(&state.input, &arg_candidates);
                         }
                     }
@@ -957,6 +1001,31 @@ fn show_plan(state: &TuiState) -> bool {
     !state.plan_preview.is_empty() && (state.plan_pending || state.running)
 }
 
+/// Apply Up-arrow recall: move `hist_idx` back one and return the recalled
+/// prompt (or `None` if already at the oldest / empty history).
+fn history_recall_up(prompt_history: &[String], hist_idx: usize) -> Option<(String, usize)> {
+    if hist_idx == 0 || prompt_history.is_empty() {
+        return None;
+    }
+    let idx = hist_idx - 1;
+    Some((prompt_history[idx].clone(), idx))
+}
+
+/// Apply Down-arrow recall: move `hist_idx` forward one. Returns
+/// `Some((input, idx))` on success, or `Some((String::new(), len))` when
+/// moving onto the live baseline. Returns `None` if already at baseline.
+fn history_recall_down(prompt_history: &[String], hist_idx: usize) -> Option<(String, usize)> {
+    if hist_idx >= prompt_history.len() {
+        return None;
+    }
+    let idx = hist_idx + 1;
+    if idx == prompt_history.len() {
+        Some((String::new(), idx))
+    } else {
+        Some((prompt_history[idx].clone(), idx))
+    }
+}
+
 /// Context-sensitive keyhint footer text, shown in the bottom row.
 fn keyhint(state: &TuiState) -> String {
     if state.pending_question_text.is_some() {
@@ -966,7 +1035,7 @@ fn keyhint(state: &TuiState) -> String {
     } else if state.running {
         "enter interrupt · ctrl+c quit".to_string()
     } else {
-        "enter send · /help · /model · /new · shift+tab mode · ctrl+c quit · wheel/pgup scroll · home/end jump".to_string()
+        "enter send · /help · /model · /new · shift+tab mode · ctrl+c quit · up/down recall · wheel/pgup scroll · home/end jump".to_string()
     }
 }
 
@@ -1421,6 +1490,8 @@ const MAX_INPUT_BOX_HEIGHT: u16 = 12;
 /// a multi-MB paste from growing memory or slowing per-frame re-wrap without
 /// bound.
 const MAX_INPUT_CHARS: usize = 100_000;
+
+const MAX_HISTORY: usize = 100;
 
 /// The effective content width (in display cells) of the input box for a
 /// given terminal width.
