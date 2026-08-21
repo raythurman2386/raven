@@ -49,6 +49,8 @@ Each slice = one focused conventional commit + full gate + a live TUI look.
 - [x] **4. Context-sensitive keyhints footer** (Phase 4) — `feat(tui): context-sensitive keyhint footer`. Static top SystemBlock replaced by a bottom footer that changes with state (answer / approve / interrupt / idle).
 - [x] **5. Provider in status line** (Phase 4) — `feat(tui): show provider name in top bar`. Top bar is now `app · model · provider · ctx% · mode`.
 - [x] **6. Empty-state "what to try" + error recovery line** (Phase 6) — `feat(tui): empty-state guidance and error recovery line`. Guidance line on empty transcript; recovery action under `✗`.
+- [x] **7. Prompt history recall** (Phase 4) — `feat(tui): prompt history recall with up/down on empty input`. Empty input: Up recalls the previous prompt, Down recalls forward; bounded to 100 entries; resets when typing.
+- [x] **8. Table cell width cap** (Phase 3) — `feat(tui): cap markdown table cell width`. Cells truncate to a 32-char budget with a `…` marker so wide tables wrap on cell boundaries instead of blowing out a row.
 
 ## Acceptance per slice
 
