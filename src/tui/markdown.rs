@@ -46,6 +46,10 @@ impl InlineStyle {
     }
 }
 
+/// Per-cell width budget for markdown tables, so a wide table wraps on cell
+/// boundaries instead of blowing out a row's readable width.
+const TABLE_CELL_MAX: usize = 32;
+
 /// A renderer that accumulates styled lines from a markdown event stream.
 struct Renderer {
     /// Completed display lines.
@@ -64,6 +68,10 @@ struct Renderer {
     link_url: Option<String>,
     /// Language tag of the code block currently being rendered (if any).
     code_lang: Option<String>,
+    /// Whether we're inside a markdown table.
+    in_table: bool,
+    /// Remaining per-cell width budget for the current table cell.
+    cell_remaining: usize,
     /// The active color theme.
     theme: Theme,
 }
@@ -79,6 +87,8 @@ impl Renderer {
             in_quote: false,
             link_url: None,
             code_lang: None,
+            in_table: false,
+            cell_remaining: TABLE_CELL_MAX,
             theme,
         }
     }
@@ -100,6 +110,27 @@ impl Renderer {
         }
         let style = self.inline.to_style(self.theme);
         self.cur.push(Span::styled(s.to_string(), style));
+    }
+
+    /// Push text inside a table cell, truncating to the per-cell width budget
+    /// so a wide table can't blow out a row's readable width.
+    fn cell_text(&mut self, s: &str) {
+        if s.is_empty() {
+            return;
+        }
+        if self.cell_remaining == 0 {
+            self.cur
+                .push(Span::styled("…", Style::default().fg(self.theme.dim)));
+            return;
+        }
+        let take = s.chars().take(self.cell_remaining).collect::<String>();
+        self.cell_remaining = self.cell_remaining.saturating_sub(take.chars().count());
+        let style = self.inline.to_style(self.theme);
+        self.cur.push(Span::styled(take, style));
+        if self.cell_remaining == 0 {
+            self.cur
+                .push(Span::styled("…", Style::default().fg(self.theme.dim)));
+        }
     }
 
     /// Push a styled span with an explicit style override (e.g. links).
@@ -169,7 +200,13 @@ pub fn render_markdown(text: &str, theme: Theme) -> Vec<Line<'static>> {
         match ev {
             Event::Start(tag) => r.start(&tag),
             Event::End(tag) => r.end(&tag),
-            Event::Text(t) => r.text(&t),
+            Event::Text(t) => {
+                if r.in_table {
+                    r.cell_text(&t);
+                } else {
+                    r.text(&t);
+                }
+            }
             Event::Code(t) => {
                 let prev = r.inline;
                 r.inline.code = true;
@@ -270,13 +307,18 @@ impl Renderer {
                     Style::default().fg(self.theme.dim),
                 );
             }
-            Tag::Table(_) => {}
+            Tag::Table(_) => {
+                self.in_table = true;
+            }
             Tag::TableHead => {}
             Tag::TableRow => {
                 self.flush();
                 self.quote_prefix();
+                // Fresh per-cell width budget for this row.
+                self.cell_remaining = TABLE_CELL_MAX;
             }
             Tag::TableCell if !self.cur.is_empty() => {
+                self.cell_remaining = TABLE_CELL_MAX;
                 // Separator between cells (except the first).
                 self.cur
                     .push(Span::styled(" │ ", Style::default().fg(self.theme.dim)));
@@ -324,6 +366,10 @@ impl Renderer {
                         Style::default().fg(self.theme.dim),
                     ));
                 }
+            }
+            TagEnd::Table => {
+                self.in_table = false;
+                self.flush();
             }
             TagEnd::TableHead => {}
             TagEnd::TableRow => {
@@ -450,6 +496,22 @@ mod tests {
         let text = plain(&lines);
         assert!(text.iter().any(|l| l.contains("a") && l.contains("b")));
         assert!(text.iter().any(|l| l.contains("1") && l.contains("2")));
+    }
+
+    #[test]
+    fn renders_wide_table_truncates_cells() {
+        let long = "x".repeat(200);
+        let lines = render(&format!("| a | b |\n|---|---|\n| {long} | 2 |"));
+        let text = plain(&lines);
+        // The long cell must be truncated; the row must not contain 200 x's.
+        assert!(
+            text.iter().all(|l| !l.contains(&"x".repeat(40))),
+            "long cell should be truncated to the per-cell budget"
+        );
+        assert!(
+            text.iter().any(|l| l.contains("b")),
+            "table should still render"
+        );
     }
 
     #[test]
