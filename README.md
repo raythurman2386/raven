@@ -381,7 +381,9 @@ raven --mode agent -p "Refactor this function"
 - **`/provider`** — switch providers (ollama, openrouter, etc.) — slash-command autocomplete shows all available
 - **`/clear`** — start a fresh turn (keeps session history)
 - **`^C`** — stop the current task (session auto-saves)
-- **Up/Down** — scroll through chat history
+- **Up/Down** (empty input) — recall a previous prompt; type to reset. Home jumps to the top of the transcript, End returns to the live tail
+- **Mouse drag** — select text in the transcript to copy it to your clipboard
+- The footer below the input box shows context-sensitive keyhints (approve / answer / interrupt / idle)
 
 ### For large codebases
 
