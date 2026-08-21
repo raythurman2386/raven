@@ -28,9 +28,10 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-14
             use-cross: false
-          - target: x86_64-apple-darwin
-            os: macos-13
-            use-cross: false
+          # x86_64-apple-darwin (Intel) is intentionally omitted: it requires a
+          # macos-13 runner, which is scarce and slow (the job sat queued for
+          # ~1h and never finished). Modern Macs are all Apple Silicon; the ACP
+          # registry only warns on a missing OS family, it does not block.
 
     steps:
       - uses: actions/checkout@v7
