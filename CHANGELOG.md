@@ -6,6 +6,54 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-20
+
+### Added
+
+- **TUI polish program** (`docs/tui-polish.md`) — a grounded, phased plan for
+  making the TUI a serious operator's cockpit: dense, local, honest,
+  keyboard-first, terminal-native. Every change below is one slice of that
+  program, verified with `cargo test` + clippy + fmt + a live look.
+- **Tool calls as distinct bordered blocks** — each tool call now renders as a
+  dim bordered box with a label (`┌─ read_file` / `│ ⇢ read_file(x)` / `└─`),
+  so "working" reads at a glance instead of blending into model prose.
+- **Code-block language labels** — fenced code blocks show their language in
+  the top border (`┌─ rust` instead of `┌─ code`).
+- **Context-sensitive keyhint footer** — the bottom row changes with state:
+  approve / answer / interrupt / idle, so a new user finds stop, model switch,
+  and plan approve without the README.
+- **Provider name in the top bar** — the bar now reads
+  `app · model · provider · ctx% · mode`.
+- **Empty-state guidance + error recovery** — a "what to try" line on an empty
+  transcript, and a recovery action under every error.
+- **Prompt history recall** — with an empty input, Up/Down recall previously
+  submitted prompts (bounded, resets when typing). Home jumps to the top of
+  the transcript, End returns to the live tail.
+- **Compact tool-call args** — tool blocks read
+  `read_file path=src/main.rs line=1-40` instead of raw JSON braces; long
+  values truncate.
+- **Markdown table width cap** — wide table cells truncate to a per-cell
+  budget with a `…` marker so rows wrap on cell boundaries instead of blowing
+  out a line.
+
+### Fixed
+
+- **CJK/emoji no longer break transcript scrolling** — the transcript wrap and
+  scroll math now uses display width (`unicode-width`), matching the terminal
+  and the input path. Previously a width-2 character (CJK, emoji) made long
+  content impossible to scroll to correctly.
+- **Transcript no longer freezes while streaming** — the cached scroll-range
+  total is now invalidated whenever the log content changes (previously it was
+  computed once and never updated as the turn grew, so the tail wouldn't
+  track).
+
+### Changed
+
+- **O(viewport) log virtualization** — the per-frame render no longer re-walks
+  the whole history to compute the scroll range; the total row count is cached
+  and refreshed only when the log changes or the terminal resizes. Long
+  sessions render faster.
+
 ## [0.2.7] - 2026-08-20
 
 ### Fixed
@@ -634,7 +682,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Ratatui 0.30, crossterm 0.29.
 
-[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.2.7...HEAD
+[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/raythurman2386/raven/compare/v0.2.7...v0.3.0
 [0.2.7]: https://github.com/raythurman2386/raven/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/raythurman2386/raven/compare/v0.2.5...v0.2.6
 [0.2.2]: https://github.com/raythurman2386/raven/compare/v0.2.1...v0.2.2
