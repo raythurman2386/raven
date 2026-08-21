@@ -226,6 +226,13 @@ struct TuiState {
     /// Width (in columns) used to compute `log_total_rows`. Tracked so the
     /// total is recomputed on terminal resize.
     log_width: usize,
+    /// Generation counter bumped whenever `cached_log_lines` changes. Used to
+    /// invalidate the cached `log_total_rows` — unlike `log_dirty`, this is
+    /// NOT cleared before `draw_ui` runs, so the cache stays correct.
+    log_gen: u64,
+    /// Generation seen when `log_total_rows` was last computed. Guards the
+    /// cache in `refresh_log_rows`.
+    last_rows_gen: u64,
     last_assistant_lines: usize,
     stream_patch: bool,
     cached_est_tokens: usize,
@@ -300,6 +307,8 @@ impl TuiState {
             cached_log_lines: Vec::new(),
             log_total_rows: 0,
             log_width: 0,
+            log_gen: 0,
+            last_rows_gen: 0,
             last_assistant_lines: 0,
             stream_patch: false,
             cached_est_tokens: 0,
@@ -386,9 +395,10 @@ impl TuiState {
     /// Recompute the cached total row count when the log content or viewport
     /// width changes. Call this after any log re-render or terminal resize.
     fn refresh_log_rows(&mut self, width: usize) {
-        if self.log_width == width && !self.log_dirty {
+        if self.log_gen == self.last_rows_gen && self.log_width == width {
             return;
         }
+        self.last_rows_gen = self.log_gen;
         self.log_width = width;
         self.log_total_rows = total_rows(&self.cached_log_lines, width.max(1));
     }
@@ -476,6 +486,7 @@ pub async fn run_tui(
         if state.log_dirty {
             let (rendered, tail) = render_blocks(&state.blocks, state.tick, state.theme);
             state.cached_log_lines = rendered;
+            state.log_gen += 1;
             state.last_assistant_lines = tail;
             state.log_dirty = false;
             state.stream_patch = false;
@@ -498,6 +509,7 @@ pub async fn run_tui(
                     .saturating_sub(state.last_assistant_lines),
             );
             state.cached_log_lines.extend(new_tail);
+            state.log_gen += 1;
             state.last_assistant_lines = new_tail_len;
             state.stream_patch = false;
         }

@@ -499,6 +499,8 @@ fn dummy_state() -> TuiState {
         cached_log_lines: Vec::new(),
         log_total_rows: 0,
         log_width: 0,
+        log_gen: 0,
+        last_rows_gen: 0,
         last_assistant_lines: 0,
         stream_patch: false,
         cached_est_tokens: 0,
@@ -869,4 +871,49 @@ fn format_tool_args_empty_and_non_object() {
     // Non-object args render compact and truncated.
     let s = format_tool_args(&json!([1, 2, 3]));
     assert!(s.contains('['));
+}
+
+#[test]
+fn refresh_log_rows_invalidates_when_content_changes() {
+    use ratatui::text::Span;
+    let mut state = dummy_state();
+    // Seed one short line, width 10.
+    state.cached_log_lines = vec![Line::from(Span::styled("aaaa", Style::default()))];
+    state.log_gen = 1;
+    state.refresh_log_rows(10);
+    assert_eq!(state.log_total_rows, 1, "one line => 1 row");
+
+    // Content grows (as during a turn): the log_gen bumps, and the next
+    // refresh MUST recompute the total so max_scroll stays correct.
+    state.cached_log_lines.push(Line::from(Span::styled(
+        "bbbb\ncccc\ndddd",
+        Style::default(),
+    )));
+    state.log_gen = 2;
+    state.refresh_log_rows(10);
+    assert_eq!(
+        state.log_total_rows, 4,
+        "row count must grow as the transcript grows"
+    );
+
+    // A no-op refresh (same gen, same width) must NOT recompute.
+    let before = state.log_total_rows;
+    state.refresh_log_rows(10);
+    assert_eq!(state.log_total_rows, before);
+}
+
+#[test]
+fn refresh_log_rows_invalidates_on_resize() {
+    use ratatui::text::Span;
+    let mut state = dummy_state();
+    state.cached_log_lines = vec![Line::from(Span::styled(
+        "abcdefghijklmnop",
+        Style::default(),
+    ))];
+    state.log_gen = 1;
+    state.refresh_log_rows(8);
+    assert_eq!(state.log_total_rows, 2, "16 chars at width 8 => 2 rows");
+    // Resize wider: must recompute even though gen is unchanged.
+    state.refresh_log_rows(16);
+    assert_eq!(state.log_total_rows, 1, "16 chars at width 16 => 1 row");
 }
