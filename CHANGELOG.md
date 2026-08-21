@@ -6,6 +6,35 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-21
+
+### Added
+
+- **ACP registry readiness** — `raven --acp` now advertises a single `agent`-type
+  auth method (`agent-auth`) in `initialize`, satisfying the ACP registry's
+  `--auth-check` (which requires at least one `agent`/`terminal` method). Raven
+  authenticates with provider credentials already resolved in-process
+  (env / config / `.env`), so `authenticate` is a no-op acknowledgement that
+  validates the `methodId` and rejects unknown ones.
+- **`session/set_model`** — ACP clients can now switch the model per-session,
+  and `initialize` advertises `sessionCapabilities.set`, matching the surface
+  of grok-build / codex-acp.
+- **Release archives for the ACP registry** — the release workflow now builds
+  `.tar.gz` (unix) / `.zip` (windows) archives containing a stable
+  `raven`/`raven.exe`, with archive sha256 appended to `checksums.txt`, so the
+  registry's `binary` distribution can pin a version-independent `cmd`. Raw
+  binaries are kept for the installers.
+- **macOS release builds** — `aarch64-apple-darwin` and `x86_64-apple-darwin`
+  are re-enabled in the release matrix for full platform coverage.
+- **Registry icon** — a 16×16 monochrome `currentColor` raven mark
+  (`assets/icon.svg`) for the ACP registry submission.
+
+### Changed
+
+- **ACP invocation standardized on `raven --acp`** — docs and source comments
+  now use the flag form consistently (the registry launches `cmd + args`
+  verbatim, so the entry uses `args: ["--acp"]`).
+
 ## [0.3.1] - 2026-08-21
 
 ### Fixed
@@ -698,7 +727,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Ratatui 0.30, crossterm 0.29.
 
-[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/raythurman2386/raven/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/raythurman2386/raven/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/raythurman2386/raven/compare/v0.2.7...v0.3.0
 [0.2.7]: https://github.com/raythurman2386/raven/compare/v0.2.6...v0.2.7

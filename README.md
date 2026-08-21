@@ -97,7 +97,7 @@ GitHub Releases, verifies the SHA-256 checksum, and installs to `~/.cargo/bin`.
 Options:
 
 ```bash
-curl -fsSL .../install.sh | sh -s -- --version 0.3.0   # pin a version
+curl -fsSL .../install.sh | sh -s -- --version 0.4.0   # pin a version
 curl -fsSL .../install.sh | sh -s -- --to /usr/local/bin  # custom install dir
 curl -fsSL .../install.sh | sh -s -- --force              # overwrite existing
 ```
