@@ -129,7 +129,7 @@ impl Agent {
         let body = serde_json::json!({
             "model": self.settings.model,
             "messages": &self.messages,
-            "temperature": self.settings.temperature,
+            "temperature": self.settings.temperature_json(),
             "max_tokens": clamped_max,
             "stream": !self.settings.no_stream,
         });

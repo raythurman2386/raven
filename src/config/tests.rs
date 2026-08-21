@@ -342,3 +342,49 @@ fn env_searxng_engines_parses_list() {
         None => std::env::remove_var("RAVEN_SEARXNG_ENGINES"),
     }
 }
+
+#[test]
+fn round_temperature_removes_f32_f64_artifacts() {
+    // Regression for the OpenRouter 400 rejection: an f32 like 0.2 widens to
+    // 0.20000000298023224 as an f64, which some providers reject. The rounded
+    // value must serialize to a clean, provider-friendly JSON number.
+    assert_eq!(
+        serde_json::to_string(&round_temperature(0.2)).unwrap(),
+        "0.2"
+    );
+    assert_eq!(
+        serde_json::to_string(&round_temperature(0.7)).unwrap(),
+        "0.7"
+    );
+    assert_eq!(
+        serde_json::to_string(&round_temperature(0.33)).unwrap(),
+        "0.33"
+    );
+    assert_eq!(
+        serde_json::to_string(&round_temperature(0.05)).unwrap(),
+        "0.05"
+    );
+    assert_eq!(
+        serde_json::to_string(&round_temperature(0.4)).unwrap(),
+        "0.4"
+    );
+    assert_eq!(
+        serde_json::to_string(&round_temperature(1.0)).unwrap(),
+        "1.0"
+    );
+    // Values beyond 4 decimals are rounded, not truncated.
+    assert_eq!(
+        serde_json::to_string(&round_temperature(0.12346)).unwrap(),
+        "0.1235"
+    );
+}
+
+#[test]
+fn round_temperature_normalizes_negative_zero() {
+    assert_eq!(round_temperature(0.0), 0.0);
+    assert!(round_temperature(-0.0f32) == 0.0);
+    assert_eq!(
+        serde_json::to_string(&round_temperature(-0.0f32)).unwrap(),
+        "0.0"
+    );
+}
