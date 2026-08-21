@@ -27,7 +27,7 @@
 //! | [`memory`]    | Project memory (MEMORY.md) loading + update tool     |
 //! | [`plan`]      | Structured plan data model + parsing                |
 //! | [`session`]   | Session persistence (JSONL)                          |
-//! | [`acp`]       | Agent Client Protocol v1 stdio adapter               |
+//! | [`acp`]       | Agent Client Protocol v1 stdio adapter (`--acp`)      |
 //! | [`tokenizer`] | BPE-like token estimation                         |
 //!
 //! See the repository `README.md` for user-facing documentation and

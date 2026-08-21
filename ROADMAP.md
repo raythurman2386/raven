@@ -62,7 +62,7 @@ fmt, and `cargo check --target x86_64-pc-windows-gnu`.
 - **Named providers** — `ollama`/`openrouter` presets + `[providers.<name>]` config; `--provider`/`/provider` switch endpoint + auth + default model as one unit. Removed legacy `--host`/`--api-key`/`RAVEN_HOST`/`OLLAMA_MODEL` surface.
 - **Layered config** — CLI > env > `.env` > workspace `.raven/config.toml` > global `~/.raven/config.toml` > built-in defaults.
 - **Session persistence** — atomic JSONL (`messages.jsonl` + `summary.json`), unique-tmp rename, flush-on-`/stop`/SIGINT, `--resume`/`--list-sessions`, local `debug-events.jsonl` + `last.patch` snapshots.
-- **ACP v1 stdio** — `raven acp` for editor attachment (Zed etc.).
+- **ACP v1 stdio** — `raven --acp` for editor attachment (Zed etc.).
 
 ### TUI
 - Streaming tail-patch, ravenwood theme, wrapped multi-line input, markdown rendering (headings/code/lists/tables/links), slash-command completion (`/provider`, `/model` with live endpoint discovery), abort/steer that can't leak a stale `Done` into the next turn.
@@ -101,7 +101,7 @@ planned unless a checklist item forces a small split.
 - sqlite-vec embeddings / MMR / dream consolidation — keyword recall covers the need
 - Rhai workflow engine + deterministic journal — over-engineered for a per-turn agent
 - Background task pool / kill-task supervisor — `spawn_blocking` + `/stop` covers the mini case
-- Full official `agent-client-protocol` crate / MCP-over-ACP — Raven ships a thin v1 stdio adapter (`raven acp`) instead
+- Full official `agent-client-protocol` crate / MCP-over-ACP — Raven ships a thin v1 stdio adapter (`raven --acp`) instead
 - Large TUI redesign unless a checklist item requires a small split
 - New protocols beyond fixing ACP if something is broken
 

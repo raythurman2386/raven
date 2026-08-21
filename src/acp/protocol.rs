@@ -98,9 +98,31 @@ pub fn agent_capabilities() -> Value {
         "sessionCapabilities": {
             "list": {},
             "close": {},
-            "resume": {}
+            "resume": {},
+            "set": {}
         }
     })
+}
+
+/// Auth methods advertised in `initialize`.
+///
+/// Raven authenticates to its model provider using credentials already
+/// resolved in-process (env vars / config / `.env`) before the ACP loop
+/// starts — it has no interactive OAuth flow to run over the wire. So it
+/// advertises a single `agent`-type method: the agent handles authentication
+/// itself. The `agent` type (ACP default when `type` is omitted) is what the
+/// ACP registry's `--auth-check` requires, and mirrors how grok-build
+/// advertises its `xai.api_key` method.
+pub const AUTH_METHOD_ID: &str = "agent-auth";
+
+/// The single advertised auth method.
+pub fn auth_methods() -> Value {
+    json!([{
+        "id": AUTH_METHOD_ID,
+        "name": "Agent auth",
+        "description": "Authenticates with the provider credentials configured in-process (OLLAMA_API_KEY / RAVEN_API_KEY)",
+        "type": "agent"
+    }])
 }
 
 /// Implementation info sent in `initialize`.

@@ -1,6 +1,6 @@
 //! ACP v1 stdio agent: JSON-RPC over newline-delimited stdin/stdout.
 //!
-//! Editors spawn `raven acp` and talk ACP. Raven owns its own sandbox and
+//! Editors spawn `raven --acp` and talk ACP. Raven owns its own sandbox and
 //! tools; MCP servers on `session/new` are ignored. Client `fs/*` /
 //! `terminal/*` are not used.
 //!
@@ -21,9 +21,9 @@ use crate::config::{Mode, Settings};
 use crate::session::{Session, SessionStore};
 
 use super::protocol::{
-    agent_capabilities, agent_info, error_code, error_msg, extract_prompt_text, map_event,
-    permission_allowed, result_msg, session_modes, session_update, Incoming, StopReason,
-    PROTOCOL_VERSION,
+    agent_capabilities, agent_info, auth_methods, error_code, error_msg, extract_prompt_text,
+    map_event, permission_allowed, result_msg, session_modes, session_update, Incoming, StopReason,
+    AUTH_METHOD_ID, PROTOCOL_VERSION,
 };
 
 /// Shared writer so request handlers and the event pump can emit frames.
@@ -32,7 +32,7 @@ pub trait FrameWrite: Send {
     fn write_frame(&mut self, msg: &Value) -> Result<()>;
 }
 
-/// Stdout NDJSON writer used by `raven acp`.
+/// Stdout NDJSON writer used by `raven --acp`.
 pub struct StdoutWriter<W: Write + Send> {
     inner: W,
 }
@@ -168,13 +168,31 @@ pub async fn dispatch(
         let mut srv = server.lock().await;
         match method.as_str() {
             "initialize" => on_initialize(&mut srv, &id),
-            "authenticate" => result_msg(&id, json!({})),
+            "authenticate" => {
+                let method_id = params
+                    .get("methodId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if method_id != AUTH_METHOD_ID {
+                    error_msg(
+                        Some(&id),
+                        error_code::INVALID_PARAMS,
+                        &format!("unknown auth method: {method_id}"),
+                    )
+                } else {
+                    // Provider credentials are already resolved in-process from
+                    // env / config / `.env`; there is nothing to exchange over
+                    // the wire. A successful `authenticate` just acknowledges.
+                    result_msg(&id, json!({}))
+                }
+            }
             "session/new" => on_session_new(&mut srv, &id, &params),
             "session/load" => on_session_load(&mut srv, &id, &params, &writer).await,
             "session/resume" => on_session_resume(&mut srv, &id, &params),
             "session/list" => on_session_list(&srv, &id, &params),
             "session/close" => on_session_close(&mut srv, &id, &params),
             "session/set_mode" => on_set_mode(&mut srv, &id, &params),
+            "session/set_model" => on_set_model(&mut srv, &id, &params),
             _ => error_msg(
                 Some(&id),
                 error_code::METHOD_NOT_FOUND,
@@ -194,7 +212,7 @@ fn on_initialize(srv: &mut AcpServer, id: &Value) -> Value {
             "protocolVersion": PROTOCOL_VERSION,
             "agentCapabilities": agent_capabilities(),
             "agentInfo": agent_info(),
-            "authMethods": []
+            "authMethods": auth_methods()
         }),
     )
 }
@@ -438,6 +456,32 @@ fn on_set_mode(srv: &mut AcpServer, id: &Value, params: &Value) -> Value {
     }
 }
 
+fn on_set_model(srv: &mut AcpServer, id: &Value, params: &Value) -> Value {
+    let sid = match params.get("sessionId").and_then(|v| v.as_str()) {
+        Some(s) => s.to_string(),
+        None => {
+            return error_msg(
+                Some(id),
+                error_code::INVALID_PARAMS,
+                "sessionId is required",
+            );
+        }
+    };
+    let model = match params.get("model").and_then(|v| v.as_str()) {
+        Some(m) if !m.trim().is_empty() => m.to_string(),
+        _ => {
+            return error_msg(Some(id), error_code::INVALID_PARAMS, "model is required");
+        }
+    };
+    match srv.sessions.get_mut(&sid) {
+        Some(sess) => {
+            sess.settings.model = model;
+            result_msg(id, json!({}))
+        }
+        None => error_msg(Some(id), error_code::INVALID_PARAMS, "unknown session"),
+    }
+}
+
 async fn run_prompt(
     server: Arc<Mutex<AcpServer>>,
     id: Value,
@@ -642,7 +686,7 @@ where
     Ok(())
 }
 
-/// Run `raven acp` on real stdin/stdout.
+/// Run `raven --acp` on real stdin/stdout.
 pub async fn run_stdio(settings: Settings) -> Result<()> {
     let server = AcpServer::new(settings);
     serve_io(

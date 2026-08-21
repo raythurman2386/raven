@@ -102,27 +102,30 @@ to use DuckDuckGo directly.
 
 ---
 
-## ACP: editor won't connect / "raven acp" does nothing
+## ACP: editor won't connect / "raven --acp" does nothing
 
-`raven acp` speaks [Agent Client Protocol](https://agentclientprotocol.com/) v1
+`raven --acp` speaks [Agent Client Protocol](https://agentclientprotocol.com/) v1
 on **stdin/stdout** — it is not a server you point a browser at. Point an
 ACP-capable editor at the `raven` binary with the `acp` flag, e.g. Zed's custom
 agent command:
 
 ```
-raven acp
+raven --acp
 ```
 
-- **Supported methods:** `initialize`, `session/new`, `session/prompt`,
-  `session/cancel`, `session/load`, `session/resume`, `session/list`,
-  `session/close`, `session/set_mode` (`plan`/`agent`/`chat`). `ask_user` and
-  shell confirmation become `session/request_permission`.
+- **Supported methods:** `initialize`, `authenticate`, `session/new`,
+  `session/prompt`, `session/cancel`, `session/load`, `session/resume`,
+  `session/list`, `session/close`, `session/set_mode` (`plan`/`agent`/`chat`),
+  `session/set_model`. `ask_user` and shell confirmation become
+  `session/request_permission`. `initialize` advertises one `agent`-type auth
+  method (`agent-auth`); `authenticate` acknowledges it (credentials are
+  resolved in-process).
 - **Not advertised:** MCP servers, images/audio, client `fs/*`/`terminal/*`.
   Raven keeps its own sandbox.
 - **Other CLI flags still apply** to the ACP process: `--provider`, `--model`,
   `--workspace`, `--yolo`, `--mode`.
 
-If the editor shows nothing, run `raven acp` in a terminal and type a JSON-RPC
+If the editor shows nothing, run `raven --acp` in a terminal and type a JSON-RPC
 `initialize` frame to confirm it responds on stdin/stdout.
 
 ---

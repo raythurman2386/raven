@@ -175,7 +175,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Eval cases `11_secrets_stay_uncommitted` and `12_verify_before_done`** —
   live graders plus Layer A: `.env` must stay untracked after `git_commit`,
   and an edit that finishes without tests must trip the verify gate.
-- **`raven acp`** — Agent Client Protocol v1 on stdin/stdout so editors can
+- **`raven --acp`** — Agent Client Protocol v1 on stdin/stdout so editors can
   attach. Text prompts, `session/load` replay, `session/list` /
   `session/close` / `session/set_mode`, cancel, and
   `session/request_permission` for `ask_user` / shell confirm. No MCP, no
