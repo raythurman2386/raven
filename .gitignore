@@ -18,6 +18,7 @@ Thumbs.db
 .raven/cargo-home/
 .raven/npm-cache/
 .raven/tmp/
+.raven/state/
 .ollama-grok/sessions/
 .hermes/
 # Environment / secrets

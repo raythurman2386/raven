@@ -16,7 +16,7 @@ agent-loop behavior change unless fixing a TUI bug.
   a real leap would be 0.4.0 with a CHANGELOG "TUI" section.
 - No theme store. One default ravenwood + the existing minimal alts.
 
-## Current state (verified at v0.2.7)
+## Current state (verified at v0.3.0)
 
 - `src/tui/mod.rs` — 2,045 lines / 82KB. Holds TuiState, event loop, layout,
   draw_ui, input, mouse, slash commands, plan handling, agent-turn spawn.
