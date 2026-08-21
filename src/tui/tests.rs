@@ -5,6 +5,7 @@ use super::render::prewrap_lines;
 use super::*;
 use crate::config::{ConfigFile, Provider};
 use crate::plan::AgentState;
+use serde_json::json;
 #[test]
 fn cycle_mode_clears_stuck_pending_approval_when_leaving_plan() {
     let mut state = TuiState {
@@ -837,4 +838,33 @@ fn history_recall_down_moves_forward_then_baseline() {
     let (p, idx) = history_recall_down(&hist, 0).unwrap();
     assert_eq!(p, "second");
     assert_eq!(idx, 1);
+}
+
+#[test]
+fn format_tool_args_compact_scalars() {
+    let args = json!({"path": "src/main.rs", "line_range": [1, 40]});
+    let s = format_tool_args(&args);
+    assert!(s.contains("path=src/main.rs"), "got {s:?}");
+    assert!(
+        !s.contains('{'),
+        "should not contain raw JSON braces, got {s:?}"
+    );
+}
+
+#[test]
+fn format_tool_args_truncates_long_string() {
+    let args = json!({"old": "x".repeat(200)});
+    let s = format_tool_args(&args);
+    assert!(
+        !s.contains(&"x".repeat(41)),
+        "long value should truncate, got {s:?}"
+    );
+}
+
+#[test]
+fn format_tool_args_empty_and_non_object() {
+    assert_eq!(format_tool_args(&json!({})), "");
+    // Non-object args render compact and truncated.
+    let s = format_tool_args(&json!([1, 2, 3]));
+    assert!(s.contains('['));
 }

@@ -833,11 +833,7 @@ pub async fn run_tui(
                     }
                 }
                 AgentEvent::ToolStart { name, args } => {
-                    let args_str = if args.is_null() {
-                        String::new()
-                    } else {
-                        args.to_string()
-                    };
+                    let args_str = format_tool_args(&args);
                     let snip: String = args_str.chars().take(60).collect();
                     state.live_tool = Some(format!("⇢ {name}({snip})"));
                     state.turn_tool_count += 1;
@@ -1023,6 +1019,63 @@ fn history_recall_down(prompt_history: &[String], hist_idx: usize) -> Option<(St
         Some((String::new(), idx))
     } else {
         Some((prompt_history[idx].clone(), idx))
+    }
+}
+
+/// Compact `key=value` formatting of a tool-call arg object, so a tool block
+/// reads `read_file path=src/main.rs line=1-40` instead of raw JSON braces.
+/// Long string values are truncated to `ARG_VALUE_MAX` chars. Nested
+/// objects/arrays render as a short `{..}`/`[..]` token to avoid wasting the
+/// budget on structure.
+fn format_tool_args(args: &serde_json::Value) -> String {
+    const ARG_VALUE_MAX: usize = 40;
+    let Some(obj) = args.as_object() else {
+        // Non-object args (rare): render compact, truncated.
+        let s = args.to_string();
+        return s.chars().take(ARG_VALUE_MAX).collect();
+    };
+    if obj.is_empty() {
+        return String::new();
+    }
+    let mut parts: Vec<String> = Vec::new();
+    let mut remaining = 60usize;
+    for (k, v) in obj {
+        let val = match v {
+            serde_json::Value::String(s) => {
+                let t: String = s.chars().take(ARG_VALUE_MAX).collect();
+                if s.chars().count() > ARG_VALUE_MAX {
+                    format!("{t}…")
+                } else {
+                    t
+                }
+            }
+            serde_json::Value::Bool(b) => b.to_string(),
+            serde_json::Value::Number(n) => n.to_string(),
+            serde_json::Value::Array(_) => "[..]".to_string(),
+            serde_json::Value::Object(_) => "{..}".to_string(),
+            serde_json::Value::Null => "null".to_string(),
+        };
+        // Skip empty-string args (they add no signal).
+        if val.is_empty() {
+            continue;
+        }
+        let piece = format!("{k}={val}");
+        if remaining == 0 {
+            parts.push("…".to_string());
+            break;
+        }
+        let used = piece.chars().count();
+        if used >= remaining && !parts.is_empty() {
+            parts.push("…".to_string());
+            break;
+        }
+        remaining = remaining.saturating_sub(used);
+        parts.push(piece);
+    }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        parts.join(" ")
     }
 }
 
