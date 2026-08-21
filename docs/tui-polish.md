@@ -53,6 +53,7 @@ Each slice = one focused conventional commit + full gate + a live TUI look.
 - [x] **8. Table cell width cap** (Phase 3) — `feat(tui): cap markdown table cell width`. Cells truncate to a 32-char budget with a `…` marker so wide tables wrap on cell boundaries instead of blowing out a row.
 - [x] **9. Compact tool-call args** (Phase 2/4) — `feat(tui): compact key=value tool-call args`. Tool blocks read `read_file path=src/main.rs line=1-40` instead of raw JSON braces; long values truncated.
 - [x] **10. Width-aware transcript wrap/scroll** (Phase 2, correctness) — `fix(tui): width-aware transcript wrap/scroll (CJK/emoji)`. The transcript wrap/scroll math now uses display width (`unicode_width`), so CJK/emoji content scrolls correctly instead of drifting. Stays in lockstep with the already-correct input path.
+- [x] **11. O(viewport) virtualization** (Phase 2, efficiency) — `perf(tui): cache total row count so virtualization is O(viewport)`. `prewrap_visible` recomputed every line's wrapped-row count each frame (O(history)); the total is now cached and refreshed only on log change or resize.
 
 ## Acceptance per slice
 
