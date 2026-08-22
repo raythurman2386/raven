@@ -180,6 +180,152 @@ pub fn write_global_env(dir: &std::path::Path, contents: &str) -> std::io::Resul
     Ok(())
 }
 
+/// Run the interactive first-run wizard: pick a provider, model, and optional
+/// API key; persist a secret-free `~/.raven/config.toml` and the key (if any)
+/// to `~/.raven/.env`; return the resulting [`ConfigFile`].
+#[allow(dead_code)] // wired into main() in Task 6
+pub async fn run_onboarding() -> anyhow::Result<ConfigFile> {
+    let home =
+        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("cannot determine home directory"))?;
+    let global_dir = home.join(".raven");
+
+    println!("Welcome to Raven — first-run setup\n");
+
+    // 1. Provider menu: known providers + a trailing "custom" entry.
+    let mut known = crate::config::known_provider_names(&super::ConfigFile::default());
+    known.sort();
+    let mut options: Vec<String> = known.clone();
+    options.push("custom (any OpenAI-compatible base URL)".to_string());
+    println!("Pick a provider:");
+    for (i, o) in options.iter().enumerate() {
+        println!("  {}. {o}", i + 1);
+    }
+
+    let provider_choice = read_choice(options.len(), false)?;
+    let (provider_name, base_url) = if let Some(idx) = provider_choice {
+        if idx < known.len() {
+            let name = known[idx].clone();
+            let base = crate::config::Provider::builtin(&name)
+                .map(|p| p.base_url)
+                .unwrap_or_else(|| "http://localhost:11434/v1".to_string());
+            (name, base)
+        } else {
+            // "custom" entry selected (last option).
+            println!("\nEnter custom endpoint as `name:base_url` (e.g. acme:http://gpu:8080/v1):");
+            let entry = read_line()?;
+            match parse_custom_provider(&entry) {
+                Some((name, url)) => (name, url),
+                None => anyhow::bail!(
+                    "invalid custom endpoint: expected `name:http(s)://host[:port]/v1`"
+                ),
+            }
+        }
+    } else {
+        anyhow::bail!("no provider selected");
+    };
+
+    // 2. Optional API key (blank for none; local Ollama needs none).
+    println!("API key for {provider_name} (blank for none):");
+    let api_key = read_line_trimmed().filter(|s| !s.is_empty());
+
+    // 3. Model selection: live list when reachable, else curated fallback.
+    let mut provider = crate::config::Provider {
+        name: provider_name.clone(),
+        base_url: base_url.clone(),
+        api_key: api_key.clone(),
+        api_key_env: crate::config::Provider::builtin(&provider_name).and_then(|p| p.api_key_env),
+        default_model: String::new(),
+    };
+    let live = crate::tui::fetch_live_provider_models(&provider);
+    let candidates = if live.is_empty() {
+        fallback_models(&provider_name)
+    } else {
+        live
+    };
+
+    let model = if candidates.is_empty() {
+        println!("No models discovered. Type a model id:");
+        read_line_trimmed().ok_or_else(|| anyhow::anyhow!("no model entered"))?
+    } else {
+        println!("Model:");
+        for (i, m) in candidates.iter().enumerate() {
+            println!("  {}. {m}", i + 1);
+        }
+        println!("  0. type a custom model id");
+        match read_choice(candidates.len(), true)? {
+            Some(idx) => candidates[idx].clone(),
+            None => {
+                println!("Model id:");
+                let m = read_line_trimmed().unwrap_or_default();
+                if m.is_empty() {
+                    anyhow::bail!("no model entered");
+                }
+                m
+            }
+        }
+    };
+    provider.default_model = model.clone();
+
+    // 4. Persist secret-free config + optional key env.
+    let config_toml = build_config_toml(&provider_name, &base_url, &model);
+    write_global_config(&global_dir, &config_toml)?;
+    let env = build_env_file(api_key, &provider_name);
+    if !env.is_empty() {
+        write_global_env(&global_dir, &env)?;
+    }
+
+    // 5. Return the equivalent in-memory ConfigFile.
+    let mut cfg = ConfigFile {
+        provider: Some(provider_name.clone()),
+        ..Default::default()
+    };
+    cfg.providers.insert(
+        provider_name.clone(),
+        super::ProviderConfig {
+            base_url: Some(base_url),
+            default_model: Some(model),
+            ..Default::default()
+        },
+    );
+    println!(
+        "\nSaved to {}. Next run won't re-prompt.",
+        global_dir.display()
+    );
+    Ok(cfg)
+}
+
+/// Read one trimmed line from stdin, erroring if stdin is not interactive.
+#[allow(dead_code)] // used only via run_onboarding (wired in Task 6)
+fn read_line() -> anyhow::Result<String> {
+    crate::runner::read_line_if_tty()
+        .map(|l| l.trim().to_string())
+        .ok_or_else(|| anyhow::anyhow!("stdin is not interactive"))
+}
+
+/// Read one trimmed line, or None if stdin is not interactive.
+#[allow(dead_code)] // used only via run_onboarding (wired in Task 6)
+fn read_line_trimmed() -> Option<String> {
+    crate::runner::read_line_if_tty().map(|l| l.trim().to_string())
+}
+
+/// Read a 1-based menu choice into a 0-based index. When `allow_zero` is true,
+/// a literal `0` returns None (caller treats it as "custom/manual entry").
+/// Invalid or out-of-range input is an error.
+#[allow(dead_code)] // used only via run_onboarding (wired in Task 6)
+fn read_choice(count: usize, allow_zero: bool) -> anyhow::Result<Option<usize>> {
+    let line = read_line()?;
+    if allow_zero && line == "0" {
+        return Ok(None);
+    }
+    let n: usize = line
+        .parse()
+        .map_err(|_| anyhow::anyhow!("invalid choice: expected a number 1..={count}"))?;
+    if n == 0 || n > count {
+        anyhow::bail!("invalid choice: expected a number 1..={count}");
+    }
+    Ok(Some(n - 1))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

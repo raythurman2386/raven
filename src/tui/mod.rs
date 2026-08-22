@@ -99,7 +99,7 @@ fn provider_model_candidates(provider: &crate::config::Provider) -> Vec<String> 
     fetched
 }
 
-fn fetch_live_provider_models(provider: &crate::config::Provider) -> Vec<String> {
+pub(crate) fn fetch_live_provider_models(provider: &crate::config::Provider) -> Vec<String> {
     let base = provider.base_url.trim_end_matches('/');
     let urls = if base.contains("/v1") {
         vec![
