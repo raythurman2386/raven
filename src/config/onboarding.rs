@@ -33,6 +33,51 @@ pub fn needs_onboarding(
         && env_provider.is_none()
 }
 
+/// Parse a 1-based provider menu choice into a 0-based index, or None.
+#[allow(dead_code)] // wired into the wizard in Task 4/6
+pub fn parse_provider_choice(input: &str, count: usize) -> Option<usize> {
+    let n: usize = input.trim().parse().ok()?;
+    // `.then` (lazy) not `.then_some` (eager): `n - 1` must not run when n == 0.
+    (n >= 1 && n <= count).then(|| n - 1)
+}
+
+/// Custom provider entry "name:base_url". The model is prompted separately.
+/// Returns None if the name or URL is invalid (empty name, empty URL, or the
+/// URL does not start with http:// or https://).
+#[allow(dead_code)] // wired into the wizard in Task 4/6
+pub fn parse_custom_provider(input: &str) -> Option<(String, String)> {
+    let (name, url) = input.trim().split_once(':')?;
+    let name = name.trim().to_string();
+    let url = url.trim().to_string();
+    if name.is_empty()
+        || url.is_empty()
+        || !(url.starts_with("http://") || url.starts_with("https://"))
+    {
+        return None;
+    }
+    Some((name, url))
+}
+
+/// Returns true if the endpoint answers GET {base}/api/tags (Ollama).
+/// Bounded 2s timeout; never panics.
+#[allow(dead_code)] // wired into the wizard in Task 4/6
+pub async fn ollama_reachable(base_url: &str) -> bool {
+    let trimmed = base_url.trim_end_matches('/');
+    let endpoint = format!("{}/api/tags", trimmed.trim_end_matches("/v1"));
+    let Ok(client) = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+    else {
+        return false;
+    };
+    client
+        .get(&endpoint)
+        .send()
+        .await
+        .map(|r| r.status().is_success())
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,5 +159,30 @@ mod tests {
         let p = config_paths(std::path::Path::new("/tmp/ws"));
         assert!(p.0.ends_with(".raven/config.toml"));
         assert!(p.1.ends_with("/tmp/ws/.raven/config.toml"));
+    }
+}
+
+#[cfg(test)]
+mod tests2 {
+    use super::*;
+
+    #[test]
+    fn parse_provider_choice_known() {
+        assert_eq!(parse_provider_choice("1", 3), Some(0));
+        assert_eq!(parse_provider_choice("2", 3), Some(1));
+        assert_eq!(parse_provider_choice("0", 3), None);
+        assert_eq!(parse_provider_choice("x", 3), None);
+        assert_eq!(parse_provider_choice("99", 3), None);
+    }
+
+    #[test]
+    fn parse_custom_provider_entry() {
+        let (name, url) = parse_custom_provider("acme:http://gpu:8080/v1").unwrap();
+        assert_eq!(name, "acme");
+        assert_eq!(url, "http://gpu:8080/v1");
+        assert!(parse_custom_provider(":http://gpu:8080/v1").is_none());
+        assert!(parse_custom_provider("acme").is_none());
+        assert!(parse_custom_provider("acme:localhost:8080").is_none());
+        assert!(parse_custom_provider("!!!").is_none());
     }
 }
