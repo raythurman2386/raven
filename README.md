@@ -90,7 +90,7 @@ Raven is my daily driver for coding work. Here's the shape of that, in case it h
 **Recommended models:**
 - **Best all-around (Ollama Cloud):** `qwen3.8` (latest, excellent), `deepseek-v4-pro:cloud` (high quality, fast), `deepseek-v4-flash:cloud` (efficient)
 - **Long-horizon (Ollama Cloud):** `glm-5.2:cloud` (optimized for long-horizon tasks)
-- **Good local fallback:** `qwen2.5-coder:14b`, `deepseek-coder-v2` (strong local performance)
+- **Good local fallback:** `qwen3.8:latest` (strong local performance)
 - **For frontier results (OpenRouter):** `x-ai/grok-4.5` (multimodal, best reasoning), `x-ai/grok-4.6` (frontier)
 
 ---
@@ -221,16 +221,16 @@ raven -p "Read my local config from .raven/config.toml"
 export RAVEN_API_KEY=...  # Your Ollama Cloud token
 
 # Use cloud models:
-raven --provider ollama -m qwen3.8 -p "Task"
+raven --provider ollama -m deepseek-v4-flash:cloud -p "Task"
 raven --provider ollama -m deepseek-v4-pro:cloud -p "Task"
 ```
 
 **Ollama (local):**
 ```bash
-ollama pull qwen2.5-coder:14b
+ollama pull qwen3.8:latest
 ollama serve
 # In another terminal:
-raven --provider ollama -m qwen2.5-coder:14b -p "Task"
+raven --provider ollama -m qwen3.8:latest -p "Task"
 ```
 
 **OpenRouter (for Grok and frontier models):**
@@ -265,7 +265,7 @@ provider = "ollama"          # or "openrouter"
 
 [providers.ollama]
 base_url = "http://localhost:11434/v1"
-default_model = "qwen2.5-coder:14b"
+default_model = "qwen3.8:latest"
 # api_key = "optional"       # for Ollama Cloud
 
 [providers.openrouter]
@@ -480,7 +480,7 @@ cargo clippy -- -W clippy::pedantic  # stricter linting
 
 ### Live agent eval suite
 
-The eval suite runs real agent tasks against a live model endpoint and grades the results. See [`evals/README.md`](evals/README.md) for full details.
+The eval suite runs real agent tasks against a live model endpoint and grades the results. See [`evals/README.md`](evals/README.md) for full details. I run this to decide how well new models *could* run in this harness for your average usage, not as a hard evaluation of strength.
 
 ```bash
 cargo build --release
@@ -489,7 +489,7 @@ cargo build --release
 python3 evals/run.py --model qwen3.8 --host https://api.ollama.ai/api/v1
 
 # Against local Ollama
-python3 evals/run.py --model qwen2.5-coder:14b --host http://127.0.0.1:11434/v1
+python3 evals/run.py --model qwen3.8:latest --host http://127.0.0.1:11434/v1
 
 # Against OpenRouter (needs RAVEN_API_KEY)
 python3 evals/run.py --model grok-4.5 --host https://openrouter.ai/api/v1
@@ -499,9 +499,9 @@ cat evals/out/<run-id>.md
 ```
 
 **Top-performing models (current):**
-- **Ollama Cloud (daily-use recommended):** `qwen3.8` (latest, excellent), `deepseek-v4-pro:cloud` (high quality), `deepseek-v4-flash:cloud` (efficient), `glm-5.2:cloud` (long-horizon)
-- **OpenRouter (frontier):** `x-ai/grok-4.5` (best reasoning, multimodal), `x-ai/grok-4.6` (frontier)
-- **Local (when cloud unavailable):** `qwen2.5-coder:14b`, `deepseek-coder-v2`
+- **Ollama Cloud (daily-use recommended):** `kimi-k3:cloud` (latest, excellent), `deepseek-v4-pro:cloud` (high quality), `deepseek-v4-flash:cloud` (efficient), `glm-5.2:cloud` (long-horizon)
+- **OpenRouter (frontier):** `x-ai/grok-4.5` (best reasoning, multimodal), `x-ai/grok-4.6` (frontier), `Stealth/ox-alpha` (pretty noice)
+- **Local (when cloud unavailable):** `qwen3.8:latest`
 
 See `docs/testing.md` for coverage and mutation testing details.
 
