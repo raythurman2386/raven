@@ -1,0 +1,127 @@
+# ---------------------------------------------------------------------------
+# Raven configuration — complete reference example
+#
+# Drop this at EITHER of two locations (both optional):
+#   ~/.raven/config.toml        (global, applies everywhere)
+#   .raven/config.toml          (per-workspace, overrides the global file)
+#
+# Precedence (highest wins):
+#   CLI flag > environment variable > workspace config > global config
+#   > built-in default
+#
+# Only keys you set take effect; everything else falls back to the next
+# layer. This file is fully commented — uncomment the options you want.
+#
+# See docs/configuration.md for the complete reference.
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Top-level options
+# ---------------------------------------------------------------------------
+
+# The active provider. Names a table from [providers.<name>] below, or one of
+# the two built-in presets: "ollama" and "openrouter".
+# Overridden by: --provider flag, RAVEN_PROVIDER env var.
+#provider = "ollama"
+
+# --- Context management -----------------------------------------------------
+
+# Force the context window size (tokens). When unset, Raven infers it from the
+# model metadata (Ollama /api/show) and falls back to a name-based heuristic.
+# Overridden by: --context-window, RAVEN_CONTEXT_WINDOW / OG_CONTEXT_WINDOW.
+#context_window = 131072
+
+# Fraction of usable context at which compaction triggers (0.0–1.0).
+# Lower = compact earlier; raise it (riskier) to compact later.
+# Overridden by: --compact-threshold, RAVEN_COMPACT_THRESHOLD.
+#compact_threshold = 0.75
+
+# --- Agent loop -------------------------------------------------------------
+
+# Maximum agent iterations per run before the loop stops.
+# Overridden by: --max-iterations? No — RAVEN_MAX_ITER / OG_MAX_ITER env.
+#max_iterations = 30
+
+# Interaction mode. "plan" (default): propose → approve → execute.
+# "agent": full tools, no plan step. "chat": read-only Q&A.
+# Overridden by: --mode flag.
+#mode = "plan"
+
+# Sampling temperature for the model endpoint.
+#temperature = 0.2
+
+# Disable streaming (single request per turn) for endpoints that don't do SSE.
+# Overridden by: --no-stream flag.
+#no_stream = false
+
+# Enforce the verification gate — agent must run tests after editing files
+# before it may finish a turn.
+#verify = true
+
+# --- Appearance -------------------------------------------------------------
+
+# TUI color theme: ravenwood, nord, dracula, solarized-dark.
+# Overridden by: --theme flag.
+#theme = "ravenwood"
+
+# --- web_search backend -----------------------------------------------------
+
+# Optional self-hosted SearXNG instance for web_search. When unset, web_search
+# uses DuckDuckGo. If SearXNG is unreachable, it falls back to DuckDuckGo.
+# Overridden by: RAVEN_SEARXNG_URL env.
+#searxng_url = "https://searx.example.com"
+
+# Optional SearXNG engine list (comma-separated env / TOML array).
+# Overridden by: RAVEN_SEARXNG_ENGINES env.
+#searxng_engines = ["google", "bing"]
+
+# ---------------------------------------------------------------------------
+# Providers
+# ---------------------------------------------------------------------------
+# A provider bundles an OpenAI-compatible /v1/chat/completions endpoint,
+# auth, and a default model. Override a preset or add your own — adding a
+# provider is a pure config change (no code edit).
+#
+# Supported keys per provider:
+#   base_url      — OpenAI-compatible /v1 endpoint (required).
+#   default_model — model used when no --model / /model override is set.
+#   api_key       — literal key in the file. Prefer api_key_env so the secret
+#                   stays out of the file.
+#   api_key_env   — NAME of the env var holding this provider's key. Only the
+#                   name is stored here; the secret lives in the environment.
+
+[providers.ollama]
+# Built-in default: http://localhost:11434/v1
+base_url = "http://localhost:11434/v1"
+default_model = "qwen3.8:latest"
+# Point at Ollama Cloud or a remote authenticated host and set a key:
+# base_url = "https://ollama.com/v1"
+# api_key_env = "OLLAMA_API_KEY"   # or literal api_key = "..."
+
+[providers.openrouter]
+# Built-in default: https://openrouter.ai/api/v1
+base_url = "https://openrouter.ai/api/v1"
+default_model = "x-ai/grok-4.5"
+# api_key_env = "OPENROUTER_API_KEY"
+
+# --- Adding a brand-new provider (example: Groq) ----------------------------
+# The endpoint MUST speak OpenAI-compatible /v1/chat/completions. Native APIs
+# with a different wire format need a proxy/gateway first.
+#
+#[providers.groq]
+#base_url = "https://api.groq.com/openai/v1"
+#api_key_env = "GROQ_API_KEY"
+#default_model = "llama-3.3-70b-versatile"
+
+# ---------------------------------------------------------------------------
+# API key precedence (highest to lowest, per provider)
+# ---------------------------------------------------------------------------
+# 1. Config-file api_key on that provider (if set — NOT overridden by env)
+# 2. RAVEN_API_KEY (universal override, works for all providers)
+# 3. The provider's declared api_key_env, or built-in mapping
+#    (OPENROUTER_API_KEY / OLLAMA_API_KEY), else a conventional
+#    {NAME}_API_KEY (e.g. GROQ_API_KEY for a provider named "groq")
+# 4. None (public/local-only endpoints)
+#
+# Prefer the provider-scoped env var over a config-file api_key so the secret
+# never lands in a committed file or shell history.
