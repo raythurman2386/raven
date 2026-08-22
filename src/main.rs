@@ -40,8 +40,8 @@ use std::path::PathBuf;
 use raven::agent::{run_parallel, Agent, ChatMessage};
 use raven::config::{
     default_max_iter, env_compact_threshold, env_context_window, env_searxng_engines,
-    env_searxng_url, load_config_file, load_dotenv_from, resolve_mode, resolve_provider, Mode,
-    Settings,
+    env_searxng_url, load_config_file, load_dotenv_from, load_global_dotenv, needs_onboarding,
+    resolve_mode, resolve_provider, run_onboarding, Mode, Settings,
 };
 use raven::context::{fetch_context_window, infer_context_window};
 use raven::runner;
@@ -191,8 +191,26 @@ async fn main() -> Result<()> {
     // Also load workspace `.env` (no-overwrite) for `raven --workspace …`.
     load_dotenv_from(&workspace);
 
-    // Load config file (workspace .raven/config.toml overrides ~/.raven/config.toml)
+    // Load API keys written to ~/.raven/.env by the onboarding wizard (and any
+    // keys the user placed there). No-overwrite: already-exported vars win.
+    load_global_dotenv();
+
+    // First-run onboarding: interactive + unconfigured + un-overridden → run
+    // the wizard, which writes ~/.raven/config.toml (+ ~/.raven/.env key) and
+    // returns the resulting config. Skips automatically for --headless/--yolo/
+    // --acp/CI (non-TTY) and any existing config or explicit provider/model.
     let cfg = load_config_file(&workspace);
+    let cfg = if needs_onboarding(
+        &cfg,
+        cli.model.clone(),
+        cli.provider.clone(),
+        std::env::var("RAVEN_PROVIDER").ok(),
+        runner::stdin_is_tty(),
+    ) {
+        run_onboarding().await?
+    } else {
+        cfg
+    };
     // Clone for the TUI, which needs the full config to resolve /provider
     // against config-declared providers after `cfg` fields are moved out below.
     let cfg_for_tui = cfg.clone();

@@ -33,18 +33,9 @@ pub fn needs_onboarding(
         && env_provider.is_none()
 }
 
-/// Parse a 1-based provider menu choice into a 0-based index, or None.
-#[allow(dead_code)] // wired into the wizard in Task 4/6
-pub fn parse_provider_choice(input: &str, count: usize) -> Option<usize> {
-    let n: usize = input.trim().parse().ok()?;
-    // `.then` (lazy) not `.then_some` (eager): `n - 1` must not run when n == 0.
-    (n >= 1 && n <= count).then(|| n - 1)
-}
-
 /// Custom provider entry "name:base_url". The model is prompted separately.
 /// Returns None if the name or URL is invalid (empty name, empty URL, or the
 /// URL does not start with http:// or https://).
-#[allow(dead_code)] // wired into the wizard in Task 4/6
 pub fn parse_custom_provider(input: &str) -> Option<(String, String)> {
     let (name, url) = input.trim().split_once(':')?;
     let name = name.trim().to_string();
@@ -58,29 +49,8 @@ pub fn parse_custom_provider(input: &str) -> Option<(String, String)> {
     Some((name, url))
 }
 
-/// Returns true if the endpoint answers GET {base}/api/tags (Ollama).
-/// Bounded 2s timeout; never panics.
-#[allow(dead_code)] // wired into the wizard in Task 4/6
-pub async fn ollama_reachable(base_url: &str) -> bool {
-    let trimmed = base_url.trim_end_matches('/');
-    let endpoint = format!("{}/api/tags", trimmed.trim_end_matches("/v1"));
-    let Ok(client) = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(2))
-        .build()
-    else {
-        return false;
-    };
-    client
-        .get(&endpoint)
-        .send()
-        .await
-        .map(|r| r.status().is_success())
-        .unwrap_or(false)
-}
-
 /// Curated fallback model list for a provider, used when the live endpoint
 /// probe returns nothing. Guarantees the wizard always has a starting point.
-#[allow(dead_code)] // wired into the wizard in Task 4/6
 pub fn fallback_models(provider_name: &str) -> Vec<String> {
     match provider_name {
         "ollama" => vec![
@@ -114,7 +84,6 @@ struct ProviderEntry {
 }
 
 /// Build a secret-free config.toml for the chosen provider/model/base_url.
-#[allow(dead_code)] // wired into the wizard in Task 4b/6
 pub fn build_config_toml(name: &str, base_url: &str, model: &str) -> String {
     let entry = ProviderEntry {
         base_url: base_url.to_string(),
@@ -131,7 +100,6 @@ pub fn build_config_toml(name: &str, base_url: &str, model: &str) -> String {
 
 /// Build the ~/.raven/.env line(s) for an API key, or empty string if none.
 /// Uses a provider-scoped var when known, else the universal RAVEN_API_KEY.
-#[allow(dead_code)] // wired into the wizard in Task 4b/6
 pub fn build_env_file(api_key: Option<String>, provider_name: &str) -> String {
     let Some(key) = api_key else {
         return String::new();
@@ -145,7 +113,6 @@ pub fn build_env_file(api_key: Option<String>, provider_name: &str) -> String {
 }
 
 /// Write the config.toml into `dir` (creating it), Unix mode 0600.
-#[allow(dead_code)] // wired into the wizard in Task 4b/6
 pub fn write_global_config(dir: &std::path::Path, contents: &str) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     let path = dir.join("config.toml");
@@ -163,7 +130,6 @@ pub fn write_global_config(dir: &std::path::Path, contents: &str) -> std::io::Re
 }
 
 /// Write the key .env into `dir` (creating), Unix 0600.
-#[allow(dead_code)] // wired into the wizard in Task 4b/6
 pub fn write_global_env(dir: &std::path::Path, contents: &str) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     let path = dir.join(".env");
@@ -183,7 +149,6 @@ pub fn write_global_env(dir: &std::path::Path, contents: &str) -> std::io::Resul
 /// Run the interactive first-run wizard: pick a provider, model, and optional
 /// API key; persist a secret-free `~/.raven/config.toml` and the key (if any)
 /// to `~/.raven/.env`; return the resulting [`ConfigFile`].
-#[allow(dead_code)] // wired into main() in Task 6
 pub async fn run_onboarding() -> anyhow::Result<ConfigFile> {
     let home =
         dirs::home_dir().ok_or_else(|| anyhow::anyhow!("cannot determine home directory"))?;
@@ -295,7 +260,6 @@ pub async fn run_onboarding() -> anyhow::Result<ConfigFile> {
 }
 
 /// Read one trimmed line from stdin, erroring if stdin is not interactive.
-#[allow(dead_code)] // used only via run_onboarding (wired in Task 6)
 fn read_line() -> anyhow::Result<String> {
     crate::runner::read_line_if_tty()
         .map(|l| l.trim().to_string())
@@ -303,7 +267,6 @@ fn read_line() -> anyhow::Result<String> {
 }
 
 /// Read one trimmed line, or None if stdin is not interactive.
-#[allow(dead_code)] // used only via run_onboarding (wired in Task 6)
 fn read_line_trimmed() -> Option<String> {
     crate::runner::read_line_if_tty().map(|l| l.trim().to_string())
 }
@@ -311,7 +274,6 @@ fn read_line_trimmed() -> Option<String> {
 /// Read a 1-based menu choice into a 0-based index. When `allow_zero` is true,
 /// a literal `0` returns None (caller treats it as "custom/manual entry").
 /// Invalid or out-of-range input is an error.
-#[allow(dead_code)] // used only via run_onboarding (wired in Task 6)
 fn read_choice(count: usize, allow_zero: bool) -> anyhow::Result<Option<usize>> {
     let line = read_line()?;
     if allow_zero && line == "0" {
@@ -413,15 +375,6 @@ mod tests {
 #[cfg(test)]
 mod tests2 {
     use super::*;
-
-    #[test]
-    fn parse_provider_choice_known() {
-        assert_eq!(parse_provider_choice("1", 3), Some(0));
-        assert_eq!(parse_provider_choice("2", 3), Some(1));
-        assert_eq!(parse_provider_choice("0", 3), None);
-        assert_eq!(parse_provider_choice("x", 3), None);
-        assert_eq!(parse_provider_choice("99", 3), None);
-    }
 
     #[test]
     fn parse_custom_provider_entry() {
