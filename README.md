@@ -1,23 +1,42 @@
 # Raven
 
-A **privacy-first** local coding-agent harness written in Rust for [Ollama](https://ollama.com) and any OpenAI-compatible endpoint. It distills the core agent-loop ideas into a single auditable binary that runs entirely on your hardware or against a provider of your choice — no managed cloud auth layer, no MCP marketplace, no telemetry. Built as a daily-driver harness: it's small enough to understand end-to-end, powerful enough to handle real coding tasks, and designed for air-gapped or locked-down networks where Ollama is the only reachable model endpoint.
+A small, privacy-first coding-agent harness written in Rust for [Ollama](https://ollama.com) and any OpenAI-compatible endpoint. It's a single binary that runs a real agent loop — tools, plan mode, verification, workspace isolation — against a model endpoint you control. No cloud auth layer, no MCP marketplace, no telemetry, no personality layer. Just the loop, the tools, and your workspace.
 
-> **Inspiration:** Inspired by agent-harness ideas in xAI's [Grok Build](https://github.com/xai-org/grok-build); not affiliated. Raven keeps only the pieces that remain useful when the only model endpoint you can reach is local (or your chosen cloud provider), so you get a real agent loop with tools, plan mode, structured verification, and workspace isolation — in one small, auditable binary.
+I built it to learn Rust and to have a harness that only contains the pieces I actually use. It's small enough to read end-to-end, and it runs fine on a Raspberry Pi.
 
 ---
 
 ## Why Raven?
 
-Raven is built for developers who want a **real agent loop** without the overhead of cloud infrastructure. Instead of a managed harness that collects telemetry, requires account auth, and pulls plugins from a marketplace, Raven is a single small binary you control completely.
+I wanted a coding agent I could actually understand and trust. The big harnesses are powerful, but they bring a lot I don't need — managed auth, plugin marketplaces, telemetry, personality layers. Raven keeps the parts that matter for real work and drops the rest.
 
-**For daily coding work:**
-- **Local first** — run against Ollama on your machine or dial in a cloud provider like OpenRouter. Entire agent loop runs on your hardware; only LLM requests leave your network.
-- **No telemetry** — ever. No usage tracking, no phone-home calls, no managed cloud auth layer. All session state (conversation, patches, debug events) stays local and on-disk.
-- **Auditable** — ~15K lines of Rust. You can read the whole harness. There are no proprietary plugins, no external service dependencies, no "magic" black boxes.
-- **Air-gapped ready** — the design center is "what if the only reachable model endpoint is local Ollama?" Everything still works offline, and everything still works in locked-down networks.
-- **Production-grade safety** — workspace confinement (Landlock + seccomp on Linux), shell command filters, git-worktree isolation per task, and structured verify-before-commit workflow so you never accidentally commit broken code.
+**What it's like to use:**
+- **Local first** — I run it against Ollama on my machine by default. When a task needs a bigger model, I dial in OpenRouter. Only LLM requests leave my network.
+- **No telemetry** — ever. No usage tracking, no phone-home, no managed auth. All session state stays on disk, locally.
+- **Auditable** — about 21K lines of Rust (26K with tests). You can read the whole harness. No proprietary plugins, no external service dependencies, no magic.
+- **Small footprint** — it's a single binary that runs comfortably on a Raspberry Pi. No daemon, no background indexing, no heavy runtime.
+- **No personality layer** — there's no "soul file" or persona. It keeps a plain `.raven/MEMORY.md` with exactly what you tell it to remember, and nothing else.
+- **Production-grade safety** — workspace confinement (Landlock + seccomp on Linux), shell command filters, git-worktree isolation per task, and a verify-before-commit gate so it won't finish a turn that edited files without running tests.
 
-Raven started as a thought experiment — *what if we removed all the cloud overhead and kept only the parts that matter for local coding?* It works best for developers who have access to capable local models (Ollama on your hardware, Ollama Cloud, or a DGX) and want a practical harness for real work in focused sessions — not an autonomous loop trying to complete entire projects unsupervised.
+It's built for focused, supervised work — not an autonomous loop trying to complete entire projects unsupervised. I use it for real coding tasks every day, and I review what it produces.
+
+---
+
+## How I use it
+
+Raven is my daily driver for coding work. Here's the shape of that, in case it helps you find your own workflow.
+
+**In the editor.** I run Raven inside [Zed](https://zed.dev) for standard agent work — attach it via ACP (`raven --acp`) and work on a task directly in the editor. It's also a plain headless CLI, so it drops into whatever editor or terminal you like.
+
+**As a sub-agent for other agents.** Raven is small and focused, so other agents can drive it to save their own context window. When a larger agent needs code changes or parallel work done, it hands the task to Raven rather than burning its own context on file edits and tool calls.
+
+**Models.** I default to local Ollama. When a task needs a bigger model, I switch to OpenRouter for that session. Nothing else changes — same tools, same loop, just a different endpoint.
+
+**Sessions.** I do a mix of both:
+- **Start fresh** for most tasks — a clean context, no baggage.
+- **`--resume`** when I want long-term continuity — pick up a session from a previous day and keep going.
+
+**Automation.** Raven isn't just interactive. Other agents can run it headless to implement fixes. In my setup, if a larger agent finds a bug it files an issue, and an automated loop picks that issue up and uses Raven to implement the fix. It's a small, predictable tool that slots into a bigger pipeline.
 
 ---
 
@@ -25,8 +44,9 @@ Raven started as a thought experiment — *what if we removed all the cloud over
 
 | In scope | Intentionally out of scope |
 |---|---|
-| Streaming agent loop (OpenAI-compatible `/v1/chat/completions`) | MCP *server* marketplace (ACP clients may still attach) |
+| Streaming agent loop (OpenAI-compatible `/v1/chat/completions`) | MCP marketplace — I keep MCP connections in a separate agent; Raven stays lean |
 | 25 tools: `list_dir`, `read_file`, `search_replace`, `write_file`, `grep`, `run_shell`, `search_code`, `todo_write`, `goal_set`, `delegate_task`, `think`, `memory_update`, `memory_search`, `git_status`, `git_diff`, `git_log`, `git_commit`, `apply_patch`, `run_tests`, `run_lint`, `ask_user`, `web_search`, `web_fetch`, `skill_search`, `skill_load` | Remote config sync |
+| Small footprint — single binary, runs on a Raspberry Pi | Personality / "soul file" — no persona layer, just a plain `.raven/MEMORY.md` |
 | Document extraction: `read_file` converts `.docx`, `.pdf`, `.xlsx`, `.odt`, `.epub`, `.pptx`, `.csv`, `.rtf`, `.ods`, `.odp`, `.doc`, `.xls`, `.ppt` and more to Markdown (via the `anydoc` engine) | Multi-model routing |
 | Workspace sandbox (path confinement + dangerous-command filter) | Rhai workflow engine |
 | OS-level subprocess confinement (Landlock, seccomp network block, rlimits) | GUI / web frontend |
@@ -301,7 +321,7 @@ On startup, the agent loads `AGENTS.md` (or `CLAUDE.md`) from the workspace root
 
 ### Project memory
 
-The agent maintains a workspace memory file at `.raven/MEMORY.md`. The first 25KB is injected into the system prompt on each run. The `memory_update` tool lets the agent persist conventions, decisions, and context across sessions.
+Raven keeps a plain, editable file at `.raven/MEMORY.md`. The first 25KB is injected into the system prompt on each run. The `memory_update` tool lets the agent persist conventions, decisions, and context across sessions — but it's just a Markdown file you can read and edit yourself. There's no hidden state, no "soul" or persona. It remembers exactly what you (or the agent) put in that file, and nothing else.
 
 ---
 
@@ -399,11 +419,13 @@ raven --compact-threshold 0.85 -p "Task"
 
 ### Workspace memory
 
-Raven maintains a `.raven/MEMORY.md` file across sessions. The agent can read and update it:
+Raven keeps a plain `.raven/MEMORY.md` file across sessions. The agent can read and update it:
 - Use `memory_search` to find past decisions
 - Use `memory_update` to record conventions or context
 
 Example: *"Remember we prefer async/await over promises in this codebase"*
+
+It's just a Markdown file — open it, edit it, or delete it. It only holds what you put there.
 
 ### Workspace rules
 
