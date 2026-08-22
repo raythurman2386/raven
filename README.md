@@ -145,8 +145,12 @@ cargo install --path .
 ```bash
 # Interactive TUI (default when no task is given)
 raven
-# Prompts for provider (ollama, openrouter, etc.) and model on first use.
-# Settings are saved to ~/.raven/config.toml for future runs.
+# On first run (no config yet), Raven prompts you to choose a provider
+# (local Ollama, Ollama Cloud, OpenRouter, or any custom OpenAI-compatible
+# endpoint via "name:base_url"), pick a model (listing live models when
+# available), and saves your choice to ~/.raven/config.toml. Any API key
+# you enter is written to ~/.raven/.env (mode 0600), keeping config.toml
+# secret-free. Subsequent runs skip the wizard.
 ```
 
 ### One-shot tasks (headless)
