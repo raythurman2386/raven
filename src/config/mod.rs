@@ -306,6 +306,16 @@ pub fn load_dotenv_from(dir: &std::path::Path) {
     }
 }
 
+/// Load `~/.raven/.env` if it exists, for provider API keys written by the
+/// onboarding wizard. Read-only, no-overwrite semantics (same as
+/// [`load_dotenv`]). Returns the number of keys newly set.
+pub fn load_global_dotenv() -> usize {
+    match dirs::home_dir() {
+        Some(home) => load_dotenv(&home.join(".raven").join(".env")),
+        None => 0,
+    }
+}
+
 /// Max agent iterations: `RAVEN_MAX_ITER` env var, else `OG_MAX_ITER`, else `30`.
 pub fn default_max_iter() -> usize {
     std::env::var("RAVEN_MAX_ITER")
