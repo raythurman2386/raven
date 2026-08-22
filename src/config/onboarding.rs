@@ -98,6 +98,88 @@ pub fn fallback_models(provider_name: &str) -> Vec<String> {
     }
 }
 
+/// Serialize-only shape of the config we write. NO api_key field — the key
+/// lives in a separate ~/.raven/.env so config.toml stays secret-free.
+#[derive(serde::Serialize)]
+struct ProvidersTable {
+    provider: String,
+    providers: std::collections::BTreeMap<String, ProviderEntry>,
+}
+
+#[derive(serde::Serialize)]
+struct ProviderEntry {
+    base_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    default_model: Option<String>,
+}
+
+/// Build a secret-free config.toml for the chosen provider/model/base_url.
+#[allow(dead_code)] // wired into the wizard in Task 4b/6
+pub fn build_config_toml(name: &str, base_url: &str, model: &str) -> String {
+    let entry = ProviderEntry {
+        base_url: base_url.to_string(),
+        default_model: Some(model.to_string()),
+    };
+    let mut providers = std::collections::BTreeMap::new();
+    providers.insert(name.to_string(), entry);
+    toml::to_string_pretty(&ProvidersTable {
+        provider: name.to_string(),
+        providers,
+    })
+    .expect("providers table is serializable")
+}
+
+/// Build the ~/.raven/.env line(s) for an API key, or empty string if none.
+/// Uses a provider-scoped var when known, else the universal RAVEN_API_KEY.
+#[allow(dead_code)] // wired into the wizard in Task 4b/6
+pub fn build_env_file(api_key: Option<String>, provider_name: &str) -> String {
+    let Some(key) = api_key else {
+        return String::new();
+    };
+    let var = match provider_name {
+        "openrouter" => "OPENROUTER_API_KEY",
+        "ollama" => "OLLAMA_API_KEY",
+        _ => "RAVEN_API_KEY",
+    };
+    format!("{var}={key}\n")
+}
+
+/// Write the config.toml into `dir` (creating it), Unix mode 0600.
+#[allow(dead_code)] // wired into the wizard in Task 4b/6
+pub fn write_global_config(dir: &std::path::Path, contents: &str) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let path = dir.join("config.toml");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(&path, contents)?;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(&path, contents)?;
+    }
+    Ok(())
+}
+
+/// Write the key .env into `dir` (creating), Unix 0600.
+#[allow(dead_code)] // wired into the wizard in Task 4b/6
+pub fn write_global_env(dir: &std::path::Path, contents: &str) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let path = dir.join(".env");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(&path, contents)?;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(&path, contents)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -228,5 +310,61 @@ mod tests3 {
     fn fallback_models_custom() {
         let m = fallback_models("acme");
         assert!(m.contains(&"gpt-4o".to_string()));
+    }
+}
+
+#[cfg(test)]
+mod tests4 {
+    use super::*;
+
+    #[test]
+    fn build_config_toml_secret_free() {
+        let toml = build_config_toml("ollama", "http://localhost:11434/v1", "qwen3.8:latest");
+        assert!(toml.contains("provider = \"ollama\""));
+        assert!(toml.contains("default_model = \"qwen3.8:latest\""));
+        assert!(toml.contains("base_url = \"http://localhost:11434/v1\""));
+        assert!(!toml.contains("api_key"), "config.toml must be secret-free");
+    }
+
+    #[test]
+    fn build_config_toml_custom_provider() {
+        let toml = build_config_toml("acme", "http://gpu:8080/v1", "gpt-4o");
+        assert!(toml.contains("provider = \"acme\""));
+        assert!(toml.contains("base_url = \"http://gpu:8080/v1\""));
+        assert!(toml.contains("default_model = \"gpt-4o\""));
+    }
+
+    #[test]
+    fn build_env_file_lines() {
+        assert!(build_env_file(Some("sk-or-abc".into()), "openrouter")
+            .contains("OPENROUTER_API_KEY=sk-or-abc"));
+        assert!(build_env_file(Some("sk-x".into()), "ollama").contains("OLLAMA_API_KEY=sk-x"));
+        assert!(build_env_file(Some("sk-c".into()), "acme").contains("RAVEN_API_KEY=sk-c"));
+        assert!(build_env_file(None, "ollama").is_empty());
+    }
+
+    #[test]
+    fn write_helpers_persist_and_are_private() {
+        let dir = tempfile::tempdir().unwrap();
+        write_global_config(dir.path(), "provider = \"ollama\"\n").unwrap();
+        write_global_env(dir.path(), "OLLAMA_API_KEY=sk-x\n").unwrap();
+        let cfg = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
+        let env = std::fs::read_to_string(dir.path().join(".env")).unwrap();
+        assert!(cfg.contains("provider = \"ollama\""));
+        assert!(env.contains("OLLAMA_API_KEY=sk-x"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let m = std::fs::metadata(dir.path().join("config.toml"))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(m & 0o777, 0o600);
+            let me = std::fs::metadata(dir.path().join(".env"))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(me & 0o777, 0o600);
+        }
     }
 }
