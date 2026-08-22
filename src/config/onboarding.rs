@@ -114,30 +114,35 @@ pub fn build_env_file(api_key: Option<String>, provider_name: &str) -> String {
 
 /// Write the config.toml into `dir` (creating it), Unix mode 0600.
 pub fn write_global_config(dir: &std::path::Path, contents: &str) -> std::io::Result<()> {
-    std::fs::create_dir_all(dir)?;
-    let path = dir.join("config.toml");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::write(&path, contents)?;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-    }
-    #[cfg(not(unix))]
-    {
-        std::fs::write(&path, contents)?;
-    }
-    Ok(())
+    write_private(dir, "config.toml", contents)
 }
 
 /// Write the key .env into `dir` (creating), Unix 0600.
 pub fn write_global_env(dir: &std::path::Path, contents: &str) -> std::io::Result<()> {
+    write_private(dir, ".env", contents)
+}
+
+/// Write `file` into `dir`, creating it with restrictive permissions so the
+/// file is never exposed at default (umask) perms. On Unix the 0600 mode is
+/// set at open/creation time, not via a post-write chmod — that avoids the
+/// TOCTOU window where a freshly-written secrets file would be world-readable
+/// before its permissions are tightened. On Windows we rely on the user
+/// profile's default ACLs (mirroring the existing convention).
+fn write_private(dir: &std::path::Path, file: &str, contents: &str) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
-    let path = dir.join(".env");
+    let path = dir.join(file);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::write(&path, contents)?;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .mode(0o600)
+            .open(&path)?;
+        f.write_all(contents.as_bytes())?;
+        f.flush()?;
     }
     #[cfg(not(unix))]
     {

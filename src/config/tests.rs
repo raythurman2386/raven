@@ -397,11 +397,21 @@ fn load_global_dotenv_reads_home_env() {
     std::env::set_var("HOME", home.path());
     let raven_dir = home.path().join(".raven");
     std::fs::create_dir_all(&raven_dir).unwrap();
-    std::fs::write(raven_dir.join(".env"), "OLLAMA_API_KEY=sk-from-home-env\n").unwrap();
+    // Use a non-secret-shaped sentinel: a sk-* value would be rewritten by
+    // the agent/harness as «redacted:…», so a plain token proves the loader
+    // round-trips the actual value without ambiguity.
+    std::fs::write(
+        raven_dir.join(".env"),
+        "OLLAMA_API_KEY=load-global-test-1\n",
+    )
+    .unwrap();
 
     let n = crate::config::load_global_dotenv();
     assert_eq!(n, 1);
-    assert_eq!(std::env::var("OLLAMA_API_KEY").unwrap(), "sk-from-home-env");
+    assert_eq!(
+        std::env::var("OLLAMA_API_KEY").unwrap(),
+        "load-global-test-1"
+    );
 
     std::env::remove_var("OLLAMA_API_KEY");
     match original_home {
