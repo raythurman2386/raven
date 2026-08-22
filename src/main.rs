@@ -207,7 +207,13 @@ async fn main() -> Result<()> {
         std::env::var("RAVEN_PROVIDER").ok(),
         runner::stdin_is_tty(),
     ) {
-        run_onboarding().await?
+        let cfg = run_onboarding().await?;
+        // The wizard may have just written an API key to ~/.raven/.env. Reload
+        // it now so resolve_provider()/resolve_key() below picks up the key in
+        // this same session (otherwise a keyed provider starts unauthenticated
+        // until the next run). No-overwrite: an already-exported var still wins.
+        load_global_dotenv();
+        cfg
     } else {
         cfg
     };

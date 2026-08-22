@@ -134,7 +134,10 @@ fn write_private(dir: &std::path::Path, file: &str, contents: &str) -> std::io::
     #[cfg(unix)]
     {
         use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        // Restrict the config dir itself to the owner so other local users
+        // can't stat/list ~/.raven even though the file contents are 0600.
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
         let mut f = std::fs::OpenOptions::new()
             .create(true)
             .truncate(true)

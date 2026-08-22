@@ -393,6 +393,10 @@ fn round_temperature_normalizes_negative_zero() {
 fn load_global_dotenv_reads_home_env() {
     // Isolate HOME so a real user ~/.raven/.env doesn't leak in.
     let original_home = std::env::var_os("HOME");
+    // Unset any pre-existing OLLAMA_API_KEY so the no-overwrite loader is the
+    // one that sets it (and we can assert n==1). Restored afterwards.
+    let original_key = std::env::var_os("OLLAMA_API_KEY");
+    std::env::remove_var("OLLAMA_API_KEY");
     let home = tempfile::tempdir().unwrap();
     std::env::set_var("HOME", home.path());
     let raven_dir = home.path().join(".raven");
@@ -413,7 +417,10 @@ fn load_global_dotenv_reads_home_env() {
         "load-global-test-1"
     );
 
-    std::env::remove_var("OLLAMA_API_KEY");
+    match original_key {
+        Some(k) => std::env::set_var("OLLAMA_API_KEY", k),
+        None => std::env::remove_var("OLLAMA_API_KEY"),
+    }
     match original_home {
         Some(h) => std::env::set_var("HOME", h),
         None => std::env::remove_var("HOME"),
