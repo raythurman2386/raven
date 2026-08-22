@@ -22,10 +22,12 @@ use anyhow::Result;
 use serde::Deserialize;
 use std::path::PathBuf;
 
+pub use onboarding::{config_paths, needs_onboarding};
 pub use provider::{
     is_known_provider, known_provider_names, resolve_provider, Provider, ProviderConfig,
 };
 
+mod onboarding;
 mod provider;
 
 /// The user-facing interaction mode for a session.
