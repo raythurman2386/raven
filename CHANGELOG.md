@@ -6,6 +6,59 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-08-22
+
+### Added
+
+- **First-run onboarding wizard** — on a fresh interactive install (no config,
+  no `--provider`/`--model`/`RAVEN_PROVIDER`, stdin is a TTY) Raven now prompts
+  for a provider (local Ollama, Ollama Cloud, OpenRouter, or any custom
+  OpenAI-compatible endpoint via `name:base_url`), lists live models from the
+  endpoint when reachable (falling back to a curated list otherwise), and
+  accepts an optional API key. The choice is persisted so future runs need no
+  prompts.
+- **Secret-free config + key separation** — the wizard writes `provider` /
+  `[providers.<name>]` (base_url + default_model) to `~/.raven/config.toml`
+  (0600) and any API key to `~/.raven/.env` (0600), keeping the config file
+  free of credentials and safe to share. The `~/.raven` directory is locked to
+  0700. Files are created at 0600/0700 from the start (no chmod race).
+- **`~/.raven/.env` auto-load** — Raven reads provider API keys from
+  `~/.raven/.env` at startup (no-overwrite), so keys persist across runs and
+  the key entered during onboarding is picked up in the same session.
+- **Custom provider model fallbacks** — curated default models
+  (`gpt-4o`, `gpt-4o-mini`) for custom OpenAI-compatible endpoints so the
+  wizard never dead-ends.
+
+### Changed
+
+- **Ollama built-in default model** — `gemma4:latest` → `qwen3.8:latest`,
+  matching the README's recommended local default.
+- **`fetch_live_provider_models` visibility** — promoted to `pub(crate)` so the
+  onboarding wizard can reuse the live model listing.
+
+### Fixed
+
+- **TOCTOU permission race on key/config writes** — `~/.raven/.env` and
+  `~/.raven/config.toml` are now created at restrictive permissions directly
+  (`OpenOptions::mode(0o600)`) instead of write-then-chmod, so an API key is
+  never momentarily world-readable.
+- **First-run key not applied in-session** — reload `~/.raven/.env` after the
+  wizard so keyed providers (OpenRouter, Ollama Cloud) authenticate on the very
+  first run, not the second.
+- **Install checksum match anchored to exact artifact name** — the release
+  workflow now writes raw-binary and archive entries to `checksums.txt`; the
+  installers previously matched both lines and every install failed. Anchored
+  to the end of the artifact name (from the v0.4.0-era fix).
+- **Windows test gating** — the HOME-isolated dotenv test is `#[cfg(not(windows))]`
+  (`dirs::home_dir()` reads `USERPROFILE`/`HOMEDRIVE`+`HOMEPATH` on Windows).
+
+### Dependencies
+
+- Bumped `anydoc` 0.1.8 → 0.1.9.
+
+[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/raythurman2386/raven/compare/v0.4.0...v0.4.1
+
 ## [0.4.0] - 2026-08-21
 
 ### Added

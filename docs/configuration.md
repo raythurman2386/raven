@@ -56,7 +56,7 @@ Two providers ship built in (no config needed):
 
 | Name | Base URL | Default model |
 |---|---|---|
-| `ollama` | `http://localhost:11434/v1` | `gemma4:latest` |
+| `ollama` | `http://localhost:11434/v1` | `qwen3.8:latest` |
 | `openrouter` | `https://openrouter.ai/api/v1` | `x-ai/grok-4.5` |
 
 ### Declaring providers
