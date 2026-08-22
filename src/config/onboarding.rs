@@ -78,6 +78,26 @@ pub async fn ollama_reachable(base_url: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Curated fallback model list for a provider, used when the live endpoint
+/// probe returns nothing. Guarantees the wizard always has a starting point.
+#[allow(dead_code)] // wired into the wizard in Task 4/6
+pub fn fallback_models(provider_name: &str) -> Vec<String> {
+    match provider_name {
+        "ollama" => vec![
+            "qwen3.8:latest".into(),
+            "qwen3:14b".into(),
+            "deepseek-v4-flash:cloud".into(),
+            "deepseek-v4-pro:cloud".into(),
+            "glm-5.2:cloud".into(),
+        ],
+        "openrouter" => vec!["x-ai/grok-4.5".into(), "x-ai/grok-4.6".into()],
+        // Custom OpenAI-compatible endpoints: suggest a sensible OpenAI-model
+        // default so the user always has a starting point, then let them type
+        // the exact model id their endpoint exposes.
+        _ => vec!["gpt-4o".into(), "gpt-4o-mini".into()],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,5 +204,29 @@ mod tests2 {
         assert!(parse_custom_provider("acme").is_none());
         assert!(parse_custom_provider("acme:localhost:8080").is_none());
         assert!(parse_custom_provider("!!!").is_none());
+    }
+}
+
+#[cfg(test)]
+mod tests3 {
+    use super::*;
+
+    #[test]
+    fn fallback_models_ollama() {
+        let m = fallback_models("ollama");
+        assert!(m.contains(&"qwen3.8:latest".to_string()));
+        assert!(m.contains(&"deepseek-v4-pro:cloud".to_string()));
+    }
+
+    #[test]
+    fn fallback_models_openrouter() {
+        let m = fallback_models("openrouter");
+        assert!(m.contains(&"x-ai/grok-4.5".to_string()));
+    }
+
+    #[test]
+    fn fallback_models_custom() {
+        let m = fallback_models("acme");
+        assert!(m.contains(&"gpt-4o".to_string()));
     }
 }
