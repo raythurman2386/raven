@@ -40,7 +40,7 @@ impl Provider {
                 base_url: "http://localhost:11434/v1".into(),
                 api_key: None,
                 api_key_env: Some("OLLAMA_API_KEY".into()),
-                default_model: "gemma4:latest".into(),
+                default_model: "qwen3.8:latest".into(),
             }),
             "openrouter" => Some(Provider {
                 name: name.into(),
@@ -153,7 +153,7 @@ pub fn resolve_provider(cfg: &ConfigFile, explicit: Option<String>) -> Provider 
             default_model: pc.default_model.clone().unwrap_or_else(|| {
                 Provider::builtin(&name)
                     .map(|b| b.default_model)
-                    .unwrap_or_else(|| "gemma4:latest".into())
+                    .unwrap_or_else(|| "qwen3.8:latest".into())
             }),
         },
         None => match Provider::builtin(&name) {
@@ -198,7 +198,7 @@ mod tests {
     fn builtin_providers_have_expected_defaults() {
         let ollama = Provider::builtin("ollama").expect("ollama builtin");
         assert_eq!(ollama.base_url, "http://localhost:11434/v1");
-        assert_eq!(ollama.default_model, "gemma4:latest");
+        assert_eq!(ollama.default_model, "qwen3.8:latest");
         assert!(ollama.api_key.is_none());
 
         let or = Provider::builtin("openrouter").expect("openrouter builtin");

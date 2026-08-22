@@ -22,10 +22,12 @@ use anyhow::Result;
 use serde::Deserialize;
 use std::path::PathBuf;
 
+pub use onboarding::{config_paths, needs_onboarding, run_onboarding};
 pub use provider::{
     is_known_provider, known_provider_names, resolve_provider, Provider, ProviderConfig,
 };
 
+mod onboarding;
 mod provider;
 
 /// The user-facing interaction mode for a session.
@@ -301,6 +303,16 @@ pub fn load_dotenv_from(dir: &std::path::Path) {
         if cwd != dir {
             let _ = load_dotenv(&cwd.join(".env"));
         }
+    }
+}
+
+/// Load `~/.raven/.env` if it exists, for provider API keys written by the
+/// onboarding wizard. Read-only, no-overwrite semantics (same as
+/// [`load_dotenv`]). Returns the number of keys newly set.
+pub fn load_global_dotenv() -> usize {
+    match dirs::home_dir() {
+        Some(home) => load_dotenv(&home.join(".raven").join(".env")),
+        None => 0,
     }
 }
 

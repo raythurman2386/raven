@@ -388,3 +388,46 @@ fn round_temperature_normalizes_negative_zero() {
         "0.0"
     );
 }
+
+#[test]
+#[cfg(not(windows))]
+fn load_global_dotenv_reads_home_env() {
+    // Isolate HOME so a real user ~/.raven/.env doesn't leak in. Unix-only:
+    // `dirs::home_dir()` reads `HOME` on Unix but a different set of vars on
+    // Windows, so the home-dir redirection is not portable (same reason the
+    // global-config merge test is gated). The `load_dotenv` no-overwrite and
+    // HOME-path logic it exercises is covered cross-platform elsewhere.
+    let original_home = std::env::var_os("HOME");
+    // Unset any pre-existing OLLAMA_API_KEY so the no-overwrite loader is the
+    // one that sets it (and we can assert n==1). Restored afterwards.
+    let original_key = std::env::var_os("OLLAMA_API_KEY");
+    std::env::remove_var("OLLAMA_API_KEY");
+    let home = tempfile::tempdir().unwrap();
+    std::env::set_var("HOME", home.path());
+    let raven_dir = home.path().join(".raven");
+    std::fs::create_dir_all(&raven_dir).unwrap();
+    // Use a non-secret-shaped sentinel: a sk-* value would be rewritten by
+    // the agent/harness as «redacted:…», so a plain token proves the loader
+    // round-trips the actual value without ambiguity.
+    std::fs::write(
+        raven_dir.join(".env"),
+        "OLLAMA_API_KEY=load-global-test-1\n",
+    )
+    .unwrap();
+
+    let n = crate::config::load_global_dotenv();
+    assert_eq!(n, 1);
+    assert_eq!(
+        std::env::var("OLLAMA_API_KEY").unwrap(),
+        "load-global-test-1"
+    );
+
+    match original_key {
+        Some(k) => std::env::set_var("OLLAMA_API_KEY", k),
+        None => std::env::remove_var("OLLAMA_API_KEY"),
+    }
+    match original_home {
+        Some(h) => std::env::set_var("HOME", h),
+        None => std::env::remove_var("HOME"),
+    }
+}
