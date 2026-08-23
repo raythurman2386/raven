@@ -20,7 +20,7 @@
 # ---------------------------------------------------------------------------
 
 # The active provider. Names a table from [providers.<name>] below, or one of
-# the two built-in presets: "ollama" and "openrouter".
+# the built-in presets: "ollama", "openrouter", and "opencode-go".
 # Overridden by: --provider flag, RAVEN_PROVIDER env var.
 #provider = "ollama"
 
@@ -104,6 +104,17 @@ base_url = "https://openrouter.ai/api/v1"
 default_model = "x-ai/grok-4.5"
 # api_key_env = "OPENROUTER_API_KEY"
 
+[providers.opencode-go]
+# Built-in default: https://opencode.ai/zen/go/v1
+# OpenCode Go subscription ($5 first month, then $10/mo) — OpenAI-compatible
+# models only. See https://opencode.ai/docs/go and
+# https://opencode.ai/zen/go/v1/models for the current model list.
+# e.g. deepseek-v4-flash, deepseek-v4-pro, glm-5.2, kimi-k3, mimo-v2.5,
+# qwen3.8-max, minimax-m3
+base_url = "https://opencode.ai/zen/go/v1"
+default_model = "deepseek-v4-flash"
+# api_key_env = "OPENCODE_GO_API_KEY"
+
 # --- Adding a brand-new provider (example: Groq) ----------------------------
 # The endpoint MUST speak OpenAI-compatible /v1/chat/completions. Native APIs
 # with a different wire format need a proxy/gateway first.
@@ -119,8 +130,8 @@ default_model = "x-ai/grok-4.5"
 # 1. Config-file api_key on that provider (if set — NOT overridden by env)
 # 2. RAVEN_API_KEY (universal override, works for all providers)
 # 3. The provider's declared api_key_env, or built-in mapping
-#    (OPENROUTER_API_KEY / OLLAMA_API_KEY), else a conventional
-#    {NAME}_API_KEY (e.g. GROQ_API_KEY for a provider named "groq")
+#    (OPENROUTER_API_KEY / OLLAMA_API_KEY / OPENCODE_GO_API_KEY), else a
+#    conventional {NAME}_API_KEY (e.g. GROQ_API_KEY for a provider named "groq")
 # 4. None (public/local-only endpoints)
 #
 # Prefer the provider-scoped env var over a config-file api_key so the secret

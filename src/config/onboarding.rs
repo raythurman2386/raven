@@ -61,6 +61,16 @@ pub fn fallback_models(provider_name: &str) -> Vec<String> {
             "glm-5.2:cloud".into(),
         ],
         "openrouter" => vec!["x-ai/grok-4.5".into(), "x-ai/grok-4.6".into()],
+        // OpenCode Go models, from the OpenAI-style /zen/go/v1/models list.
+        "opencode-go" => vec![
+            "deepseek-v4-flash".into(),
+            "deepseek-v4-pro".into(),
+            "glm-5.2".into(),
+            "kimi-k3".into(),
+            "mimo-v2.5".into(),
+            "qwen3.8-max".into(),
+            "minimax-m3".into(),
+        ],
         // Custom OpenAI-compatible endpoints: suggest a sensible OpenAI-model
         // default so the user always has a starting point, then let them type
         // the exact model id their endpoint exposes.
@@ -107,6 +117,7 @@ pub fn build_env_file(api_key: Option<String>, provider_name: &str) -> String {
     let var = match provider_name {
         "openrouter" => "OPENROUTER_API_KEY",
         "ollama" => "OLLAMA_API_KEY",
+        "opencode-go" => "OPENCODE_GO_API_KEY",
         _ => "RAVEN_API_KEY",
     };
     format!("{var}={key}\n")
@@ -414,6 +425,15 @@ mod tests3 {
     }
 
     #[test]
+    fn fallback_models_opencode_go() {
+        let m = fallback_models("opencode-go");
+        assert!(m.contains(&"deepseek-v4-flash".to_string()));
+        assert!(m.contains(&"glm-5.2".to_string()));
+        assert!(m.contains(&"qwen3.8-max".to_string()));
+        assert!(m.contains(&"minimax-m3".to_string()));
+    }
+
+    #[test]
     fn fallback_models_custom() {
         let m = fallback_models("acme");
         assert!(m.contains(&"gpt-4o".to_string()));
@@ -446,6 +466,8 @@ mod tests4 {
         assert!(build_env_file(Some("sk-or-abc".into()), "openrouter")
             .contains("OPENROUTER_API_KEY=sk-or-abc"));
         assert!(build_env_file(Some("sk-x".into()), "ollama").contains("OLLAMA_API_KEY=sk-x"));
+        assert!(build_env_file(Some("sk-ocg".into()), "opencode-go")
+            .contains("OPENCODE_GO_API_KEY=sk-ocg"));
         assert!(build_env_file(Some("sk-c".into()), "acme").contains("RAVEN_API_KEY=sk-c"));
         assert!(build_env_file(None, "ollama").is_empty());
     }

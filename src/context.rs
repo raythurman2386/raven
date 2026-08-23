@@ -66,6 +66,7 @@ pub async fn fetch_context_window(provider: &crate::config::Provider, model: &st
     let host = base_url.to_ascii_lowercase();
     let looks_cloud = [
         "openrouter.ai",
+        "opencode.ai",
         "api.openai.com",
         "api.x.ai",
         "api.anthropic.com",

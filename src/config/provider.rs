@@ -49,6 +49,15 @@ impl Provider {
                 api_key_env: Some("OPENROUTER_API_KEY".into()),
                 default_model: "x-ai/grok-4.5".into(),
             }),
+            "opencode-go" => Some(Provider {
+                name: name.into(),
+                // OpenAI-compatible chat completions root (Raven appends
+                // /chat/completions). See https://opencode.ai/zen/go/v1/models
+                base_url: "https://opencode.ai/zen/go/v1".into(),
+                api_key: None,
+                api_key_env: Some("OPENCODE_GO_API_KEY".into()),
+                default_model: "deepseek-v4-flash".into(),
+            }),
             _ => None,
         }
     }
@@ -64,6 +73,9 @@ impl Provider {
         match self.name.as_str() {
             "openrouter" => Cow::Borrowed("OPENROUTER_API_KEY"),
             "ollama" => Cow::Borrowed("OLLAMA_API_KEY"),
+            // Explicit arm required: the conventional fallback would produce
+            // OPENCODE-GO_API_KEY (invalid env var — hyphen in the name).
+            "opencode-go" => Cow::Borrowed("OPENCODE_GO_API_KEY"),
             other => Cow::Owned(format!("{}_API_KEY", other.to_uppercase())),
         }
     }
@@ -172,7 +184,7 @@ pub fn resolve_provider(cfg: &ConfigFile, explicit: Option<String>) -> Provider 
 /// Built-in presets are always included; config-declared names are merged in.
 pub fn known_provider_names(cfg: &ConfigFile) -> Vec<String> {
     let mut names: Vec<String> = cfg.providers.keys().cloned().collect();
-    for builtin in ["ollama", "openrouter"] {
+    for builtin in ["ollama", "openrouter", "opencode-go"] {
         if !names.iter().any(|n| n == builtin) {
             names.push(builtin.to_string());
         }
@@ -206,6 +218,15 @@ mod tests {
         assert_eq!(or.default_model, "x-ai/grok-4.5");
         assert!(
             or.api_key.is_none(),
+            "key comes from env/config, not the preset"
+        );
+
+        let go = Provider::builtin("opencode-go").expect("opencode-go builtin");
+        assert_eq!(go.base_url, "https://opencode.ai/zen/go/v1");
+        assert_eq!(go.default_model, "deepseek-v4-flash");
+        assert_eq!(go.api_key_env.as_deref(), Some("OPENCODE_GO_API_KEY"));
+        assert!(
+            go.api_key.is_none(),
             "key comes from env/config, not the preset"
         );
     }
@@ -293,9 +314,11 @@ mod tests {
         let names = known_provider_names(&cfg);
         assert!(names.contains(&"ollama".into()));
         assert!(names.contains(&"openrouter".into()));
+        assert!(names.contains(&"opencode-go".into()));
         assert!(names.contains(&"acme".into()));
         assert!(is_known_provider(&cfg, "acme"));
         assert!(is_known_provider(&cfg, "ollama"));
+        assert!(is_known_provider(&cfg, "opencode-go"));
         assert!(!is_known_provider(&cfg, "nope"));
     }
 
@@ -333,6 +356,8 @@ mod tests {
         assert_eq!(ollama.api_key_env.as_deref(), Some("OLLAMA_API_KEY"));
         let or = Provider::builtin("openrouter").expect("openrouter builtin");
         assert_eq!(or.api_key_env.as_deref(), Some("OPENROUTER_API_KEY"));
+        let go = Provider::builtin("opencode-go").expect("opencode-go builtin");
+        assert_eq!(go.api_key_env.as_deref(), Some("OPENCODE_GO_API_KEY"));
     }
 
     #[test]
@@ -383,6 +408,15 @@ mod tests {
             default_model: "llama-3.3-70b-versatile".into(),
         };
         assert_eq!(p.key_env_var().as_ref(), "GROQ_API_KEY");
+    }
+
+    #[test]
+    fn opencode_go_key_env_not_hyphenated() {
+        // The provider name contains a hyphen, so the conventional fallback
+        // would yield the invalid env var OPENCODE-GO_API_KEY. The explicit
+        // builtin arm must win and produce OPENCODE_GO_API_KEY.
+        let go = Provider::builtin("opencode-go").expect("opencode-go builtin");
+        assert_eq!(go.key_env_var().as_ref(), "OPENCODE_GO_API_KEY");
     }
 
     #[test]

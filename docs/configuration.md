@@ -14,6 +14,7 @@ See the [root README quick start](../README.md#quick-start) for the full flag li
 | `RAVEN_API_KEY` | _(unset)_ | Universal Bearer token override for the active provider |
 | `OPENROUTER_API_KEY` | _(unset)_ | Bearer token for the `openrouter` provider |
 | `OLLAMA_API_KEY` | _(unset)_ | Bearer token for the `ollama` provider (Ollama Cloud / authenticated hosts) |
+| `OPENCODE_GO_API_KEY` | _(unset)_ | Bearer token for the `opencode-go` provider (OpenCode Go subscription) |
 | `RAVEN_MAX_ITER` / `OG_MAX_ITER` | `30` | Max agent iterations per run |
 | `RAVEN_CONTEXT_WINDOW` / `OG_CONTEXT_WINDOW` | _(inferred)_ | Override the model's context window size (tokens) |
 | `RAVEN_COMPACT_THRESHOLD` / `OG_COMPACT_THRESHOLD` | `0.75` | Fraction of usable context at which compaction triggers |
@@ -58,6 +59,7 @@ Two providers ship built in (no config needed):
 |---|---|---|
 | `ollama` | `http://localhost:11434/v1` | `qwen3.8:latest` |
 | `openrouter` | `https://openrouter.ai/api/v1` | `x-ai/grok-4.5` |
+| `opencode-go` | `https://opencode.ai/zen/go/v1` | `deepseek-v4-flash` |
 
 ### Declaring providers
 
@@ -99,8 +101,27 @@ default_model = "llama-3.3-70b-versatile"
 ```
 
 If `api_key_env` is omitted, raven falls back to the built-in mapping for
-known providers (`OPENROUTER_API_KEY` / `OLLAMA_API_KEY`), then a conventional
+known providers (`OPENROUTER_API_KEY` / `OLLAMA_API_KEY` /
+`OPENCODE_GO_API_KEY`), then a conventional
 `{NAME}_API_KEY` (e.g. `GROQ_API_KEY` for a provider named `groq`).
+
+### OpenCode Go
+
+[OpenCode Go](https://opencode.ai/docs/go) is a low-cost subscription
+($5 first month, then $10/mo) for tested open coding models, served from an
+OpenAI-compatible endpoint. It's a built-in preset, so no config is required:
+
+```bash
+export OPENCODE_GO_API_KEY="your-go-key"
+raven --provider opencode-go -m glm-5.2 -p "..."
+```
+
+Models come from the OpenAI-style `https://opencode.ai/zen/go/v1/models`
+list (e.g. `deepseek-v4-flash`, `deepseek-v4-pro`, `glm-5.2`, `kimi-k3`,
+`mimo-v2.5`, `qwen3.8-max`, `minimax-m3`). Usage is dollar-bounded (about
+$12 / 5h, $30 / week, $60 / month) — raven surfaces those as normal HTTP
+429/402 errors. `/model` autocomplete lists all models returned by the
+live `/models` endpoint.
 
 ### Selecting the active provider
 
