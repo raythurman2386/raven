@@ -650,3 +650,166 @@ async fn capabilities_advertise_set_capability() {
     let caps = agent_capabilities();
     assert!(caps["sessionCapabilities"]["set"].is_object());
 }
+
+#[tokio::test]
+async fn set_config_option_switches_provider_and_model() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().canonicalize().unwrap();
+    let server = Arc::new(Mutex::new(test_server(&ws)));
+    let buf = Arc::new(StdMutex::new(Vec::new()));
+    let writer: Arc<Mutex<dyn FrameWrite>> = Arc::new(Mutex::new(BufWriter { buf: buf.clone() }));
+
+    send(
+        &server,
+        &writer,
+        req(1, "initialize", json!({"protocolVersion": 1})),
+    )
+    .await;
+    send(
+        &server,
+        &writer,
+        req(
+            2,
+            "session/new",
+            json!({"cwd": ws.display().to_string(), "mcpServers": []}),
+        ),
+    )
+    .await;
+    let sid = frames_from(&buf)[1]["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Switch to an opencode-go model via session/set_config_option (model id).
+    send(
+        &server,
+        &writer,
+        req(
+            3,
+            "session/set_config_option",
+            json!({"sessionId": sid, "configId": "model", "value": "opencode-go/deepseek-v4-flash"}),
+        ),
+    )
+    .await;
+    assert!(frames_from(&buf)[2]["result"].is_object());
+
+    // resume returns configOptions whose currentValue reflects the switch.
+    send(
+        &server,
+        &writer,
+        req(4, "session/resume", json!({"sessionId": sid})),
+    )
+    .await;
+    let frames = frames_from(&buf);
+    let opts = frames[3]["result"]["configOptions"].as_array().unwrap();
+    let model = opts.iter().find(|o| o["id"] == "model").unwrap();
+    assert_eq!(model["currentValue"], "opencode-go/deepseek-v4-flash");
+}
+
+#[tokio::test]
+async fn set_config_option_rejects_unknown_option_and_missing_value() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().canonicalize().unwrap();
+    let server = Arc::new(Mutex::new(test_server(&ws)));
+    let buf = Arc::new(StdMutex::new(Vec::new()));
+    let writer: Arc<Mutex<dyn FrameWrite>> = Arc::new(Mutex::new(BufWriter { buf: buf.clone() }));
+
+    send(
+        &server,
+        &writer,
+        req(1, "initialize", json!({"protocolVersion": 1})),
+    )
+    .await;
+    send(
+        &server,
+        &writer,
+        req(
+            2,
+            "session/new",
+            json!({"cwd": ws.display().to_string(), "mcpServers": []}),
+        ),
+    )
+    .await;
+    let sid = frames_from(&buf)[1]["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    send(
+        &server,
+        &writer,
+        req(
+            3,
+            "session/set_config_option",
+            json!({"sessionId": sid, "configId": "bogus", "value": "x"}),
+        ),
+    )
+    .await;
+    send(
+        &server,
+        &writer,
+        req(
+            4,
+            "session/set_config_option",
+            json!({"sessionId": sid, "configId": "model"}),
+        ),
+    )
+    .await;
+    let frames = frames_from(&buf);
+    assert_eq!(frames[2]["error"]["code"], -32602);
+    assert_eq!(frames[3]["error"]["code"], -32602);
+}
+
+#[tokio::test]
+async fn set_model_with_provider_qualifier_switches_provider() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().canonicalize().unwrap();
+    let server = Arc::new(Mutex::new(test_server(&ws)));
+    let buf = Arc::new(StdMutex::new(Vec::new()));
+    let writer: Arc<Mutex<dyn FrameWrite>> = Arc::new(Mutex::new(BufWriter { buf: buf.clone() }));
+
+    send(
+        &server,
+        &writer,
+        req(1, "initialize", json!({"protocolVersion": 1})),
+    )
+    .await;
+    send(
+        &server,
+        &writer,
+        req(
+            2,
+            "session/new",
+            json!({"cwd": ws.display().to_string(), "mcpServers": []}),
+        ),
+    )
+    .await;
+    let sid = frames_from(&buf)[1]["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Legacy session/set_model with a provider-qualified id also switches.
+    send(
+        &server,
+        &writer,
+        req(
+            3,
+            "session/set_model",
+            json!({"sessionId": sid, "model": "opencode-go/glm-5.2"}),
+        ),
+    )
+    .await;
+    assert!(frames_from(&buf)[2]["result"].is_object());
+
+    send(
+        &server,
+        &writer,
+        req(4, "session/resume", json!({"sessionId": sid})),
+    )
+    .await;
+    let frames = frames_from(&buf);
+    let opts = frames[3]["result"]["configOptions"].as_array().unwrap();
+    let model = opts.iter().find(|o| o["id"] == "model").unwrap();
+    assert_eq!(model["currentValue"], "opencode-go/glm-5.2");
+}

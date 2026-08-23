@@ -208,7 +208,8 @@ pub async fn dispatch(
             "session/list" => on_session_list(&srv, &id, &params),
             "session/close" => on_session_close(&mut srv, &id, &params),
             "session/set_mode" => on_set_mode(&mut srv, &id, &params),
-            "session/set_model" => on_set_model(&mut srv, &id, &params),
+            "session/set_model" => on_set_model(&mut srv, &id, &params).await,
+            "session/set_config_option" => on_set_config_option(&mut srv, &id, &params).await,
             _ => error_msg(
                 Some(&id),
                 error_code::METHOD_NOT_FOUND,
@@ -369,8 +370,17 @@ async fn on_session_resume(srv: &mut AcpServer, id: &Value, params: &Value) -> V
         }
     };
     if srv.sessions.contains_key(&sid) {
-        let mode = srv.sessions[&sid].settings.mode.label().to_string();
-        return result_msg(id, json!({"modes": session_modes(&mode)}));
+        let sess = &srv.sessions[&sid];
+        let mode = sess.settings.mode.label().to_string();
+        let current_value = format!("{}/{}", sess.settings.provider.name, sess.settings.model);
+        let config_options = build_config_options(srv.cfg.clone(), current_value).await;
+        return result_msg(
+            id,
+            json!({
+                "modes": session_modes(&mode),
+                "configOptions": [config_options]
+            }),
+        );
     }
     let cwd = params.get("cwd").and_then(|v| v.as_str()).unwrap_or("");
     let settings = if cwd.is_empty() {
@@ -491,7 +501,45 @@ fn on_set_mode(srv: &mut AcpServer, id: &Value, params: &Value) -> Value {
     }
 }
 
-fn on_set_model(srv: &mut AcpServer, id: &Value, params: &Value) -> Value {
+/// Apply a `provider/model` (or plain `model`) selection to a live session's
+/// settings. When the value starts with a known provider name followed by `/`,
+/// the session switches onto that provider (re-resolving endpoint/key) and
+/// sets the model; otherwise the value is treated as a model on the current
+/// provider. Re-fetches the context window for the new model and persists the
+/// model change. Returns `Ok(())` or an error message for the wire.
+async fn apply_model_selection(srv: &mut AcpServer, sid: &str, value: &str) -> Result<(), String> {
+    let sess = srv
+        .sessions
+        .get_mut(sid)
+        .ok_or_else(|| "unknown session".to_string())?;
+
+    // Split `<provider>/<model>`. Only treat the prefix as a provider when it
+    // is a known provider name; otherwise the whole value is a model on the
+    // current provider.
+    if let Some((provider_name, model)) = value.split_once('/') {
+        if crate::config::is_known_provider(&srv.cfg, provider_name) {
+            let new_provider =
+                crate::config::resolve_provider(&srv.cfg, Some(provider_name.to_string()));
+            sess.settings.provider = new_provider;
+            sess.settings.model = model.to_string();
+        } else {
+            sess.settings.model = value.to_string();
+        }
+    } else {
+        sess.settings.model = value.to_string();
+    }
+
+    // Re-fetch the context window for the (possibly switched) provider/model.
+    sess.settings.context_window =
+        crate::context::fetch_context_window(&sess.settings.provider, &sess.settings.model).await;
+    sess.settings.max_tokens = Settings::derived_max_tokens(sess.settings.context_window);
+    let _ = sess
+        .store
+        .update_model(&mut sess.persisted, &sess.settings.model);
+    Ok(())
+}
+
+async fn on_set_model(srv: &mut AcpServer, id: &Value, params: &Value) -> Value {
     let sid = match params.get("sessionId").and_then(|v| v.as_str()) {
         Some(s) => s.to_string(),
         None => {
@@ -508,12 +556,49 @@ fn on_set_model(srv: &mut AcpServer, id: &Value, params: &Value) -> Value {
             return error_msg(Some(id), error_code::INVALID_PARAMS, "model is required");
         }
     };
-    match srv.sessions.get_mut(&sid) {
-        Some(sess) => {
-            sess.settings.model = model;
-            result_msg(id, json!({}))
+    match apply_model_selection(srv, &sid, &model).await {
+        Ok(()) => result_msg(id, json!({})),
+        Err(e) => error_msg(Some(id), error_code::INVALID_PARAMS, &e),
+    }
+}
+
+/// Handle `session/set_config_option`. Supports the `model` select option
+/// (value is a `provider/model` id); other option ids are rejected.
+async fn on_set_config_option(srv: &mut AcpServer, id: &Value, params: &Value) -> Value {
+    let sid = match params.get("sessionId").and_then(|v| v.as_str()) {
+        Some(s) => s.to_string(),
+        None => {
+            return error_msg(
+                Some(id),
+                error_code::INVALID_PARAMS,
+                "sessionId is required",
+            );
         }
-        None => error_msg(Some(id), error_code::INVALID_PARAMS, "unknown session"),
+    };
+    let config_id = params
+        .get("configId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if config_id != "model" {
+        return error_msg(
+            Some(id),
+            error_code::INVALID_PARAMS,
+            &format!("unknown config option: {config_id}"),
+        );
+    }
+    let value = match params.get("value").and_then(|v| v.as_str()) {
+        Some(v) if !v.trim().is_empty() => v.to_string(),
+        _ => {
+            return error_msg(
+                Some(id),
+                error_code::INVALID_PARAMS,
+                "value is required for config option 'model'",
+            );
+        }
+    };
+    match apply_model_selection(srv, &sid, &value).await {
+        Ok(()) => result_msg(id, json!({})),
+        Err(e) => error_msg(Some(id), error_code::INVALID_PARAMS, &e),
     }
 }
 
