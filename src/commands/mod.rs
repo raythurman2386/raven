@@ -113,6 +113,12 @@ pub fn commands() -> Vec<CommandSpec> {
             summary: "Show the max iteration budget, or set it: /loop <N>",
             arg_help: Some("[N]"),
         },
+        CommandSpec {
+            name: "steer",
+            aliases: &[],
+            summary: "Redirect the running agent: /steer <message> (restarts the turn with your direction appended)",
+            arg_help: Some("<message>"),
+        },
     ]
 }
 

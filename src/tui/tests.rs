@@ -941,6 +941,116 @@ async fn loop_command_rejects_invalid_counts() {
     );
 }
 
+#[tokio::test]
+async fn steer_restarts_running_turn_with_direction() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = SessionStore::for_workspace(tmp.path()).unwrap();
+    let mut session = store.create("gemma4:latest").unwrap();
+    let mut settings = test_settings(tmp.path());
+    let mut compact_at = 128_000 - 128_000 / 8;
+    let mut state = dummy_state();
+
+    state.last_turn = Some((Vec::new(), "implement auth".into(), false));
+    state.running = true;
+    // Give the running turn a fake handle + receiver so we can observe it
+    // being aborted and replaced.
+    let (_tx, rx) = mpsc::channel::<AgentEvent>(8);
+    state.event_rx = Some(rx);
+    state.task_handle = Some(tokio::spawn(async { Ok::<_, anyhow::Error>(Vec::new()) }));
+
+    let pc = commands::parse("/steer use a token store").unwrap();
+    let handled = dispatch::dispatch_slash_command(
+        &mut state,
+        &pc,
+        &mut settings,
+        &store,
+        &mut session,
+        &mut compact_at,
+        &ConfigFile::default(),
+    )
+    .await
+    .unwrap();
+
+    assert!(handled);
+    assert!(state.running, "steer restarts into a running turn");
+    // The old turn was aborted and a fresh handle spawned.
+    assert!(state.task_handle.is_some());
+}
+
+#[tokio::test]
+async fn steer_requires_message() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = SessionStore::for_workspace(tmp.path()).unwrap();
+    let mut session = store.create("gemma4:latest").unwrap();
+    let mut settings = test_settings(tmp.path());
+    let mut compact_at = 128_000 - 128_000 / 8;
+    let mut state = dummy_state();
+    state.last_turn = Some((Vec::new(), "implement auth".into(), false));
+    state.running = true;
+
+    let pc = commands::parse("/steer").unwrap();
+    let handled = dispatch::dispatch_slash_command(
+        &mut state,
+        &pc,
+        &mut settings,
+        &store,
+        &mut session,
+        &mut compact_at,
+        &ConfigFile::default(),
+    )
+    .await
+    .unwrap();
+
+    assert!(handled);
+    assert!(
+        state.running,
+        "running turn must be left alone on empty steer"
+    );
+    assert!(
+        state.blocks.iter().any(|b| match b {
+            BlockKind::System(s) => s.text().contains("/steer <message>"),
+            _ => false,
+        }),
+        "should prompt for a message"
+    );
+}
+
+#[tokio::test]
+async fn steer_without_prior_turn_errors() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = SessionStore::for_workspace(tmp.path()).unwrap();
+    let mut session = store.create("gemma4:latest").unwrap();
+    let mut settings = test_settings(tmp.path());
+    let mut compact_at = 128_000 - 128_000 / 8;
+    let mut state = dummy_state();
+
+    let pc = commands::parse("/steer do x").unwrap();
+    let handled = dispatch::dispatch_slash_command(
+        &mut state,
+        &pc,
+        &mut settings,
+        &store,
+        &mut session,
+        &mut compact_at,
+        &ConfigFile::default(),
+    )
+    .await
+    .unwrap();
+
+    assert!(handled);
+    assert!(
+        !state.running,
+        "no turn should start without a prior prompt"
+    );
+    assert!(
+        state.blocks.iter().any(|b| match b {
+            BlockKind::System(s) => s.text().contains("nothing to steer"),
+            _ => false,
+        }),
+        "should report nothing to steer"
+    );
+}
+
 #[test]
 fn opencode_go_models_autocomplete() {
     // The provider-aware fallback must surface opencode-go models even when

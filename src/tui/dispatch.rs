@@ -16,7 +16,7 @@ use crate::config::Settings;
 use crate::session::{Session, SessionStore};
 
 use super::blocks::BlockKind;
-use super::{begin_agent_turn, theme_name, AgentState, Theme, TuiState};
+use super::{abort_current_turn, begin_agent_turn, theme_name, AgentState, Theme, TuiState};
 
 /// Dispatch a parsed slash command, mutating TUI state as needed.
 ///
@@ -270,6 +270,43 @@ pub(super) async fn dispatch_slash_command(
                     }
                 }
             }
+        }
+        "steer" => {
+            let msg = pc.args.trim();
+            if msg.is_empty() {
+                state.push_system("/steer <message>");
+                state.log_dirty = true;
+                return Ok(true);
+            }
+            let Some((preload, prompt, read_only)) = state.last_turn.clone() else {
+                state.push_system("nothing to steer — send a task first");
+                state.log_dirty = true;
+                return Ok(true);
+            };
+            if state.running {
+                abort_current_turn(state);
+            }
+            // Restart the turn with the direction appended, preserving all
+            // prior context so the model picks up mid-task with the new
+            // instruction.
+            let steer_prompt = format!("{prompt}\n\n[steer] {msg}");
+            state.running = true;
+            state.status = "running…".into();
+            state.messages_dirty = true;
+            state.assistant_text.clear();
+            begin_agent_turn(
+                state,
+                settings.clone(),
+                preload,
+                steer_prompt,
+                move |agent| {
+                    if read_only {
+                        agent.plan_only()
+                    } else {
+                        agent
+                    }
+                },
+            );
         }
         "theme" => {
             let name = pc.args.trim();
