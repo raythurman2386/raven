@@ -742,3 +742,81 @@ async fn eval_suite_claims_tests_passed_without_run_tests_still_gates() {
         "claiming tests passed in text must not skip the verify gate"
     );
 }
+
+/// Large tool output is capped: default `read_file` reports the true line
+/// count and does not return the tail of an 800-line file.
+#[tokio::test]
+async fn eval_suite_large_tool_output_is_capped() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    let mut body = String::from("pub const HEAD: &str = \"MARKER_HEAD_alpha\";\n");
+    for i in 0..800 {
+        body.push_str(&format!("// filler line {i:04} padding padding padding\n"));
+    }
+    body.push_str("pub const TAIL: &str = \"MARKER_TAIL_omega\";\n");
+    std::fs::write(src.join("big.rs"), &body).unwrap();
+
+    let mut agent = Agent::new(settings_for(tmp.path()))
+        .unwrap()
+        .with_completion_source(scripted(vec![
+            sse_tool_call("r1", "read_file", r#"{"path":"src/big.rs"}"#),
+            sse_text("Read the file."),
+        ]));
+    let (tx, mut rx) = mpsc::channel(64);
+    agent.run("read big.rs", tx).await.unwrap();
+    let events = drain(&mut rx).await;
+
+    let preview = events.iter().find_map(|e| match e {
+        AgentEvent::ToolEnd { name, preview } if name == "read_file" => Some(preview.clone()),
+        _ => None,
+    });
+    let preview = preview.expect("read_file should run");
+    assert!(
+        preview.contains("of 802") || preview.contains("of 801") || preview.contains("lines 1-400"),
+        "default read should report the real size / a 400-line window: {preview}"
+    );
+    assert!(
+        !preview.contains("MARKER_TAIL_omega"),
+        "default 400-line window must not include the tail marker: {preview}"
+    );
+}
+
+/// Same-file serial edits in one turn both land (no lost write).
+#[tokio::test]
+async fn eval_suite_same_file_two_edits_both_land() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(
+        src.join("lib.rs"),
+        "pub fn double(n: i32) -> i32 { n }\npub fn triple(n: i32) -> i32 { n }\n",
+    )
+    .unwrap();
+
+    let two_edits = format!(
+        "data: {{\"choices\":[{{\"delta\":{{\"tool_calls\":[{{\"index\":0,\"id\":{},\"type\":\"function\",\"function\":{{\"name\":\"search_replace\",\"arguments\":{}}}}}]}}}}]}}\n\n\
+         data: {{\"choices\":[{{\"delta\":{{\"tool_calls\":[{{\"index\":1,\"id\":{},\"type\":\"function\",\"function\":{{\"name\":\"search_replace\",\"arguments\":{}}}}}]}}}}]}}\n\n\
+         data: [DONE]\n\n",
+        json!("e1"),
+        json!(r#"{"path":"src/lib.rs","old_string":"pub fn double(n: i32) -> i32 { n }","new_string":"pub fn double(n: i32) -> i32 { n * 2 }"}"#),
+        json!("e2"),
+        json!(r#"{"path":"src/lib.rs","old_string":"pub fn triple(n: i32) -> i32 { n }","new_string":"pub fn triple(n: i32) -> i32 { n * 3 }"}"#),
+    );
+    let mut agent = Agent::new(settings_for(tmp.path()))
+        .unwrap()
+        .with_completion_source(scripted(vec![two_edits, sse_text("Edited both.")]));
+    let (tx, mut rx) = mpsc::channel(64);
+    agent.run("fix both", tx).await.unwrap();
+    let _ = drain(&mut rx).await;
+
+    let content = std::fs::read_to_string(src.join("lib.rs")).unwrap();
+    assert!(
+        content.contains("n * 2") || content.contains("n*2"),
+        "double edit lost: {content}"
+    );
+    assert!(
+        content.contains("n * 3") || content.contains("n*3"),
+        "triple edit lost: {content}"
+    );
+}

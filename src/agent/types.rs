@@ -61,6 +61,18 @@ pub enum AgentEvent {
     /// The turn edited files but did not call `run_tests` before finishing;
     /// the harness is re-running with a recovery reminder (enforced verify).
     VerifyRequired,
+    /// The harness auto-checkpointed dirty work (budget exhaustion).
+    Checkpoint {
+        /// Human-readable result (`committed — <HEAD line>`, skipped, failed).
+        summary: String,
+    },
+    /// A recovery patch was written because work could not be merged.
+    RecoveryPatch {
+        /// Workspace-relative path (e.g. `.raven/recovery-sub-0.patch`).
+        path: String,
+        /// Why the patch was written (merge conflict, merge error, …).
+        reason: String,
+    },
     /// The model asked the user a question mid-task. The consumer must render
     /// it and send the answer back over the included oneshot channel (or drop
     /// the sender to signal "no answer / dismissed").

@@ -309,6 +309,13 @@ async fn dirty_tree_guard_auto_commits_on_budget_exhaustion() {
         agent.sandbox.is_working_tree_clean(),
         "working tree should be clean after auto-commit"
     );
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            AgentEvent::Checkpoint { summary } if summary.contains("auto-checkpoint")
+        )),
+        "auto-checkpoint must be visible as an event"
+    );
 }
 
 /// Build an SSE body with multiple tool calls in one assistant turn.

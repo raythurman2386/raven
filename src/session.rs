@@ -263,11 +263,16 @@ impl SessionStore {
     /// This creates a reviewable artifact in `.raven/sessions/<id>/last.patch`
     /// without sending anything remotely; it is suitable for auditing or
     /// rollback decisions after a task completes.
-    pub fn snapshot_patch(&self, session: &Session) -> Result<()> {
+    ///
+    /// Returns `true` when a non-empty git diff was written (so callers can
+    /// tell the user where to find it). Empty trees and non-git workspaces
+    /// return `false` after still writing a marker/empty file.
+    pub fn snapshot_patch(&self, session: &Session) -> Result<bool> {
         let path = self.session_dir(&session.summary.id).join("last.patch");
         if !self.workspace.join(".git").exists() {
             let marker = "# no git repository detected; patch snapshot unavailable\n";
-            return write_atomic(&path, marker.as_bytes());
+            write_atomic(&path, marker.as_bytes())?;
+            return Ok(false);
         }
 
         let output = std::process::Command::new("git")
@@ -279,17 +284,23 @@ impl SessionStore {
             .output();
 
         match output {
-            Ok(out) if out.status.success() => write_atomic(&path, &out.stdout),
+            Ok(out) if out.status.success() => {
+                let nonempty = !out.stdout.is_empty();
+                write_atomic(&path, &out.stdout)?;
+                Ok(nonempty)
+            }
             Ok(out) => {
                 let mut msg = String::from("# git diff failed\n");
                 if !out.stderr.is_empty() {
                     msg.push_str(&String::from_utf8_lossy(&out.stderr));
                 }
-                write_atomic(&path, msg.as_bytes())
+                write_atomic(&path, msg.as_bytes())?;
+                Ok(false)
             }
             Err(e) => {
                 let msg = format!("# failed to snapshot patch: {e}\n");
-                write_atomic(&path, msg.as_bytes())
+                write_atomic(&path, msg.as_bytes())?;
+                Ok(false)
             }
         }
     }
@@ -586,6 +597,59 @@ mod tests {
             .filter(|e| e.file_name().to_string_lossy().contains(".tmp"))
             .collect();
         assert!(leftovers.is_empty(), "no temp files should remain");
+    }
+
+    #[test]
+    fn snapshot_patch_false_without_git() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = SessionStore::for_workspace(tmp.path()).unwrap();
+        let session = store.create("test-model").unwrap();
+        let wrote = store.snapshot_patch(&session).unwrap();
+        assert!(!wrote);
+        let patch = store.session_dir(&session.summary.id).join("last.patch");
+        let body = std::fs::read_to_string(&patch).unwrap();
+        assert!(body.contains("no git repository"));
+    }
+
+    #[test]
+    fn snapshot_patch_true_with_dirty_git() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(ws)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "t@t"])
+            .current_dir(ws)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "t"])
+            .current_dir(ws)
+            .output()
+            .unwrap();
+        std::fs::write(ws.join("a.txt"), "v1\n").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "a.txt"])
+            .current_dir(ws)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "seed"])
+            .current_dir(ws)
+            .output()
+            .unwrap();
+        std::fs::write(ws.join("a.txt"), "v2 dirty\n").unwrap();
+        let store = SessionStore::for_workspace(ws).unwrap();
+        let session = store.create("test-model").unwrap();
+        let wrote = store.snapshot_patch(&session).unwrap();
+        assert!(wrote, "dirty tree should produce a real patch");
+        let patch =
+            std::fs::read_to_string(store.session_dir(&session.summary.id).join("last.patch"))
+                .unwrap();
+        assert!(patch.contains("v2 dirty"), "{patch}");
     }
 
     #[test]

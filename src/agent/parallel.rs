@@ -2,6 +2,7 @@
 //! and merge their branches back.
 
 use anyhow::{Context, Result};
+use std::path::Path;
 use tokio::sync::mpsc;
 
 use crate::config::Settings;
@@ -168,6 +169,9 @@ pub async fn run_parallel(settings: &Settings, tasks: Vec<String>) -> Result<Vec
                     AgentEvent::Iteration(n) => {
                         eprintln!("[sub-agent {}] [iter {}]", i, n);
                     }
+                    AgentEvent::Checkpoint { summary } => {
+                        eprintln!("[sub-agent {}] {summary}", i);
+                    }
                     AgentEvent::Done | AgentEvent::Error(_) => break,
                     _ => {}
                 }
@@ -216,21 +220,13 @@ pub async fn run_parallel(settings: &Settings, tasks: Vec<String>) -> Result<Vec
                         || sandbox.has_merge_conflicts().unwrap_or(false) =>
                 {
                     let _ = sandbox.abort_merge();
-                    let patch_rel = format!(".raven/recovery-sub-{}.patch", i);
-                    match sandbox.branch_diff(branch_name) {
-                        Ok(diff) if !diff.trim().is_empty() => {
-                            let full_path = main_ws.join(&patch_rel);
-                            let _ = std::fs::create_dir_all(full_path.parent().unwrap());
-                            if let Err(e) = std::fs::write(&full_path, &diff) {
-                                tracing::warn!(
-                                    "failed to write recovery patch for sub-agent {}: {}",
-                                    i,
-                                    e
-                                );
-                            }
-                        }
-                        _ => {}
-                    }
+                    let patch_rel = persist_recovery_patch(
+                        &main_ws,
+                        *i,
+                        branch_name,
+                        sandbox,
+                        "merge conflict",
+                    );
                     conflicted.push((*i, branch_name.clone()));
                     tracing::warn!(
                         "merge conflict for sub-agent {} (branch {}), merge aborted; \
@@ -243,21 +239,9 @@ pub async fn run_parallel(settings: &Settings, tasks: Vec<String>) -> Result<Vec
                 }
                 Ok(_) => "merged".to_string(),
                 Err(e) => {
-                    let patch_rel = format!(".raven/recovery-sub-{}.patch", i);
-                    match sandbox.branch_diff(branch_name) {
-                        Ok(diff) if !diff.trim().is_empty() => {
-                            let full_path = main_ws.join(&patch_rel);
-                            let _ = std::fs::create_dir_all(full_path.parent().unwrap());
-                            if let Err(write_err) = std::fs::write(&full_path, &diff) {
-                                tracing::warn!(
-                                    "failed to write recovery patch for sub-agent {}: {}",
-                                    i,
-                                    write_err
-                                );
-                            }
-                        }
-                        _ => {}
-                    }
+                    let reason = format!("merge error: {e}");
+                    let patch_rel =
+                        persist_recovery_patch(&main_ws, *i, branch_name, sandbox, &reason);
                     tracing::warn!(
                         "merge error for sub-agent {} (branch {}): {}; \
                          recovery patch written to {}",
@@ -299,6 +283,8 @@ pub async fn run_parallel(settings: &Settings, tasks: Vec<String>) -> Result<Vec
             anyhow::bail!(
                 "merge conflicts detected for {} sub-agent(s): {}. \
                  The working tree has been restored to its pre-merge state. \
+                 Recovery patches are under `.raven/recovery-sub-*.patch` \
+                 (see `.raven/RECOVERY.md`). Apply with `git apply <patch>`. \
                  To avoid conflicts, assign disjoint files to each sub-agent.",
                 conflicted.len(),
                 names.join(", ")
@@ -311,4 +297,68 @@ pub async fn run_parallel(settings: &Settings, tasks: Vec<String>) -> Result<Vec
     }
 
     Ok(results)
+}
+
+/// Write a sub-agent's unmerged diff to `.raven/recovery-sub-N.patch` and
+/// append a line to `.raven/RECOVERY.md` so the artifact is findable after
+/// the CLI output has scrolled away.
+fn persist_recovery_patch(
+    workspace: &Path,
+    index: usize,
+    branch_name: &str,
+    sandbox: &Sandbox,
+    reason: &str,
+) -> String {
+    let rel = format!(".raven/recovery-sub-{index}.patch");
+    match sandbox.branch_diff(branch_name) {
+        Ok(diff) if !diff.trim().is_empty() => {
+            let full = workspace.join(&rel);
+            if let Some(parent) = full.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Err(e) = std::fs::write(&full, &diff) {
+                tracing::warn!("failed to write recovery patch for sub-agent {index}: {e}");
+            } else {
+                append_recovery_index(workspace, index, &rel, reason);
+            }
+        }
+        _ => {}
+    }
+    rel
+}
+
+fn append_recovery_index(workspace: &Path, index: usize, rel: &str, reason: &str) {
+    let path = workspace.join(".raven").join("RECOVERY.md");
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let mut body = std::fs::read_to_string(&path).unwrap_or_else(|_| {
+        "# Raven recovery\n\nSub-agent work that could not be merged is preserved here.\n\n".into()
+    });
+    body.push_str(&format!(
+        "- sub-agent {index}: {reason}\n  - patch: `{rel}`\n  - apply: `git apply {rel}`\n"
+    ));
+    if let Err(e) = std::fs::write(&path, body) {
+        tracing::warn!("failed to update .raven/RECOVERY.md: {e}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn append_recovery_index_creates_markdown() {
+        let tmp = tempfile::tempdir().unwrap();
+        append_recovery_index(
+            tmp.path(),
+            0,
+            ".raven/recovery-sub-0.patch",
+            "merge conflict",
+        );
+        let md = std::fs::read_to_string(tmp.path().join(".raven/RECOVERY.md")).unwrap();
+        assert!(md.contains("sub-agent 0"));
+        assert!(md.contains("git apply .raven/recovery-sub-0.patch"));
+        assert!(md.contains("merge conflict"));
+    }
 }

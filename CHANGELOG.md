@@ -31,6 +31,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   [session-id]` write a local Markdown + JSON bundle (plus `last.patch`
   when present) under `.raven/exports/<id>/` by default. Nothing is sent
   off-machine.
+- **Visible auto-checkpoints and recovery patches** — budget-exhaustion
+  checkpoints emit a `Checkpoint` event (TUI `✓ …`, headless `[auto-checkpoint
+  committed — …]`). Parallel merge failures write `.raven/recovery-sub-N.patch`
+  plus `.raven/RECOVERY.md` with `git apply` instructions. TUI turns that
+  produce a git diff announce `diff snapshot → .raven/sessions/<id>/last.patch`.
+- **Eval cases** `14_large_tool_output` (paged `read_file` must see the tail)
+  and `15_windows_fs_edge` (file-tool confinement on Windows; skipped on
+  other OSes). Layer A covers large-output capping, same-file serial edits,
+  and checkpoint-event visibility.
 
 ### Changed
 

@@ -271,6 +271,13 @@ the TUI. It runs `git reset --soft HEAD~1`, which undoes the commit while
 **keeping all changes in the working tree** — nothing is lost, and you can
 re-commit once the agent's next move is clearer.
 
+When the iteration budget is exhausted with a dirty tree, Raven auto-commits a
+harness checkpoint and prints a `✓ auto-checkpoint committed — …` line (TUI
+and headless). If a parallel sub-agent cannot merge, a recovery patch is
+written to `.raven/recovery-sub-N.patch` and indexed in `.raven/RECOVERY.md`
+(`git apply .raven/recovery-sub-N.patch`). After each TUI turn that produced
+a git diff, a snapshot is saved to `.raven/sessions/<id>/last.patch`.
+
 ### Long-horizon task management (`goal_set`, `todo_write`, `delegate_task`, `think`)
 
 For multi-step tasks, Raven keeps the agent on track with persistent state and

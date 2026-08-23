@@ -437,15 +437,22 @@ impl Agent {
         // wrapping up with a toolless summary, check whether the working tree
         // is dirty. If it is, force a direct git_commit so verified-but-
         // uncommitted work is never left in a dirty tree — a silent correctness
-        // hazard for unattended loops (issue #127, #140).
-        if !self.sandbox.is_working_tree_clean() {
-            let _ = self
-                .sandbox
-                .git_commit_checkpoint("checkpoint: auto-commit before budget exhaustion");
-        }
+        // hazard for unattended loops (issue #127, #140). Surface the result
+        // so the user can find the checkpoint instead of guessing.
+        self.auto_checkpoint(&tx, "checkpoint: auto-commit before budget exhaustion")
+            .await;
 
         self.finish_with_summary(&tx).await?;
         Ok(())
+    }
+
+    /// Commit dirty work as a harness checkpoint and emit [`AgentEvent::Checkpoint`].
+    async fn auto_checkpoint(&self, tx: &mpsc::Sender<AgentEvent>, message: &str) {
+        if self.sandbox.is_working_tree_clean() {
+            return;
+        }
+        let summary = describe_checkpoint(self.sandbox.git_commit_checkpoint(message));
+        let _ = tx.send(AgentEvent::Checkpoint { summary }).await;
     }
 
     /// Run one iteration of the agent loop.
@@ -844,6 +851,26 @@ impl Agent {
     }
 }
 
+/// Turn a checkpoint commit result into a one-line user-visible summary.
+fn describe_checkpoint(out: anyhow::Result<String>) -> String {
+    match out {
+        Ok(s) if s.starts_with("Error:") || s.contains("refused") => {
+            let first = s.lines().next().unwrap_or(&s);
+            format!("auto-checkpoint skipped — {first}")
+        }
+        Ok(s) if s.contains("No changes") => "auto-checkpoint: working tree already clean".into(),
+        Ok(s) => {
+            let head = s
+                .lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty() && !l.starts_with("exit="))
+                .unwrap_or("committed");
+            format!("auto-checkpoint committed — {head}")
+        }
+        Err(e) => format!("auto-checkpoint failed — {e}"),
+    }
+}
+
 /// Serialize chat messages for the wire format.
 ///
 /// Assistant messages that only carry `tool_calls` omit `content` in our
@@ -867,6 +894,42 @@ fn request_messages_json(messages: &[ChatMessage]) -> Value {
             })
             .collect(),
     )
+}
+
+#[cfg(test)]
+mod checkpoint_tests {
+    use super::describe_checkpoint;
+
+    #[test]
+    fn describe_checkpoint_committed() {
+        let s = describe_checkpoint(Ok(
+            "abc1234 checkpoint: auto-commit before budget exhaustion\n".into(),
+        ));
+        assert!(s.starts_with("auto-checkpoint committed"));
+        assert!(s.contains("abc1234"));
+    }
+
+    #[test]
+    fn describe_checkpoint_refused() {
+        let s = describe_checkpoint(Ok(
+            "Error: git_commit refused — possible secrets detected in staged changes:\n  a.rs: AWS access key ID\n".into(),
+        ));
+        assert!(s.starts_with("auto-checkpoint skipped"));
+        assert!(s.contains("refused"));
+        assert!(!s.contains("AKIATEST"));
+    }
+
+    #[test]
+    fn describe_checkpoint_clean() {
+        let s = describe_checkpoint(Ok("No changes to commit (working tree clean)".into()));
+        assert!(s.contains("already clean"));
+    }
+
+    #[test]
+    fn describe_checkpoint_err() {
+        let s = describe_checkpoint(Err(anyhow::anyhow!("io")));
+        assert!(s.starts_with("auto-checkpoint failed"));
+    }
 }
 
 #[cfg(test)]

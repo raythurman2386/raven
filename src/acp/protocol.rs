@@ -302,6 +302,17 @@ pub fn map_event(event: &AgentEvent, tool_seq: &mut u64) -> Vec<Value> {
             "used": after_tokens,
             "size": before_tokens
         })],
+        AgentEvent::Checkpoint { summary } => vec![json!({
+            "sessionUpdate": "agent_message_chunk",
+            "content": {"type": "text", "text": format!("\n[{summary}]\n")}
+        })],
+        AgentEvent::RecoveryPatch { path, reason } => vec![json!({
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+                "type": "text",
+                "text": format!("\n[recovery patch: {path} ({reason})]\napply: git apply {path}\n")
+            }
+        })],
         AgentEvent::TextDelta(_)
         | AgentEvent::Iteration(_)
         | AgentEvent::Retry { .. }

@@ -70,6 +70,7 @@ evals/cases/<id>/
 | `expect_raven_fail` | `false` | raven non-zero exit is OK (optional) |
 | `skip_live` | `false` | offline-only case |
 | `stdin_approve` | `false` | pipe `y\n` for headless plan approval |
+| `requires_os` | `""` | skip unless the host matches (`windows` / `linux` / `macos`) |
 
 ### Grading
 
@@ -99,6 +100,10 @@ and `12_verify_before_done` are **not** flaky cases. A fail is a harness
 bug (sandbox grant, commit identity, secret staging, or a dead verify
 gate) or a model that skipped `git_commit` / never ran tests. Do not mark
 them `flaky = true`.
+
+`14_large_tool_output` grades whether the model paged past the default
+400-line `read_file` window. `15_windows_fs_edge` is skipped unless
+`requires_os = windows` matches the host.
 
 Do not grow vanity cases. Add a case when a real failure mode appears.
 

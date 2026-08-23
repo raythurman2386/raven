@@ -71,8 +71,11 @@ fmt, and `cargo check --target x86_64-pc-windows-gnu`.
 - TUI polish pass (`docs/tui-polish.md`): tool calls as bordered blocks, code-block language labels, Home/End jump-to-top/live, context-sensitive keyhint footer, provider in the top bar, empty-state guidance + error recovery, prompt history recall (Up/Down), table-cell width cap, compact `key=value` tool-call args.
 
 ### Eval suite
-- **Layer A** — offline fake-model harness (`cargo test eval_suite`) covering blank-stall, verify gate, sandbox escape, git-commit cleanliness, secrets-stay-uncommitted, goal persistence.
-- **Layer B/C** — live fixtures (`evals/run.py`) + batch runner (`evals/run_all_models.py`); recommended-model table with Recommended / Passing / Partial / Flaky status.
+- **Layer A** — offline fake-model harness (`cargo test eval_suite`) covering blank-stall, verify gate, sandbox escape, git-commit cleanliness, secrets-stay-uncommitted, goal persistence, large tool-output caps, same-file serial edits, auto-checkpoint events.
+- **Layer B/C** — live fixtures (`evals/run.py`) + batch runner (`evals/run_all_models.py`); recommended-model table with Recommended / Passing / Partial / Flaky status. Cases include `14_large_tool_output` and Windows-only `15_windows_fs_edge`.
+
+### Recovery visibility
+- Auto-checkpoint and recovery-patch events; `.raven/RECOVERY.md` index with `git apply` instructions; TUI `last.patch` snapshot after dirty turns.
 
 ---
 

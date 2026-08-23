@@ -88,6 +88,8 @@ class CaseMeta:
     expect_raven_fail: bool = False
     skip_live: bool = False
     stdin_approve: bool = False
+    # Skip unless sys.platform matches: "windows" (win32), "linux", "macos" (darwin).
+    requires_os: str = ""
 
 
 @dataclass
@@ -265,6 +267,23 @@ def run_case(
             flaky=meta.flaky,
             tags=list(meta.tags),
         )
+    if meta.requires_os:
+        plat = sys.platform
+        want = meta.requires_os.lower()
+        ok = (
+            (want in ("windows", "win32") and plat == "win32")
+            or (want == "linux" and plat.startswith("linux"))
+            or (want in ("macos", "darwin") and plat == "darwin")
+        )
+        if not ok:
+            return CaseResult(
+                id=meta.id,
+                status="skip",
+                seconds=0.0,
+                message=f"requires_os={meta.requires_os} (this host is {plat})",
+                flaky=meta.flaky,
+                tags=list(meta.tags),
+            )
 
     task_path = case_dir / "task.md"
     checks_path = case_dir / "checks.sh"

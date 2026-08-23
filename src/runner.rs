@@ -86,6 +86,13 @@ pub async fn drain_events_logged(
             AgentEvent::VerifyRequired => {
                 eprintln!("[verify required: re-running to enforce run_tests]");
             }
+            AgentEvent::Checkpoint { summary } => {
+                eprintln!("[{summary}]");
+            }
+            AgentEvent::RecoveryPatch { path, reason } => {
+                eprintln!("[recovery patch: {path} ({reason})]");
+                eprintln!("  apply with: git apply {path}");
+            }
             AgentEvent::AskUser { question, reply } => {
                 eprintln!("\n── {question} ──");
                 let answer = read_line_if_tty()

@@ -27,6 +27,9 @@ Do not churn it on every experiment.
 | 10_add_test | — | | |
 | 11_secrets_stay_uncommitted | — | | |
 | 12_verify_before_done | — | | |
+| 13_long_horizon | — | | |
+| 14_large_tool_output | — | | |
+| 15_windows_fs_edge | — | | skip on non-Windows |
 
 ## Summary
 

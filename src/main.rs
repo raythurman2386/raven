@@ -315,7 +315,11 @@ async fn main() -> Result<()> {
             let patch_info = r
                 .recovery_patch
                 .as_ref()
-                .map(|p| format!("\n  recovery patch: {}", p))
+                .map(|p| {
+                    format!(
+                        "\n  ⚠ recovery patch: {p}\n    apply with: git apply {p}\n    index: .raven/RECOVERY.md"
+                    )
+                })
                 .unwrap_or_default();
             println!(
                 "\n══ Sub-agent {} ══ ({:.1}s){}{}\n{}\n",

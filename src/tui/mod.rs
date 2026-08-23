@@ -918,6 +918,16 @@ pub async fn run_tui(
                     );
                     state.log_dirty = true;
                 }
+                AgentEvent::Checkpoint { summary } => {
+                    state.push_system(format!("✓ {summary}"));
+                    state.log_dirty = true;
+                }
+                AgentEvent::RecoveryPatch { path, reason } => {
+                    state.push_system(format!(
+                        "⚠ recovery patch → {path} ({reason})  ·  git apply {path}"
+                    ));
+                    state.log_dirty = true;
+                }
                 AgentEvent::PlanProgress(plan) => {
                     state.plan_preview = plan::format_plan(&plan)
                         .lines()
@@ -952,6 +962,12 @@ pub async fn run_tui(
                                 state.messages_dirty = true;
                                 let _ = store.save_all_messages(&session, &state.session_messages);
                                 let _ = store.update_summary(&mut session, None);
+                                if store.snapshot_patch(&session).unwrap_or(false) {
+                                    state.push_system(format!(
+                                        "diff snapshot → .raven/sessions/{}/last.patch",
+                                        session.summary.id
+                                    ));
+                                }
                             }
                         }
                     }
@@ -1017,6 +1033,7 @@ pub async fn run_tui(
     }
 
     let _ = store.save_all_messages(&session, &state.session_messages);
+    let _ = store.snapshot_patch(&session);
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),

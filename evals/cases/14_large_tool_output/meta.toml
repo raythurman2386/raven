@@ -1,0 +1,6 @@
+id = "14_large_tool_output"
+tags = ["read", "harness"]
+timeout_secs = 180
+mode = "agent"
+yolo = true
+requires_git = false
