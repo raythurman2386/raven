@@ -146,6 +146,53 @@ pub fn session_modes(current: &str) -> Value {
     })
 }
 
+/// Cap on the number of models advertised per provider in the ACP model
+/// picker, so a huge catalog (e.g. OpenRouter-scale) can't flood the editor
+/// dropdown. Mirrors Hermes's ACP model-inventory cap.
+pub const ACP_MAX_MODELS_PER_PROVIDER: usize = 200;
+
+/// Build the ACP `model` select config option, enumerating every configured
+/// provider's models as provider-qualified ids (`<provider>/<model>`).
+///
+/// `current_value` is the active `provider/model` id (or a plain model on the
+/// active provider). Each provider's list comes from its live `/models`
+/// endpoint when reachable, else its curated `fallback_models`. Options are
+/// sorted by provider then model and deduped, and per-provider bounded by
+/// [`ACP_MAX_MODELS_PER_PROVIDER`].
+pub fn model_config_option(cfg: &crate::config::ConfigFile, current_value: &str) -> Value {
+    let mut options: Vec<Value> = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+
+    for name in crate::config::known_provider_names(cfg) {
+        // Resolve the provider (config table or built-in) to reach its
+        // endpoint + key, then fetch its live model list.
+        let provider = crate::config::resolve_provider(cfg, Some(name.clone()));
+        let models = crate::tui::fetch_live_provider_models(&provider);
+        let models = if models.is_empty() {
+            crate::config::fallback_models(&name)
+        } else {
+            models
+        };
+        for model in models.into_iter().take(ACP_MAX_MODELS_PER_PROVIDER) {
+            let value = format!("{name}/{model}");
+            if seen.insert(value.clone()) {
+                options.push(json!({"value": value, "name": format!("{name} · {model}")}));
+            }
+        }
+    }
+
+    options.sort_by_key(|o| o["name"].as_str().unwrap_or_default().to_string());
+
+    json!({
+        "id": "model",
+        "name": "Model",
+        "category": "model",
+        "type": "select",
+        "currentValue": current_value,
+        "options": options
+    })
+}
+
 /// Successful JSON-RPC result.
 pub fn result_msg(id: &Value, result: Value) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "result": result})

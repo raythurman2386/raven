@@ -22,8 +22,8 @@ use crate::session::{Session, SessionStore};
 
 use super::protocol::{
     agent_capabilities, agent_info, auth_methods, error_code, error_msg, extract_prompt_text,
-    map_event, permission_allowed, result_msg, session_modes, session_update, Incoming, StopReason,
-    AUTH_METHOD_ID, PROTOCOL_VERSION,
+    map_event, model_config_option, permission_allowed, result_msg, session_modes, session_update,
+    Incoming, StopReason, AUTH_METHOD_ID, PROTOCOL_VERSION,
 };
 
 /// Shared writer so request handlers and the event pump can emit frames.
@@ -63,7 +63,12 @@ struct LiveSession {
 
 /// In-memory ACP agent state (sessions + pending client replies).
 pub struct AcpServer {
+    /// Fully-resolved settings for the active provider (used as the template
+    /// for each new session).
     template: Settings,
+    /// The full loaded config, so the server can enumerate every configured
+    /// provider for the model picker and switch a session onto any of them.
+    cfg: crate::config::ConfigFile,
     initialized: bool,
     sessions: HashMap<String, LiveSession>,
     next_rpc_id: AtomicU64,
@@ -71,10 +76,12 @@ pub struct AcpServer {
 }
 
 impl AcpServer {
-    /// Create a server that clones `template` settings for each new session.
-    pub fn new(template: Settings) -> Self {
+    /// Create a server that clones `template` settings for each new session
+    /// and can enumerate providers from `cfg`.
+    pub fn new(template: Settings, cfg: crate::config::ConfigFile) -> Self {
         Self {
             template,
+            cfg,
             initialized: false,
             sessions: HashMap::new(),
             next_rpc_id: AtomicU64::new(1),
@@ -102,6 +109,15 @@ impl AcpServer {
         settings.workspace = path.canonicalize().unwrap_or(path);
         Ok(settings)
     }
+}
+
+/// Build the session `configOptions` array (model select). The live `/models`
+/// fetches use a blocking reqwest client, which panics if dropped on the async
+/// runtime — so run the whole build on a blocking thread.
+async fn build_config_options(cfg: crate::config::ConfigFile, current_value: String) -> Value {
+    tokio::task::spawn_blocking(move || model_config_option(&cfg, &current_value))
+        .await
+        .unwrap_or_else(|_| json!({}))
 }
 
 /// Dispatch one incoming frame. Prompt turns are spawned so stdin stays live.
@@ -186,9 +202,9 @@ pub async fn dispatch(
                     result_msg(&id, json!({}))
                 }
             }
-            "session/new" => on_session_new(&mut srv, &id, &params),
+            "session/new" => on_session_new(&mut srv, &id, &params).await,
             "session/load" => on_session_load(&mut srv, &id, &params, &writer).await,
-            "session/resume" => on_session_resume(&mut srv, &id, &params),
+            "session/resume" => on_session_resume(&mut srv, &id, &params).await,
             "session/list" => on_session_list(&srv, &id, &params),
             "session/close" => on_session_close(&mut srv, &id, &params),
             "session/set_mode" => on_set_mode(&mut srv, &id, &params),
@@ -223,7 +239,7 @@ fn persist_new(settings: &Settings) -> Result<(SessionStore, Session)> {
     Ok((store, session))
 }
 
-fn on_session_new(srv: &mut AcpServer, id: &Value, params: &Value) -> Value {
+async fn on_session_new(srv: &mut AcpServer, id: &Value, params: &Value) -> Value {
     let cwd = match params.get("cwd").and_then(|v| v.as_str()) {
         Some(c) => c,
         None => return error_msg(Some(id), error_code::INVALID_PARAMS, "cwd is required"),
@@ -238,6 +254,8 @@ fn on_session_new(srv: &mut AcpServer, id: &Value, params: &Value) -> Value {
     };
     let sid = persisted.summary.id.clone();
     let mode = settings.mode.label().to_string();
+    let current_value = format!("{}/{}", settings.provider.name, settings.model);
+    let config_options = build_config_options(srv.cfg.clone(), current_value).await;
     srv.sessions.insert(
         sid.clone(),
         LiveSession {
@@ -252,7 +270,8 @@ fn on_session_new(srv: &mut AcpServer, id: &Value, params: &Value) -> Value {
         id,
         json!({
             "sessionId": sid,
-            "modes": session_modes(&mode)
+            "modes": session_modes(&mode),
+            "configOptions": [config_options]
         }),
     )
 }
@@ -317,6 +336,8 @@ async fn on_session_load(
         }
     }
     let mode = settings.mode.label().to_string();
+    let current_value = format!("{}/{}", settings.provider.name, settings.model);
+    let config_options = build_config_options(srv.cfg.clone(), current_value).await;
     srv.sessions.insert(
         sid,
         LiveSession {
@@ -327,10 +348,16 @@ async fn on_session_load(
             cancel: None,
         },
     );
-    result_msg(id, json!({"modes": session_modes(&mode)}))
+    result_msg(
+        id,
+        json!({
+            "modes": session_modes(&mode),
+            "configOptions": [config_options]
+        }),
+    )
 }
 
-fn on_session_resume(srv: &mut AcpServer, id: &Value, params: &Value) -> Value {
+async fn on_session_resume(srv: &mut AcpServer, id: &Value, params: &Value) -> Value {
     let sid = match params.get("sessionId").and_then(|v| v.as_str()) {
         Some(s) => s.to_string(),
         None => {
@@ -363,6 +390,8 @@ fn on_session_resume(srv: &mut AcpServer, id: &Value, params: &Value) -> Value {
         Err(e) => return error_msg(Some(id), error_code::INVALID_PARAMS, &e.to_string()),
     };
     let mode = settings.mode.label().to_string();
+    let current_value = format!("{}/{}", settings.provider.name, settings.model);
+    let config_options = build_config_options(srv.cfg.clone(), current_value).await;
     srv.sessions.insert(
         sid,
         LiveSession {
@@ -373,7 +402,13 @@ fn on_session_resume(srv: &mut AcpServer, id: &Value, params: &Value) -> Value {
             cancel: None,
         },
     );
-    result_msg(id, json!({"modes": session_modes(&mode)}))
+    result_msg(
+        id,
+        json!({
+            "modes": session_modes(&mode),
+            "configOptions": [config_options]
+        }),
+    )
 }
 
 fn on_session_list(srv: &AcpServer, id: &Value, params: &Value) -> Value {
@@ -687,8 +722,8 @@ where
 }
 
 /// Run `raven --acp` on real stdin/stdout.
-pub async fn run_stdio(settings: Settings) -> Result<()> {
-    let server = AcpServer::new(settings);
+pub async fn run_stdio(settings: Settings, cfg: crate::config::ConfigFile) -> Result<()> {
+    let server = AcpServer::new(settings, cfg);
     serve_io(
         server,
         std::io::BufReader::new(std::io::stdin()),

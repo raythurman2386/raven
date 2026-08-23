@@ -6,7 +6,7 @@ use super::protocol::{
 };
 use super::server::{dispatch, AcpServer, FrameWrite};
 use crate::agent::AgentEvent;
-use crate::config::{Mode, Provider, Settings};
+use crate::config::{ConfigFile, Mode, Provider, Settings};
 use crate::plan::{Plan, PlanStep, PlanStepStatus};
 use serde_json::{json, Value};
 use std::io::Write;
@@ -35,6 +35,11 @@ fn settings(ws: &std::path::Path) -> Settings {
         sandbox_extra_rw: Vec::new(),
         allow_delegate: true,
     }
+}
+
+/// Build an ACP server for tests with a default (empty) config file.
+fn test_server(ws: &std::path::Path) -> AcpServer {
+    AcpServer::new(settings(ws), ConfigFile::default())
 }
 
 struct BufWriter {
@@ -191,7 +196,7 @@ fn stop_reason_wire_values() {
 async fn initialize_then_session_new_and_list() {
     let tmp = tempfile::tempdir().unwrap();
     let ws = tmp.path().canonicalize().unwrap();
-    let server = Arc::new(Mutex::new(AcpServer::new(settings(&ws))));
+    let server = Arc::new(Mutex::new(test_server(&ws)));
     let buf = Arc::new(StdMutex::new(Vec::new()));
     let writer: Arc<Mutex<dyn FrameWrite>> = Arc::new(Mutex::new(BufWriter { buf: buf.clone() }));
 
@@ -235,10 +240,60 @@ async fn initialize_then_session_new_and_list() {
 }
 
 #[tokio::test]
+async fn session_new_advertises_model_config_option() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().canonicalize().unwrap();
+    let server = Arc::new(Mutex::new(test_server(&ws)));
+    let buf = Arc::new(StdMutex::new(Vec::new()));
+    let writer: Arc<Mutex<dyn FrameWrite>> = Arc::new(Mutex::new(BufWriter { buf: buf.clone() }));
+
+    send(
+        &server,
+        &writer,
+        req(1, "initialize", json!({"protocolVersion": 1})),
+    )
+    .await;
+    send(
+        &server,
+        &writer,
+        req(
+            2,
+            "session/new",
+            json!({"cwd": ws.display().to_string(), "mcpServers": []}),
+        ),
+    )
+    .await;
+
+    let frames = frames_from(&buf);
+    let opts = &frames[1]["result"]["configOptions"];
+    let opts = opts.as_array().unwrap();
+    let model = opts
+        .iter()
+        .find(|o| o["id"] == "model")
+        .expect("model option");
+    assert_eq!(model["type"], "select");
+    assert_eq!(model["category"], "model");
+    // currentValue is the active provider-qualified model id.
+    assert_eq!(model["currentValue"], "ollama/fake-model");
+    // Every option is a non-empty provider-qualified id. Don't assert a
+    // specific model: the live /models fetch makes the exact list
+    // environment-dependent.
+    let options = model["options"].as_array().unwrap();
+    assert!(!options.is_empty(), "model options must be non-empty");
+    for opt in options {
+        let value = opt["value"].as_str().expect("option value");
+        assert!(
+            value.contains('/'),
+            "option must be provider-qualified: {value}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn rejects_methods_before_initialize() {
     let tmp = tempfile::tempdir().unwrap();
     let ws = tmp.path().canonicalize().unwrap();
-    let server = Arc::new(Mutex::new(AcpServer::new(settings(&ws))));
+    let server = Arc::new(Mutex::new(test_server(&ws)));
     let buf = Arc::new(StdMutex::new(Vec::new()));
     let writer: Arc<Mutex<dyn FrameWrite>> = Arc::new(Mutex::new(BufWriter { buf: buf.clone() }));
 
@@ -260,7 +315,7 @@ async fn rejects_methods_before_initialize() {
 async fn unknown_method_is_minus_32601() {
     let tmp = tempfile::tempdir().unwrap();
     let ws = tmp.path().canonicalize().unwrap();
-    let server = Arc::new(Mutex::new(AcpServer::new(settings(&ws))));
+    let server = Arc::new(Mutex::new(test_server(&ws)));
     let buf = Arc::new(StdMutex::new(Vec::new()));
     let writer: Arc<Mutex<dyn FrameWrite>> = Arc::new(Mutex::new(BufWriter { buf: buf.clone() }));
 
@@ -279,7 +334,7 @@ async fn unknown_method_is_minus_32601() {
 async fn session_new_rejects_relative_cwd() {
     let tmp = tempfile::tempdir().unwrap();
     let ws = tmp.path().canonicalize().unwrap();
-    let server = Arc::new(Mutex::new(AcpServer::new(settings(&ws))));
+    let server = Arc::new(Mutex::new(test_server(&ws)));
     let buf = Arc::new(StdMutex::new(Vec::new()));
     let writer: Arc<Mutex<dyn FrameWrite>> = Arc::new(Mutex::new(BufWriter { buf: buf.clone() }));
 
@@ -307,7 +362,7 @@ async fn session_new_rejects_relative_cwd() {
 async fn set_mode_and_close() {
     let tmp = tempfile::tempdir().unwrap();
     let ws = tmp.path().canonicalize().unwrap();
-    let server = Arc::new(Mutex::new(AcpServer::new(settings(&ws))));
+    let server = Arc::new(Mutex::new(test_server(&ws)));
     let buf = Arc::new(StdMutex::new(Vec::new()));
     let writer: Arc<Mutex<dyn FrameWrite>> = Arc::new(Mutex::new(BufWriter { buf: buf.clone() }));
 
@@ -356,7 +411,7 @@ async fn set_mode_and_close() {
 async fn prompt_unknown_session_errors() {
     let tmp = tempfile::tempdir().unwrap();
     let ws = tmp.path().canonicalize().unwrap();
-    let server = Arc::new(Mutex::new(AcpServer::new(settings(&ws))));
+    let server = Arc::new(Mutex::new(test_server(&ws)));
     let buf = Arc::new(StdMutex::new(Vec::new()));
     let writer: Arc<Mutex<dyn FrameWrite>> = Arc::new(Mutex::new(BufWriter { buf: buf.clone() }));
 
@@ -417,7 +472,7 @@ async fn load_replays_history() {
         .update_summary(&mut sess, Some("hello history".into()))
         .unwrap();
 
-    let server = Arc::new(Mutex::new(AcpServer::new(settings(&ws))));
+    let server = Arc::new(Mutex::new(test_server(&ws)));
     let buf = Arc::new(StdMutex::new(Vec::new()));
     let writer: Arc<Mutex<dyn FrameWrite>> = Arc::new(Mutex::new(BufWriter { buf: buf.clone() }));
 
@@ -472,7 +527,7 @@ fn auth_methods_advertise_single_agent_method() {
 async fn authenticate_accepts_advertised_method_and_rejects_unknown() {
     let tmp = tempfile::tempdir().unwrap();
     let ws = tmp.path().canonicalize().unwrap();
-    let server = Arc::new(Mutex::new(AcpServer::new(settings(&ws))));
+    let server = Arc::new(Mutex::new(test_server(&ws)));
     let buf = Arc::new(StdMutex::new(Vec::new()));
     let writer: Arc<Mutex<dyn FrameWrite>> = Arc::new(Mutex::new(BufWriter { buf: buf.clone() }));
 
@@ -503,7 +558,7 @@ async fn authenticate_accepts_advertised_method_and_rejects_unknown() {
 async fn set_model_updates_session_and_rejects_unknown_session() {
     let tmp = tempfile::tempdir().unwrap();
     let ws = tmp.path().canonicalize().unwrap();
-    let server = Arc::new(Mutex::new(AcpServer::new(settings(&ws))));
+    let server = Arc::new(Mutex::new(test_server(&ws)));
     let buf = Arc::new(StdMutex::new(Vec::new()));
     let writer: Arc<Mutex<dyn FrameWrite>> = Arc::new(Mutex::new(BufWriter { buf: buf.clone() }));
 
@@ -556,7 +611,7 @@ async fn set_model_updates_session_and_rejects_unknown_session() {
 async fn set_model_rejects_missing_or_empty_model() {
     let tmp = tempfile::tempdir().unwrap();
     let ws = tmp.path().canonicalize().unwrap();
-    let server = Arc::new(Mutex::new(AcpServer::new(settings(&ws))));
+    let server = Arc::new(Mutex::new(test_server(&ws)));
     let buf = Arc::new(StdMutex::new(Vec::new()));
     let writer: Arc<Mutex<dyn FrameWrite>> = Arc::new(Mutex::new(BufWriter { buf: buf.clone() }));
 
