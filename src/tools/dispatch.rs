@@ -40,6 +40,10 @@ pub fn dispatch(
             name
         ));
     }
+    let raw = serde_json::to_string(args).unwrap_or_default();
+    if let Err(msg) = super::validate::validate_tool_call(name, &raw, args) {
+        return Ok(msg);
+    }
     let res: anyhow::Result<String> = match name {
         "list_dir" => {
             let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");

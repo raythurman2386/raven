@@ -129,6 +129,64 @@ fn git_commit_excludes_data_dir() {
 }
 
 #[test]
+fn git_commit_refuses_secret_in_source() {
+    let (_tmp, sb) = git_sandbox();
+    sb.write_file(
+        "src/config.rs",
+        "const KEY: &str = \"AKIATESTTESTTEST1234\";\n",
+    )
+    .unwrap();
+    let out = sb.git_commit("add config").unwrap();
+    assert!(
+        out.contains("refused") && out.contains("AWS access key ID"),
+        "commit must refuse staged AWS key: {out}"
+    );
+    assert!(
+        !out.contains("AKIATESTTESTTEST1234"),
+        "refusal must not echo the secret: {out}"
+    );
+    let log = sb.git_log(5).unwrap();
+    assert!(
+        !log.contains("add config"),
+        "secret-bearing commit must not land: {log}"
+    );
+}
+
+#[test]
+fn git_commit_checkpoint_refuses_secret() {
+    let (_tmp, sb) = git_sandbox();
+    sb.write_file("README.md", "# ok\n").unwrap();
+    sb.git_commit("seed").unwrap();
+    sb.write_file("src/id_rsa", "-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n")
+        .unwrap();
+    let out = sb
+        .git_commit_checkpoint("checkpoint: uncommitted work")
+        .unwrap();
+    assert!(
+        out.contains("refused") && out.contains("PEM private key"),
+        "checkpoint must refuse a private key: {out}"
+    );
+    let head = sb.run_git(&["cat-file", "-e", "HEAD:src/id_rsa"]).unwrap();
+    assert!(
+        head.contains("fatal"),
+        "private key must not be in HEAD: {head}"
+    );
+}
+
+#[test]
+fn git_commit_still_commits_ordinary_code() {
+    let (_tmp, sb) = git_sandbox();
+    sb.write_file(
+        "src/lib.rs",
+        "pub fn add(a: i32, b: i32) -> i32 { a + b }\n",
+    )
+    .unwrap();
+    let out = sb.git_commit("add adder").unwrap();
+    assert!(!out.contains("Error"), "ordinary code should commit: {out}");
+    assert!(sb.git_log(1).unwrap().contains("add adder"));
+}
+
+#[test]
 fn git_commit_excludes_env_files() {
     let (_tmp, sb) = git_sandbox();
     // Both a root `.env` and an env-variant like `.env.production` must be

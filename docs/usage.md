@@ -258,8 +258,10 @@ file. Read-only and available during planning.
 ### Git checkpointing (`git_commit`) and `/undo`
 
 The agent can checkpoint its own work with `git_commit(message)`, which stages
-all changes (`git add -A`) and commits them. It only appears in the **full**
-toolset — never during planning, since it mutates the repo.
+all changes (`git add -A`, excluding `.env` / `.raven/` / `data/`) and commits
+them. If staged files match well-known secret patterns the commit is refused.
+It only appears in the **full** toolset — never during planning, since it
+mutates the repo.
 
 To step back from the last commit, use the `/undo` (or `/u`) slash command in
 the TUI. It runs `git reset --soft HEAD~1`, which undoes the commit while

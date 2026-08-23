@@ -447,7 +447,8 @@ async fn headless_run(
         task.to_string()
     };
 
-    let (first_messages, assistant_text) = runner::spawn_and_drain(agent, &prompt).await?;
+    let (first_messages, assistant_text) =
+        runner::spawn_and_drain_logged(agent, &prompt, Some((&store, &session))).await?;
 
     if let Some(ref final_messages) = first_messages {
         runner::save_session_messages(&store, &mut session, final_messages, task)?;

@@ -13,6 +13,8 @@ mod document;
 mod git;
 mod patch;
 mod sandbox;
+mod secrets;
+mod validate;
 #[cfg(windows)]
 mod windows;
 
@@ -22,6 +24,7 @@ pub use crate::state::TodoItem;
 pub use definitions::{chat_tool_definitions, plan_tool_definitions, tool_definitions};
 pub use dispatch::dispatch;
 pub use sandbox::{safe_command_re, Sandbox};
+pub use validate::{validate_tool_call, MAX_ARGUMENTS_BYTES};
 
 /// Minimal glob matcher: supports `*` and `?` against the file name.
 pub(crate) fn glob_matches(path: &Path, pattern: &str) -> bool {

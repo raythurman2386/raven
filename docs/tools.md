@@ -24,7 +24,7 @@ All file paths are **relative to the workspace root** and confined to it. See [a
 | `git_status` | Show working tree status | Read-only; runs `git status --porcelain` |
 | `git_diff` | Show unstaged or staged changes | Read-only; runs `git diff` |
 | `git_log` | Show recent commit history | Read-only; runs `git log` |
-| `git_commit` | Stage all changes and create a commit | Mutates repo; runs `git add -A && git commit` |
+| `git_commit` | Stage all changes and create a commit | Mutates repo; runs `git add -A && git commit`; refuses if staged files match well-known secret patterns |
 | `apply_patch` | Apply a unified diff patch to files | Workspace-confined; parses and applies patches |
 | `run_tests` | Auto-detect and run project test suite | Runs `cargo test` / `npm test` / `pytest` |
 | `run_lint` | Auto-detect and run project linter/type checker | Runs `cargo clippy` / `tsc` / `eslint` / `python -m compileall` |
@@ -246,7 +246,9 @@ Returns the last N commits in `git log --oneline` format.
 }
 ```
 
-Stages all changes (`git add -A`) and creates a commit with the given message. Returns the new HEAD line. Only available in the full toolset (not during planning).
+Stages all changes (`git add -A`, excluding `.raven/`, `data/`, `.env`, `.env.*`) and creates a commit with the given message. Returns the new HEAD line. Only available in the full toolset (not during planning).
+
+Before `git commit` runs, staged files are scanned for well-known secret patterns (AWS access keys, GitHub/GitLab tokens, OpenAI/Anthropic/OpenRouter/Stripe keys, PEM private keys, JWTs, …). A match refuses the commit and reports the path plus rule name — never the secret value. Harness checkpoint commits use the same gate. This complements the `.env` pathspec exclusion; it is a guardrail, not a complete secret detector.
 
 ### `apply_patch`
 
@@ -328,7 +330,7 @@ Loads a skill's full instructions into context. Returns the skill body wrapped i
 `run_shell` blocks commands matching this regex (case-insensitive):
 
 ```
-(rm\s+(-[a-z]*f[a-z]*\s+)?/|mkfs|: \(\)\s*\{\s*:\|:&\s*\};:|dd\s+if=/dev/(zero|random|urandom)|chmod\s+(-R\s+)?777\s+/|curl\s+.*\|\s*(ba)?sh|wget\s+.*\|\s*(ba)?sh|format\s+[A-Za-z]:|del\s+/[sfq]\s+[A-Za-z]:\\|rd\s+/[sq]\s+[A-Za-z]:\\|rmdir\s+/[sq]\s+[A-Za-z]:\\|powershell\s+-[Cc]ommand\s+.*Remove-Item.*-Recurse.*-Force|Remove-Item\s+-Recurse\s+-Force\s+[A-Za-z]:\\|diskpart)
+(rm\s+(-[a-z]*f[a-z]*\s+)?/|mkfs|: \(\)\s*\{\s*:\|:&\s*\};:|dd\s+if=/dev/(zero|random|urandom)|chmod\s+(-R\s+)?777\s+/|curl\s+.*\|\s*(ba)?sh|wget\s+.*\|\s*(ba)?sh|format\s+[A-Za-z]:|del\s+/[sfq]\s+[A-Za-z]:\\|rd\s+/[sq]\s+[A-Za-z]:\\|rmdir\s+/[sq]\s+[A-Za-z]:\\|powershell\s+-[Cc]ommand\s+.*Remove-Item.*-Recurse.*-Force|Remove-Item\s+-Recurse\s+-Force\s+[A-Za-z]:\\|diskpart|/dev/tcp|bash\s+-i|nc(at)?\s+[^\n]*-e|mkfifo|powershell[^\n]*-[Ee]nc(odedcommand)?|certutil[^\n]*-decode|Invoke-Expression|\biex\s*\(|base64\s+[^\n]*\|\s*(ba)?sh|curl\s+[^\n]*\|\s*(pwsh|powershell|cmd)|wget\s+[^\n]*\|\s*(pwsh|powershell|cmd))
 ```
 
 This catches:
@@ -340,8 +342,12 @@ This catches:
 - `chmod -R 777 /`
 - `curl ... | sh` and `wget ... | sh` (pipe-to-shell)
 - Windows destructive patterns: `format <drive>:`, `del /f/s/q <drive>:\`, `rd /s/q <drive>:\`, `rmdir /s/q <drive>:\`, `powershell -Command ... Remove-Item -Recurse -Force`, `Remove-Item -Recurse -Force <drive>:\`, and `diskpart`
+- Reverse-shell primitives: `/dev/tcp`, `bash -i`, `nc -e` / `ncat -e`, `mkfifo`
+- Encoded or decoded droppers: `powershell -enc`, `certutil -decode`, `base64 … | sh`
+- PowerShell `Invoke-Expression` / `iex (`
+- Pipe-to-shell via `pwsh` / `powershell` / `cmd` as well as `sh`/`bash`
 
-This is a **guardrail, not a complete blocklist**. A determined model can craft commands that evade it. For untrusted models, use a container or VM.
+These patterns are blocked even under `--yolo`. This is a **guardrail, not a complete blocklist**. A determined model can craft commands that evade it. For untrusted models, use a container or VM. Tool arguments are also length-capped and schema-checked before dispatch (see [security.md §8](security.md)).
 
 ---
 

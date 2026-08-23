@@ -13,7 +13,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 
 use crate::error::ToolError;
-use crate::tools::{dispatch, safe_command_re, Sandbox};
+use crate::tools::{dispatch, safe_command_re, validate_tool_call, Sandbox, MAX_ARGUMENTS_BYTES};
 
 use super::core::Agent;
 use super::types::{AgentEvent, ChatMessage, ToolCall};
@@ -91,6 +91,19 @@ impl Agent {
             // truncated chunk), surface a clear error to the model instead
             // of silently dispatching with empty args — a write_file or
             // run_shell firing on nothing is far worse than a retry.
+            if tc.function.arguments.len() > MAX_ARGUMENTS_BYTES {
+                let result = format!(
+                    "Tool error: arguments for {} exceed {} bytes",
+                    tc.function.name, MAX_ARGUMENTS_BYTES
+                );
+                slots[idx] = Some(PendingToolResult::ready(
+                    tc.id.clone(),
+                    tc.function.name.clone(),
+                    String::new(),
+                    Ok(result),
+                ));
+                continue;
+            }
             let parsed: Result<Value, serde_json::Error> =
                 serde_json::from_str(&tc.function.arguments);
             let args = match parsed {
@@ -109,6 +122,17 @@ impl Agent {
                     continue;
                 }
             };
+            if let Err(result) =
+                validate_tool_call(&tc.function.name, &tc.function.arguments, &args)
+            {
+                slots[idx] = Some(PendingToolResult::ready(
+                    tc.id.clone(),
+                    tc.function.name.clone(),
+                    String::new(),
+                    Ok(result),
+                ));
+                continue;
+            }
             // ask_user is special: it blocks on a user reply over a oneshot
             // channel rather than dispatching to the (sync) tool sandbox. The
             // consumer renders the question and sends the answer back. If the

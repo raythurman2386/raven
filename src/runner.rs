@@ -21,6 +21,15 @@ use crate::session::{Session, SessionStore};
 /// after tool/iteration markers so a killed/timed-out process still leaves
 /// parseable progress for the eval runner.
 pub async fn drain_events(rx: &mut mpsc::Receiver<AgentEvent>) -> String {
+    drain_events_logged(rx, None).await
+}
+
+/// Drain agent events, recording `run_shell` invocations into the session
+/// debug-events log when a store is provided (local-only, no telemetry).
+pub async fn drain_events_logged(
+    rx: &mut mpsc::Receiver<AgentEvent>,
+    debug: Option<(&SessionStore, &Session)>,
+) -> String {
     let mut assistant_text = String::new();
     while let Some(ev) = rx.recv().await {
         match ev {
@@ -32,6 +41,15 @@ pub async fn drain_events(rx: &mut mpsc::Receiver<AgentEvent>) -> String {
             AgentEvent::ToolStart { name, args } => {
                 println!("\n→ {}({})", name, args);
                 let _ = std::io::Write::flush(&mut std::io::stdout());
+                if name == "run_shell" {
+                    if let Some(cmd) = args.get("command").and_then(|v| v.as_str()) {
+                        tracing::info!(command = cmd, "run_shell");
+                        if let Some((store, session)) = debug {
+                            let snippet: String = cmd.chars().take(500).collect();
+                            let _ = store.log_event(session, "shell", &snippet);
+                        }
+                    }
+                }
             }
             AgentEvent::ToolEnd { name, preview } => {
                 println!(
@@ -85,8 +103,18 @@ pub async fn drain_events(rx: &mut mpsc::Receiver<AgentEvent>) -> String {
 /// Returns the final messages (if the task completed) and the accumulated
 /// assistant text.
 pub async fn spawn_and_drain(
+    agent: Agent,
+    prompt: &str,
+) -> Result<(Option<Vec<ChatMessage>>, String)> {
+    spawn_and_drain_logged(agent, prompt, None).await
+}
+
+/// Like [`spawn_and_drain`], recording `run_shell` invocations into the
+/// session debug-events log.
+pub async fn spawn_and_drain_logged(
     mut agent: Agent,
     prompt: &str,
+    debug: Option<(&SessionStore, &Session)>,
 ) -> Result<(Option<Vec<ChatMessage>>, String)> {
     let prompt = prompt.to_string();
     let (tx, mut rx) = mpsc::channel::<AgentEvent>(64);
@@ -94,7 +122,7 @@ pub async fn spawn_and_drain(
         agent.run(&prompt, tx).await?;
         Ok::<_, anyhow::Error>(agent.messages)
     });
-    let assistant_text = drain_events(&mut rx).await;
+    let assistant_text = drain_events_logged(&mut rx, debug).await;
     let messages = runner.await.ok().and_then(|r| r.ok());
     Ok((messages, assistant_text))
 }
@@ -137,7 +165,8 @@ pub async fn run_plan_flow(
             };
             store.append_message(session, &rev_msg)?;
 
-            let (rev_messages, rev_text) = spawn_and_drain(agent, &feedback_msg).await?;
+            let (rev_messages, rev_text) =
+                spawn_and_drain_logged(agent, &feedback_msg, Some((store, session))).await?;
 
             if let Some(ref msgs) = rev_messages {
                 save_session_messages(store, session, msgs, task)?;
@@ -162,7 +191,9 @@ pub async fn run_plan_flow(
                     let exec_messages = rev_messages.unwrap_or_default();
                     let agent =
                         Agent::with_messages(settings.clone(), exec_messages)?.with_plan(revised);
-                    let (final_messages, _) = spawn_and_drain(agent, plan::EXECUTE_PROMPT).await?;
+                    let (final_messages, _) =
+                        spawn_and_drain_logged(agent, plan::EXECUTE_PROMPT, Some((store, session)))
+                            .await?;
                     if let Some(ref msgs) = final_messages {
                         save_session_messages(store, session, msgs, "Plan execution")?;
                     }
@@ -183,7 +214,8 @@ pub async fn run_plan_flow(
     store.append_message(session, &exec_msg)?;
 
     let agent = Agent::with_messages(settings.clone(), exec_messages)?.with_plan(plan);
-    let (final_messages, _) = spawn_and_drain(agent, plan::EXECUTE_PROMPT).await?;
+    let (final_messages, _) =
+        spawn_and_drain_logged(agent, plan::EXECUTE_PROMPT, Some((store, session))).await?;
     if let Some(ref msgs) = final_messages {
         save_session_messages(store, session, msgs, "Plan execution")?;
     }

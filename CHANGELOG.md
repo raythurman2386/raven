@@ -6,6 +6,35 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Secrets gate on `git_commit`** — staged files are scanned for well-known
+  credential prefixes (AWS, GitHub, GitLab, OpenAI, Anthropic, OpenRouter,
+  Stripe, PEM private keys, JWTs, …) and the commit is refused on a match.
+  The tool result reports path + rule name only; the secret is never echoed.
+  Harness checkpoint commits use the same gate. Complements the existing
+  `.env` / `.raven/` pathspec exclusions.
+- **Tool-argument hygiene** — before dispatch, Raven rejects oversized
+  arguments JSON (>1 MiB), non-object payloads, missing/empty required
+  fields, and overlong path/command strings.
+- **Never-execute shell patterns** even under `--yolo`: `/dev/tcp`, `nc -e`,
+  `mkfifo`, encoded PowerShell, `certutil -decode`, `Invoke-Expression` /
+  `iex (`, `base64 | sh`, and pipe-to-`pwsh`/`cmd`.
+- **Session debug-events for `run_shell`** — commands that actually start
+  (allowlisted, confirmed, or `--yolo`) are recorded locally in
+  `debug-events.jsonl` as `shell` events.
+
+### Changed
+
+- **Stricter shell metacharacter detection** for the direct-exec path:
+  braces, `!`, `^`, CR, and NUL now force the shell fallback (no
+  `Command::new` of an injected string).
+- **Direct-exec allowlist** expanded with common dev tools (`just`, `fd`,
+  `jq`, `bun`, `deno`, `uv`, `rustfmt`, …).
+- **Windows residual-risk documentation** in `docs/security.md`: Job Objects
+  are not a filesystem or network sandbox; file tools still use lexical
+  canonicalization (no `openat2`); `%TEMP%` is not pinned.
+
 ## [0.4.1] - 2026-08-22
 
 ### Added

@@ -472,6 +472,61 @@ async fn eval_suite_git_commit_leaves_env_untracked() {
     );
 }
 
+/// git_commit must refuse a well-known secret in a tracked source file.
+#[tokio::test]
+async fn eval_suite_git_commit_refuses_secret_in_source() {
+    let tmp = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(tmp.path())
+            .output()
+            .unwrap()
+    };
+    git(&["init"]);
+    git(&["config", "user.email", "eval@test"]);
+    git(&["config", "user.name", "Eval"]);
+    std::fs::write(tmp.path().join("lib.rs"), "pub fn id(n:i32)->i32{n}\n").unwrap();
+    git(&["add", "lib.rs"]);
+    git(&["commit", "-m", "seed"]);
+
+    let mut agent = Agent::new(settings_for(tmp.path()))
+        .unwrap()
+        .with_completion_source(scripted(vec![
+            sse_tool_call(
+                "w1",
+                "write_file",
+                r#"{"path":"lib.rs","content":"pub const KEY: &str = \"AKIATESTTESTTEST1234\";\n"}"#,
+            ),
+            sse_tool_call("c1", "git_commit", r#"{"message":"add key"}"#),
+            sse_text("Tried to commit."),
+        ]));
+    let (tx, mut rx) = mpsc::channel(64);
+    agent.run("commit the key", tx).await.unwrap();
+    let _ = drain(&mut rx).await;
+
+    let show = std::process::Command::new("git")
+        .args(["grep", "AKIATESTTESTTEST1234", "HEAD"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        !show.status.success(),
+        "secret must not appear in HEAD: {}",
+        String::from_utf8_lossy(&show.stdout)
+    );
+    let log = std::process::Command::new("git")
+        .args(["log", "--oneline", "-n", "5"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    let log_s = String::from_utf8_lossy(&log.stdout);
+    assert!(
+        !log_s.contains("add key"),
+        "secret-bearing commit must not exist: {log_s}"
+    );
+}
+
 /// 13_goal_set — goal_set persists to `.raven/state/goal.json` and is
 /// injected into the system prompt on the next turn.
 #[tokio::test]

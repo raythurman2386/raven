@@ -56,7 +56,8 @@ fmt, and `cargo check --target x86_64-pc-windows-gnu`.
 - **Landlock filesystem confinement** (Linux) — RW under workspace, RO for `/usr`/`/bin`/`/lib`/`/etc`/`/proc`/`$HOME`; `TMPDIR` pinned under `.raven/tmp` (closes the `/tmp` escape).
 - **seccomp network block** (Linux) — denies `AF_INET`/`AF_INET6` sockets; sanctioned test runners exempted.
 - **Resource limits** — `RLIMIT_CPU`/`RLIMIT_FSIZE`/`RLIMIT_NOFILE` (Linux + macOS); Windows Job Objects (process-tree + memory caps + kill-on-close).
-- **Shell safety** — denylist + allowlist + direct-exec (no shell for safe single-binary commands), `confirm_shell` gate.
+- **Shell safety** — denylist + allowlist + direct-exec (no shell for safe single-binary commands), `confirm_shell` gate, never-execute patterns even under `--yolo`, `run_shell` logged to session debug-events.
+- **Secrets gate** — `git_commit` / checkpoints scan staged files for well-known credential patterns and refuse the commit (path + rule name only).
 
 ### Config, providers, sessions
 - **Named providers** — `ollama`/`openrouter` presets + `[providers.<name>]` config; `--provider`/`/provider` switch endpoint + auth + default model as one unit. Removed legacy `--host`/`--api-key`/`RAVEN_HOST`/`OLLAMA_MODEL` surface.

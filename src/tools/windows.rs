@@ -135,3 +135,16 @@ impl Drop for JobObject {
         unsafe { CloseHandle(self.0) };
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn job_object_creates() {
+        assert!(
+            JobObject::new().is_some(),
+            "creating a Job Object should succeed on a normal Windows host"
+        );
+    }
+}

@@ -7,6 +7,26 @@ use crate::tools::{
 use super::sandbox;
 
 #[test]
+fn dispatch_rejects_missing_required_field() {
+    let sb = sandbox();
+    let result = dispatch(&sb, "read_file", &serde_json::json!({}), false).unwrap();
+    assert!(
+        result.contains("path"),
+        "missing path should be rejected: {result}"
+    );
+}
+
+#[test]
+fn dispatch_rejects_empty_shell_command() {
+    let sb = sandbox();
+    let result = dispatch(&sb, "run_shell", &serde_json::json!({"command": ""}), false).unwrap();
+    assert!(
+        result.contains("command"),
+        "empty command should be rejected: {result}"
+    );
+}
+
+#[test]
 fn dispatch_unknown_tool_returns_error() {
     let sb = sandbox();
     let result = dispatch(&sb, "nonexistent_tool", &serde_json::json!({}), false).unwrap();

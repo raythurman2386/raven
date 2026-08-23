@@ -106,11 +106,61 @@ impl Sandbox {
                 let _ = self.run_git(&args)?;
             }
         }
+        if let Some(refusal) = self.refuse_if_staged_secrets()? {
+            return Ok(refusal);
+        }
         let commit_out = self.run_git(&["commit", "-m", msg])?;
         if commit_out.contains("fatal") || commit_out.contains("Error") {
             return Ok(commit_out);
         }
         self.git_log(1)
+    }
+
+    /// Scan staged files for well-known secret patterns and refuse the commit
+    /// if any match. Complements the pathspec exclusions (`.env`, `.raven/`).
+    ///
+    /// Fail-closed: if the staged-name listing looks truncated or a staged
+    /// path escapes the workspace, the commit is refused rather than skipped.
+    fn refuse_if_staged_secrets(&self) -> Result<Option<String>> {
+        let listing = self.run_git(&["diff", "--cached", "--name-only", "--diff-filter=ACMR"])?;
+        if listing.contains("[truncated") {
+            return Ok(Some(
+                "Error: git_commit refused — staged change list is too large to scan for secrets"
+                    .into(),
+            ));
+        }
+        let mut findings = Vec::new();
+        for line in listing.lines() {
+            let path = line.trim();
+            if path.is_empty() || path == "exit=0" || path.starts_with("warning:") {
+                continue;
+            }
+            if path.contains("fatal") || path.contains("error:") {
+                continue;
+            }
+            if path.contains("..") {
+                return Ok(Some(format!(
+                    "Error: git_commit refused — staged path looks unsafe: {path}"
+                )));
+            }
+            let Ok(resolved) = self.safe_resolve(path) else {
+                return Ok(Some(format!(
+                    "Error: git_commit refused — staged path escapes workspace: {path}"
+                )));
+            };
+            let Ok(bytes) = std::fs::read(&resolved) else {
+                continue;
+            };
+            findings.extend(super::secrets::scan_bytes(path, &bytes));
+            if findings.len() >= 12 {
+                break;
+            }
+        }
+        if findings.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(super::secrets::format_refusal(&findings)))
+        }
     }
 
     /// Whether a path is a stray temp/scratch file the model's tooling may

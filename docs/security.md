@@ -168,9 +168,28 @@ fork-bomb/runaway process is killed when Raven exits.
 
 **Limitation:** Best-effort. If creating or assigning the Job Object fails
 (kernel policy, handle exhaustion), Raven logs a warning and the child runs
-without job confinement — the same posture as the Unix layers. Job Objects do
-not provide filesystem confinement (that is Landlock's role, which has no
-Windows equivalent) or a network block (seccomp, also Linux-only).
+without job confinement — the same posture as the Unix layers.
+
+**Residual risk (Windows filesystem and network):** Job Objects are **not** a
+filesystem sandbox. There is no Landlock, AppContainer, Mandatory Integrity
+Control, or Restricted Token applied to the child. A confined Windows
+subprocess can:
+
+- read and write any file the user can (`%USERPROFILE%`, other drives, UNC
+  paths, `%TEMP%` — which is **not** pinned the way Linux `TMPDIR` is),
+- create `AF_INET`/`AF_INET6` sockets (no seccomp equivalent),
+- follow symlinks / junctions / reparse points anywhere the user can.
+
+File tools (`read_file` / `write_file` / …) still apply lexical `..` rejection
+plus canonicalization of the nearest existing ancestor (`safe_resolve`). That
+is a real check but has a small TOCTOU window and does **not** bind the
+subprocess. `openat2`/`RESOLVE_BENEATH` is Linux-only.
+
+**What this means in practice:** a misbehaving model on Windows can exfiltrate
+secrets over the network and write outside the workspace via `run_shell`.
+Mitigations that actually help: keep `confirm_shell` on (do not pass `--yolo`),
+run Raven as a low-privilege user, or run it inside Windows Sandbox / a VM /
+a container. Do not treat Job Objects as "the Windows Landlock".
 
 ### 6. Shell safety (denylist + allowlist + direct exec)
 
@@ -185,16 +204,49 @@ Windows equivalent) or a network block (seccomp, also Linux-only).
   requires explicit user approval.
 - **Direct exec**: when a command's first token is on the allowlist AND the
   command contains no shell metacharacters (`;`, `&`, `|`, `>`, `<`, backticks,
-  `$`, parens, newlines), it is run via `Command::new(bin).args(...)` directly
-  — **no shell, no injection surface**. This flips the model from "denylist
-  dangerous" toward "allowlist safe" for the common case.
+  `$`, parens, braces, `!`, `^`, CR/LF/NUL), it is run via
+  `Command::new(bin).args(...)` directly — **no shell, no injection surface**.
+  This flips the model from "denylist dangerous" toward "allowlist safe" for
+  the common case.
+- **Never-execute denylist even under `--yolo`**: pipe-to-shell, reverse-shell
+  primitives (`/dev/tcp`, `nc -e`, `mkfifo`), encoded PowerShell, `certutil
+  -decode`, and `Invoke-Expression` / `iex (` are blocked before spawn. This
+  is still a denylist, not a boundary.
+- **Invocation log**: every `run_shell` that actually starts (allowlisted,
+  confirmed, or `--yolo`) is recorded in the session `debug-events.jsonl` as
+  a local-only `shell` event. Declined confirmations are not logged as
+  executed commands.
 
 **Platforms:** All.
 
 **Limitation:** The shell fallback path (commands with metacharacters) still
-goes through `sh -c`, which is inherently injection-prone. The denylist is not
-a security boundary. The real safety net is `confirm_shell` (user approval) and
-the OS-level layers above.
+goes through `sh -c` (or `cmd /C` on Windows), which is inherently
+injection-prone. The denylist is not a security boundary. The real safety net
+is `confirm_shell` (user approval) and the OS-level layers above.
+
+### 7. Secrets gate (`git_commit`)
+
+**What it does:** After staging (and excluding `.env` / `.raven/` / `data/`),
+`git_commit` and harness checkpoints scan staged files for well-known
+credential prefixes (AWS `AKIA…`, GitHub `ghp_`/`github_pat_`, OpenAI /
+Anthropic / OpenRouter / Stripe keys, PEM private-key headers, JWTs, …). A
+match **refuses the commit** with a path + rule-name report. The secret value
+is never copied into the tool result.
+
+**Limitation:** Best-effort pattern match. Obfuscated, novel, or low-entropy
+secrets will slip through. Pathspec exclusions still apply (`.env` is never
+staged). The gate is fail-closed if the staged file list is too large to scan.
+
+### 8. Tool-argument hygiene
+
+**What it does:** Before dispatch, Raven rejects tool calls whose arguments
+JSON exceeds 1 MiB, are not a JSON object, or omit/mis-type required fields
+(empty `run_shell.command`, missing `read_file.path`, …). Path arguments are
+capped at 4096 characters; shell commands at 32 KiB.
+
+**Limitation:** This is schema hygiene, not an allowlist of values. A
+well-formed `run_shell` still has to pass the denylist / confirm_shell /
+OS layers.
 
 ---
 
@@ -202,9 +254,10 @@ the OS-level layers above.
 
 - **No Windows filesystem confinement.** Windows gets Job Objects (resource
   limits + process-tree confinement + kill-on-close) and shell filtering, but
-  there is no Landlock/seccomp equivalent — a subprocess on Windows can still
-  read/write any file the user can, and can make network calls. This is the
-  same posture as most tools in this space.
+  there is no Landlock/seccomp/AppContainer equivalent — a subprocess on
+  Windows can still read/write any file the user can, follow junctions, and
+  make network calls. See §5 residual risk. This is the same posture as most
+  tools in this space.
 - **No container/VM isolation.** Raven does not require Docker or any
   container runtime. If you need stronger isolation, run Raven inside a
   container or VM yourself.
@@ -240,6 +293,9 @@ cargo test --lib tools::tests::confined_child
 cargo test --lib tools::tests::open_beneath
 cargo test --lib tools::tests::is_direct_exec_command
 cargo test --lib tools::tests::confined_child_oversized_write_capped_by_fsize
+cargo test --lib tools::secrets
+cargo test --lib tools::tests::git_commit_refuses_secret
+cargo test --lib tools::validate
 ```
 
 These tests verify that a confined child cannot read outside the Landlock

@@ -343,7 +343,7 @@ pub fn tool_definitions() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "git_commit",
-                "description": "Stage all changes and create a git commit. Use to checkpoint your work when you've finished a coherent unit. Requires a non-empty commit message.",
+                "description": "Stage all changes and create a git commit. Use to checkpoint your work when you've finished a coherent unit. Requires a non-empty commit message. Refuses to commit if staged files look like they contain secrets (API keys, private keys).",
                 "parameters": {
                     "type": "object",
                     "properties": {

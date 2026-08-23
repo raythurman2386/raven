@@ -865,6 +865,12 @@ pub async fn run_tui(
                     }
                 }
                 AgentEvent::ToolStart { name, args } => {
+                    if name == "run_shell" {
+                        if let Some(cmd) = args.get("command").and_then(|v| v.as_str()) {
+                            let snippet: String = cmd.chars().take(500).collect();
+                            let _ = store.log_event(&session, "shell", &snippet);
+                        }
+                    }
                     let args_str = format_tool_args(&args);
                     let snip: String = args_str.chars().take(60).collect();
                     state.live_tool = Some(format!("⇢ {name}({snip})"));
