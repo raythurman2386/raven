@@ -6,6 +6,56 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-23
+
+### Added
+
+- **ACP provider/model selection** — Raven advertises a `model` session
+  config option over ACP listing every configured provider's models as
+  provider-qualified ids (`provider/model`), so editors with an ACP model
+  selector (Zed, etc.) can switch providers and models without restarting
+  the thread. Each provider's list comes from its live `/models` endpoint
+  when reachable, else its curated fallback; per-provider capped at 200 so
+  a huge catalog (e.g. OpenRouter) can't flood the dropdown.
+- **`session/set_config_option`** — the current spec-correct way to change
+  a session config option. Selecting a `provider/model` value switches the
+  session onto that provider (re-resolving endpoint/key + context window);
+  a plain model name stays on the current provider. The legacy
+  `session/set_model` is now provider-aware too (both share one helper).
+- **`opencode-go` built-in provider preset** — OpenCode Go subscription
+  ($5 first month, then $10/mo) serving OpenAI-compatible models from
+  `https://opencode.ai/zen/go/v1`. Adds `OPENCODE_GO_API_KEY`, curated
+  onboarding fallback models (incl. `qwen3.8-max`, `minimax-m3`), and skips
+  the Ollama `/api/show` context probe on `opencode.ai`.
+- **`/retry`** — re-run the last user prompt after a failed turn (drops any
+  stale partial assistant/tool output from the failed turn; guards against
+  retrying with no prior prompt or while a turn is running).
+- **`/loop [N]`** — show or set the `max_iterations` budget for new turns.
+- **`/steer <message>`** — redirect the running agent by restarting the turn
+  with the direction appended (preserving all prior context).
+- **`/cleanup <days> [--yes]`** — prune sessions older than N days. Dry-run
+  by default (re-run with `--yes` to delete); never deletes the current
+  session. Uses Hinnant's civil-date arithmetic (no new dependency).
+
+### Changed
+
+- **Slash-command module restructure** — `src/commands.rs` became a
+  `src/commands/` module directory; the dispatcher moved into
+  `tui/dispatch.rs` where it can mutate `TuiState` internals without
+  widening visibility. No behavior change.
+- **TUI input usability** — Up/Down now walk the full prompt-history (not
+  just the single most recent entry), and move the completion highlight
+  when the autocomplete popup is open (previously only Tab/Shift+Tab).
+
+### Fixed
+
+- **`SessionStore::delete()` path-traversal hardening** — `delete()` now
+  rejects non-bare session ids (empty, `.`, `..`, path separators, absolute
+  paths) before joining onto the sessions dir, so a crafted id can't make
+  `remove_dir_all` escape the sessions directory.
+
+[0.5.0]: https://github.com/raythurman2386/raven/compare/v0.4.2...v0.5.0
+
 ## [0.4.2] - 2026-08-22
 
 ### Added
@@ -104,7 +154,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Bumped `anydoc` 0.1.8 → 0.1.9.
 
-[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.5.0...HEAD
 [0.4.2]: https://github.com/raythurman2386/raven/compare/v0.4.1...v0.4.2
 
 ## [0.4.0] - 2026-08-21
