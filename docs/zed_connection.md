@@ -125,6 +125,30 @@ and give each a distinct key:
 }
 ```
 
+## Switching providers / models in the editor
+
+Raven advertises a `model` session config option over ACP listing **every
+configured provider's** models as provider-qualified ids (`provider/model`),
+so you can switch providers and models without restarting the thread. If the
+editor exposes the ACP session config options (e.g. a model selector in the
+Agent Panel), picking any entry switches that Raven session onto the chosen
+provider + model:
+
+- Each provider's list comes from its live `/models` endpoint when reachable,
+  else its curated fallback list.
+- Selections are `provider/model` ids (e.g. `ollama/deepseek-v4-flash:cloud`,
+  `opencode-go/glm-5.2`). A value with a known provider prefix switches
+  providers; a plain model name stays on the current provider.
+- Both the modern `session/set_config_option` and the legacy `session/set_model`
+  are supported, so older editors still work.
+- Per-provider lists are capped (200 models) so a huge OpenRouter catalog
+  can't flood the dropdown.
+
+> **Tip:** you can still pin the startup provider/model with `--provider` /
+> `--model` in the `agent_servers` entry; the in-editor selector starts from
+> that and can switch away from it.
+
+
 ## Troubleshooting
 
 - **Raven doesn't appear in the thread menu.** Confirm the settings file is

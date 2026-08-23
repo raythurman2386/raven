@@ -74,7 +74,9 @@ raven --list-sessions    # browse all sessions
 ### In the editor (Zed)
 
 Raven speaks Agent Client Protocol (ACP) over stdio (`raven --acp`), so it runs
-as an external agent inside [Zed](https://zed.dev). See
+as an external agent inside [Zed](https://zed.dev). It advertises a `model`
+session config option listing every configured provider's models, so you can
+switch providers and models from the editor's model selector. See
 [`docs/zed_connection.md`](docs/zed_connection.md) for the complete setup.
 
 ---
