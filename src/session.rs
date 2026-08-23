@@ -308,8 +308,13 @@ impl SessionStore {
     /// Remove a session directory (summary + messages + debug-events).
     ///
     /// Used by `/cleanup` to prune old sessions. Irreversible — the caller
-    /// must confirm before invoking.
+    /// must confirm before invoking. The id must be a bare session directory
+    /// name (no path separators / `..`) so a crafted id cannot make
+    /// `remove_dir_all` target outside the sessions directory.
     pub fn delete(&self, id: &str) -> Result<()> {
+        if !is_bare_session_id(id) {
+            bail!("Refusing to delete non-session id: {id:?}");
+        }
         let dir = self.session_dir(id);
         if !dir.exists() {
             bail!("Session not found: {}", id);
@@ -466,6 +471,19 @@ fn generate_session_id(iso: &str) -> String {
     let pid = std::process::id();
     let safe_iso = iso.replace(':', "-");
     format!("{safe_iso}-{pid}-{n:04x}")
+}
+
+/// Whether `id` is a bare session directory name safe to join onto the
+/// sessions dir. Rejects empty ids, path separators (`/`, `\`), `.` / `..`,
+/// and absolute paths so a crafted id cannot escape the sessions directory
+/// (e.g. in [`SessionStore::delete`]).
+fn is_bare_session_id(id: &str) -> bool {
+    !id.is_empty()
+        && id != "."
+        && id != ".."
+        && !id.contains('/')
+        && !id.contains('\\')
+        && std::path::Path::new(id).is_relative()
 }
 
 /// Generate an ISO 8601 timestamp string (UTC, second precision).
@@ -978,6 +996,28 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let store = SessionStore::for_workspace(tmp.path()).unwrap();
         assert!(store.delete("does-not-exist").is_err());
+    }
+
+    #[test]
+    fn delete_rejects_traversal_ids() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = SessionStore::for_workspace(tmp.path()).unwrap();
+
+        // A crafted id must not escape the sessions directory.
+        for bad in ["..", "../..", "a/../../evil", "a\\..\\..", "/abs/path", ""] {
+            assert!(store.delete(bad).is_err(), "delete must reject id {bad:?}");
+        }
+    }
+
+    #[test]
+    fn is_bare_session_id_classification() {
+        assert!(is_bare_session_id("2026-08-06T00-06-18-123-0001"));
+        assert!(!is_bare_session_id(".."));
+        assert!(!is_bare_session_id("."));
+        assert!(!is_bare_session_id(""));
+        assert!(!is_bare_session_id("a/b"));
+        assert!(!is_bare_session_id("a\\b"));
+        assert!(!is_bare_session_id("/abs"));
     }
 
     #[test]
