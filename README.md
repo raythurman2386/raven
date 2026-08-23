@@ -200,6 +200,10 @@ raven --mode agent -p "Refactor this function"
 - **`/model`** — switch models or check the live model list for the active provider
 - **`/provider`** — switch providers (ollama, openrouter, etc.) — slash-command autocomplete shows all available
 - **`/clear`** — start a fresh turn (keeps session history)
+- **`/retry`** — re-run the last user prompt after a failed turn
+- **`/loop [N]`** — show or set the max iteration budget for new turns
+- **`/steer <message>`** — redirect the running agent (restarts the turn with your direction appended)
+- **`/cleanup <days> [--yes]`** — prune sessions older than N days (dry-run unless `--yes`; never deletes the current session)
 - **`^C`** — stop the current task (session auto-saves)
 - **Up/Down** (empty input) — recall a previous prompt; type to reset. Home jumps to the top of the transcript, End returns to the live tail
 - **Mouse drag** — select text in the transcript to copy it to your clipboard
@@ -340,7 +344,7 @@ src/
   main.rs           # CLI, TUI, headless runner, session management
   lib.rs            # Library re-exports for benchmarks/integration tests
   agent/            # Core agent loop (core, tools_exec, stream, parallel)
-  commands.rs       # Slash-command registry (/provider, /model, /clear)
+  commands/         # Slash-command registry + parser (/retry, /loop, /steer, /cleanup, ...)
   tools/            # Tool implementations (25 total) + sandbox/
   tui/              # ratatui TUI (render, markdown, completion)
   config/           # Layered config.toml loading, provider presets
