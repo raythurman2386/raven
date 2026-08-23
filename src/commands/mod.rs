@@ -107,6 +107,12 @@ pub fn commands() -> Vec<CommandSpec> {
             summary: "Re-run the last user prompt after a failed turn",
             arg_help: None,
         },
+        CommandSpec {
+            name: "loop",
+            aliases: &[],
+            summary: "Show the max iteration budget, or set it: /loop <N>",
+            arg_help: Some("[N]"),
+        },
     ]
 }
 

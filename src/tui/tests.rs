@@ -863,6 +863,84 @@ async fn retry_rejected_while_running() {
     assert!(state.running, "running flag should be left as-is");
 }
 
+#[tokio::test]
+async fn loop_command_sets_and_reads_iteration_budget() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = SessionStore::for_workspace(tmp.path()).unwrap();
+    let mut session = store.create("gemma4:latest").unwrap();
+    let mut settings = test_settings(tmp.path());
+    let mut compact_at = 128_000 - 128_000 / 8;
+    let mut state = dummy_state();
+
+    // /loop with a value sets the budget.
+    let pc = commands::parse("/loop 15").unwrap();
+    let handled = dispatch::dispatch_slash_command(
+        &mut state,
+        &pc,
+        &mut settings,
+        &store,
+        &mut session,
+        &mut compact_at,
+        &ConfigFile::default(),
+    )
+    .await
+    .unwrap();
+    assert!(handled);
+    assert_eq!(settings.max_iterations, 15);
+
+    // /loop with no args reports the current budget.
+    let pc = commands::parse("/loop").unwrap();
+    let handled = dispatch::dispatch_slash_command(
+        &mut state,
+        &pc,
+        &mut settings,
+        &store,
+        &mut session,
+        &mut compact_at,
+        &ConfigFile::default(),
+    )
+    .await
+    .unwrap();
+    assert!(handled);
+    assert!(
+        state.blocks.iter().any(|b| match b {
+            BlockKind::System(s) => s.text().contains("max iterations: 15"),
+            _ => false,
+        }),
+        "should report the current budget"
+    );
+}
+
+#[tokio::test]
+async fn loop_command_rejects_invalid_counts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = SessionStore::for_workspace(tmp.path()).unwrap();
+    let mut session = store.create("gemma4:latest").unwrap();
+    let mut settings = test_settings(tmp.path());
+    let original = settings.max_iterations;
+    let mut compact_at = 128_000 - 128_000 / 8;
+    let mut state = dummy_state();
+
+    for bad in ["0", "-1", "abc"] {
+        let pc = commands::parse(&format!("/loop {bad}")).unwrap();
+        let _ = dispatch::dispatch_slash_command(
+            &mut state,
+            &pc,
+            &mut settings,
+            &store,
+            &mut session,
+            &mut compact_at,
+            &ConfigFile::default(),
+        )
+        .await
+        .unwrap();
+    }
+    assert_eq!(
+        settings.max_iterations, original,
+        "budget must be unchanged"
+    );
+}
+
 #[test]
 fn opencode_go_models_autocomplete() {
     // The provider-aware fallback must surface opencode-go models even when
