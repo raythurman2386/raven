@@ -232,6 +232,10 @@ async fn main() -> Result<()> {
     // Clone for the TUI, which needs the full config to resolve /provider
     // against config-declared providers after `cfg` fields are moved out below.
     let cfg_for_tui = cfg.clone();
+    // Clone for the ACP branch, which needs the full config to enumerate
+    // configured providers for the model picker (same reason — `cfg` fields
+    // are moved out below).
+    let cfg_for_acp = cfg.clone();
 
     // Resolve the active provider: CLI --provider > RAVEN_PROVIDER env >
     // config `provider` > builtin `ollama`. Endpoint + auth come from the
@@ -300,7 +304,7 @@ async fn main() -> Result<()> {
     };
 
     if cli.acp {
-        return raven::acp::run_stdio(settings).await;
+        return raven::acp::run_stdio(settings, cfg_for_acp).await;
     }
 
     if let Some(tasks) = cli.parallel {
