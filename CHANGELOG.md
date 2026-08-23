@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-08-22
+
 ### Added
 
 - **Secrets gate on `git_commit`** — staged files are scanned for well-known
@@ -102,8 +104,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Bumped `anydoc` 0.1.8 → 0.1.9.
 
-[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.4.1...HEAD
-[0.4.1]: https://github.com/raythurman2386/raven/compare/v0.4.0...v0.4.1
+[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/raythurman2386/raven/compare/v0.4.1...v0.4.2
 
 ## [0.4.0] - 2026-08-21
 
