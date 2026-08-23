@@ -101,6 +101,12 @@ pub fn commands() -> Vec<CommandSpec> {
             summary: "Export this session as a local Markdown/JSON bundle",
             arg_help: Some("[dir]"),
         },
+        CommandSpec {
+            name: "retry",
+            aliases: &["r"],
+            summary: "Re-run the last user prompt after a failed turn",
+            arg_help: None,
+        },
     ]
 }
 

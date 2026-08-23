@@ -535,6 +535,7 @@ fn dummy_state() -> TuiState {
         theme: Theme::RAVENWOOD,
         prompt_history: Vec::new(),
         hist_idx: 0,
+        last_turn: None,
     }
 }
 
@@ -740,6 +741,126 @@ fn slash_command_completes_provider_and_model_names() {
 
     let model = candidates_for("/model q", &arg_candidates).unwrap();
     assert!(model.candidates.iter().any(|s| s == "qwen3.8:latest"));
+}
+
+#[tokio::test]
+async fn retry_re_fires_last_turn_and_clears_failed_output() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = SessionStore::for_workspace(tmp.path()).unwrap();
+    let mut session = store.create("gemma4:latest").unwrap();
+    let mut settings = test_settings(tmp.path());
+    let mut compact_at = 128_000 - 128_000 / 8;
+    let mut state = dummy_state();
+
+    // Simulate a completed turn whose last message is the user prompt, plus
+    // a failed partial assistant reply that /retry must drop.
+    state.last_turn = Some((Vec::new(), "do the thing".into(), false));
+    state.session_messages.push(ChatMessage {
+        role: "user".into(),
+        content: Some("do the thing".into()),
+        tool_calls: None,
+        tool_call_id: None,
+    });
+    state.session_messages.push(ChatMessage {
+        role: "assistant".into(),
+        content: Some("partial failed output".into()),
+        tool_calls: None,
+        tool_call_id: None,
+    });
+    state.assistant_text = "partial failed output".into();
+
+    let pc = commands::parse("/retry").unwrap();
+    let handled = dispatch::dispatch_slash_command(
+        &mut state,
+        &pc,
+        &mut settings,
+        &store,
+        &mut session,
+        &mut compact_at,
+        &ConfigFile::default(),
+    )
+    .await
+    .unwrap();
+
+    assert!(handled);
+    assert!(state.running, "retry must start a turn");
+    assert!(state.task_handle.is_some(), "retry must spawn an agent");
+    // The failed partial assistant message must be truncated away.
+    assert_eq!(state.session_messages.len(), 1);
+    assert_eq!(state.session_messages[0].role, "user");
+    assert!(state.assistant_text.is_empty());
+}
+
+#[tokio::test]
+async fn retry_without_prior_turn_reports_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = SessionStore::for_workspace(tmp.path()).unwrap();
+    let mut session = store.create("gemma4:latest").unwrap();
+    let mut settings = test_settings(tmp.path());
+    let mut compact_at = 128_000 - 128_000 / 8;
+    let mut state = dummy_state();
+
+    let pc = commands::parse("/retry").unwrap();
+    let handled = dispatch::dispatch_slash_command(
+        &mut state,
+        &pc,
+        &mut settings,
+        &store,
+        &mut session,
+        &mut compact_at,
+        &ConfigFile::default(),
+    )
+    .await
+    .unwrap();
+
+    assert!(handled);
+    assert!(
+        !state.running,
+        "no turn should start without a prior prompt"
+    );
+    assert!(state.task_handle.is_none());
+    assert!(
+        state.blocks.iter().any(|b| match b {
+            BlockKind::System(s) => s.text().contains("nothing to retry"),
+            _ => false,
+        }),
+        "should report nothing to retry"
+    );
+}
+
+#[tokio::test]
+async fn retry_rejected_while_running() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = SessionStore::for_workspace(tmp.path()).unwrap();
+    let mut session = store.create("gemma4:latest").unwrap();
+    let mut settings = test_settings(tmp.path());
+    let mut compact_at = 128_000 - 128_000 / 8;
+    let mut state = dummy_state();
+    state.last_turn = Some((Vec::new(), "do the thing".into(), false));
+    state.running = true;
+
+    let pc = commands::parse("/retry").unwrap();
+    let handled = dispatch::dispatch_slash_command(
+        &mut state,
+        &pc,
+        &mut settings,
+        &store,
+        &mut session,
+        &mut compact_at,
+        &ConfigFile::default(),
+    )
+    .await
+    .unwrap();
+
+    assert!(handled);
+    assert!(
+        state.blocks.iter().any(|b| match b {
+            BlockKind::System(s) => s.text().contains("already running"),
+            _ => false,
+        }),
+        "should report already running"
+    );
+    assert!(state.running, "running flag should be left as-is");
 }
 
 #[test]

@@ -16,7 +16,7 @@ use crate::config::Settings;
 use crate::session::{Session, SessionStore};
 
 use super::blocks::BlockKind;
-use super::{theme_name, AgentState, Theme, TuiState};
+use super::{begin_agent_turn, theme_name, AgentState, Theme, TuiState};
 
 /// Dispatch a parsed slash command, mutating TUI state as needed.
 ///
@@ -211,6 +211,41 @@ pub(super) async fn dispatch_slash_command(
                 Err(e) => state.push_system(format!("export failed: {e}")),
             }
             state.log_dirty = true;
+        }
+        "retry" => {
+            let Some((preload, prompt, read_only)) = state.last_turn.clone() else {
+                state.push_system("nothing to retry — send a task first");
+                state.log_dirty = true;
+                return Ok(true);
+            };
+            if state.running {
+                state.push_system("a turn is already running — /stop it first");
+                state.log_dirty = true;
+                return Ok(true);
+            }
+            // Truncate session history back to the last user message
+            // (inclusive) so no stale partial assistant/tool output from the
+            // failed turn leaks into the retry.
+            if let Some(pos) = state
+                .session_messages
+                .iter()
+                .rposition(|m| m.role == "user")
+            {
+                state.session_messages.truncate(pos + 1);
+            }
+            // Mirror `start_task`'s running-state setup (the stored preload is
+            // history *before* the user message, so Agent::run re-appends it).
+            state.running = true;
+            state.status = "running…".into();
+            state.messages_dirty = true;
+            state.assistant_text.clear();
+            begin_agent_turn(state, settings.clone(), preload, prompt, move |agent| {
+                if read_only {
+                    agent.plan_only()
+                } else {
+                    agent
+                }
+            });
         }
         "theme" => {
             let name = pc.args.trim();

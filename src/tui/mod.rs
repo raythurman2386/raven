@@ -284,6 +284,9 @@ struct TuiState {
     /// Recall cursor into `prompt_history`; `== prompt_history.len()` means
     /// "live" (the empty baseline). Up decrements, Down increments.
     hist_idx: usize,
+    /// (preload, prompt, read_only) of the last user-initiated turn, for
+    /// `/retry`. Cleared on session reset.
+    last_turn: Option<(Vec<ChatMessage>, String, bool)>,
 }
 
 impl TuiState {
@@ -350,6 +353,7 @@ impl TuiState {
             theme: Theme::by_name(&settings.theme).unwrap_or_else(Theme::default_theme),
             prompt_history: Vec::new(),
             hist_idx: 0,
+            last_turn: None,
         }
     }
 
@@ -1887,6 +1891,7 @@ fn reset_session(
     state.selection = None;
     state.live_tool = None;
     state.turn_tool_count = 0;
+    state.last_turn = None;
     state.scroll = 0;
     state.auto_scroll = true;
     Ok(())
@@ -1931,6 +1936,8 @@ fn start_task(
     // to freeze Enter→paint. The walk is now cached/capped, and this
     // construction must not block the next frame.
     let read_only = state.mode.read_only();
+    // Remember this turn so `/retry` can re-fire it after a failure.
+    state.last_turn = Some((preload.clone(), prompt.clone(), read_only));
     begin_agent_turn(state, settings.clone(), preload, prompt, move |agent| {
         if read_only {
             agent.plan_only()
