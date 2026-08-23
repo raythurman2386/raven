@@ -692,7 +692,7 @@ async fn model_switch_updates_settings_compact_and_header_blocks() {
     let mut compact_at = 128_000 - 128_000 / 8;
 
     let pc = commands::parse("/model deepseek-v4-pro:cloud").unwrap();
-    let handled = dispatch_slash_command(
+    let handled = dispatch::dispatch_slash_command(
         &mut state,
         &pc,
         &mut settings,
@@ -742,6 +742,40 @@ fn slash_command_completes_provider_and_model_names() {
     assert!(model.candidates.iter().any(|s| s == "qwen3.8:latest"));
 }
 
+#[test]
+fn opencode_go_models_autocomplete() {
+    // The provider-aware fallback must surface opencode-go models even when
+    // the live /models fetch returns nothing (deterministic offline test).
+    let mut settings = test_settings(tempfile::tempdir().unwrap().path());
+    settings.provider = crate::config::Provider::builtin("opencode-go")
+        .expect("opencode-go builtin")
+        .resolve_key();
+    let arg_candidates = |cmd: &str| -> Vec<String> {
+        crate::tui::completion_arg_candidates(&settings, &ConfigFile::default(), cmd)
+    };
+
+    let q = candidates_for("/model q", &arg_candidates).unwrap();
+    assert!(
+        q.candidates.iter().any(|s| s == "qwen3.8-max"),
+        "qwen3.8-max not in /model q completion: {:?}",
+        q.candidates
+    );
+
+    let m = candidates_for("/model m", &arg_candidates).unwrap();
+    assert!(
+        m.candidates.iter().any(|s| s == "minimax-m3"),
+        "minimax-m3 not in /model m completion: {:?}",
+        m.candidates
+    );
+
+    let d = candidates_for("/model d", &arg_candidates).unwrap();
+    assert!(
+        d.candidates.iter().any(|s| s == "deepseek-v4-flash"),
+        "deepseek-v4-flash not in /model d completion: {:?}",
+        d.candidates
+    );
+}
+
 #[tokio::test]
 async fn theme_command_switches_theme_and_lists() {
     let tmp = tempfile::tempdir().unwrap();
@@ -753,7 +787,7 @@ async fn theme_command_switches_theme_and_lists() {
 
     // /theme with no args lists available themes.
     let pc = commands::parse("/theme").unwrap();
-    let handled = dispatch_slash_command(
+    let handled = dispatch::dispatch_slash_command(
         &mut state,
         &pc,
         &mut settings,
@@ -784,7 +818,7 @@ async fn theme_command_switches_theme_and_lists() {
 
     // /theme nord switches the active theme.
     let pc = commands::parse("/theme nord").unwrap();
-    let handled = dispatch_slash_command(
+    let handled = dispatch::dispatch_slash_command(
         &mut state,
         &pc,
         &mut settings,
@@ -800,7 +834,7 @@ async fn theme_command_switches_theme_and_lists() {
 
     // /theme unknown reports an error and leaves the theme unchanged.
     let pc = commands::parse("/theme nope").unwrap();
-    let handled = dispatch_slash_command(
+    let handled = dispatch::dispatch_slash_command(
         &mut state,
         &pc,
         &mut settings,
