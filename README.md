@@ -119,6 +119,196 @@ as an external agent inside [Zed](https://zed.dev). See
 
 See also the full [docs index](docs/README.md) and [CHANGELOG.md](CHANGELOG.md).
 
+Raven keeps a plain, editable file at `.raven/MEMORY.md`. The first 25KB is injected into the system prompt on each run. The `memory_update` tool lets the agent persist conventions, decisions, and context across sessions — but it's just a Markdown file you can read and edit yourself. There's no hidden state, no "soul" or persona. It remembers exactly what you (or the agent) put in that file, and nothing else.
+
+---
+
+## Context management
+
+The agent tracks token usage with a built-in token estimator (no external vocab file needed). When the conversation approaches the context window limit, it automatically:
+
+1. **Prunes old tool results** — soft-trims tool outputs older than 3 turns (keeps head + tail with a truncation marker)
+2. **Compacts the conversation** — summarizes the middle of the conversation, preserving the system message, a short facts block (goal, open todos, key paths, last verification), and the last ~40% of the context budget for recent messages. The TUI shows a one-line "what was compacted" note.
+
+Context window sizes are fetched from the model's actual metadata via Ollama's `/api/show` endpoint. This returns the real `context_length` from the model file (e.g. `gemma4` → 128K, `qwen3.5` → 256K, `deepseek-v4-pro:cloud` → 1M). If the API is unreachable (Ollama not running, model not found), a name-based heuristic is used as fallback:
+
+- `glm:cloud`, `deepseek-v4:cloud` (flash and pro) → 1M
+- `qwen3.5` → 256K
+- `gemma4`, `gemma3`, `qwen2.5`, `qwen3`, `llama3.1`, `llama3.2`, `deepseek`, `codestral`, `glm` → 128K
+- `llama3`, `codellama`, `"32k"` in name → 32K
+- `mistral`, `"8k"` in name → 8K
+- Unknown models → 32K (safe default)
+
+---
+
+## Session persistence
+
+Sessions are stored as JSONL under `.raven/sessions/`:
+
+```
+.raven/sessions/
+  2026-08-17T12-34-56-12345-0001/          # collision-proof ID (timestamp + PID + counter)
+    summary.json                             # metadata: id, model, timestamps, title
+    messages.jsonl                           # one ChatMessage per line (append-only)
+    debug-events.jsonl                       # local-only event log (model changes, saves, etc.)
+    last.patch                               # git diff snapshot (for audit/rollback)
+```
+
+**Local-only guarantees:**
+- All writes are atomic (temp file + rename) for crash safety.
+- **Debug events** (model changes, saves, etc.) are logged locally for reproducible debugging — never networked.
+- **Patch snapshots** (`last.patch`) are created after each session, recording the full git diff for audit or rollback decisions.
+- No telemetry, no remote reporting, no cloud sync.
+
+**Usage:**
+```bash
+raven --resume            # continue the most recent session
+raven --resume <id>       # continue a specific session by ID
+raven --list-sessions     # browse all sessions and their metadata
+raven --export            # write a local Markdown/JSON bundle of the latest session
+raven --export <id>       # export a specific session (see also TUI `/export`)
+```
+
+---
+
+## Workflow & tips
+
+### Plan mode (default)
+
+Plan mode is the recommended workflow for important changes:
+1. **Propose** — agent creates a step-by-step plan
+2. **Review** — you read and approve (or revise)
+3. **Execute** — agent runs the plan with full tools
+
+```bash
+raven -p "Add type safety to this handler"
+# (agent proposes a plan)
+# ── Approve? [Y]es / [n]o / [r]evise ──
+# y
+# (agent executes)
+```
+
+### Quick edits (agent mode)
+
+Skip the plan step for quick, exploratory tasks:
+```bash
+raven --mode agent -p "Refactor this function"
+```
+
+### TUI tips
+
+- **`/model`** — switch models or check the live model list for the active provider
+- **`/provider`** — switch providers (ollama, openrouter, etc.) — slash-command autocomplete shows all available
+- **`/clear`** — start a fresh turn (keeps session history)
+- **`^C`** — stop the current task (session auto-saves)
+- **Up/Down** (empty input) — recall a previous prompt; type to reset. Home jumps to the top of the transcript, End returns to the live tail
+- **Mouse drag** — select text in the transcript to copy it to your clipboard
+- The footer below the input box shows context-sensitive keyhints (approve / answer / interrupt / idle)
+
+### For large codebases
+
+Raven injects a repo symbol map for files >50KB. The map helps the agent navigate structure without reading entire files:
+```bash
+raven --context-window 131072 -p "Find all database queries and optimize them"
+```
+
+If the agent seems stuck compacting, raise the threshold:
+```bash
+raven --compact-threshold 0.85 -p "Task"
+```
+
+### Workspace memory
+
+Raven keeps a plain `.raven/MEMORY.md` file across sessions. The agent can read and update it:
+- Use `memory_search` to find past decisions
+- Use `memory_update` to record conventions or context
+
+Example: *"Remember we prefer async/await over promises in this codebase"*
+
+It's just a Markdown file — open it, edit it, or delete it. It only holds what you put there.
+
+### Workspace rules
+
+Create an `AGENTS.md` or `CLAUDE.md` file in your repo root:
+```markdown
+# Coding Guidelines
+
+- Always write tests for new features
+- Use TypeScript, not JavaScript
+- Follow the style guide in docs/STYLE.md
+```
+
+Raven auto-loads this and injects it into every session. You can also override per-session:
+```bash
+raven --rules "Use Python 3.11+; no type hints optional." -p "Task"
+```
+
+### Multi-agent tasks
+
+Use `--parallel` to spawn multiple focused agents and gather results in parallel:
+```bash
+raven --parallel \
+  "Summarize the architecture" \
+  "List all TODOs" \
+  "Check for secrets in git history"
+```
+
+---
+
+## Shell safety
+
+The `run_shell` tool uses two complementary filters, neither of which is a security boundary:
+
+1. **Denylist** — a regex that blocks obviously destructive patterns (recursive root deletes, fork bombs, `curl | sh`, etc.). This is a **best-effort guard**, not a security boundary. A denylist is inherently incomplete — it can always be bypassed (e.g. `rm -rf ~` is not blocked even though `rm -rf /` is).
+
+2. **Allowlist** — a regex that matches known-safe development commands (`cargo`, `git`, `npm`, `ls`, `grep`, etc.). When `confirm_shell` is enabled (the default, non-`--yolo` path), commands matching the allowlist run without a confirmation prompt. Anything outside the allowlist requires explicit user approval. Commands whose first token is allowlisted and contain no shell metacharacters run via **direct exec** (no `sh -c`), removing the shell-injection surface for the common case.
+
+The `--yolo` flag disables confirmation entirely, but the denylist still applies as a last-resort filter. In addition to these filters, confined subprocesses run under OS-level sandboxing: **Landlock** (filesystem confinement) and **seccomp** (network-block) on Linux, plus **resource limits** (CPU / file size / fds) on Linux + macOS, and **Job Object** confinement on Windows. See [`docs/security.md`](docs/security.md) for the full threat model.
+
+---
+
+## Testing
+
+### Unit & integration tests
+
+```bash
+cargo test                    # offline unit + integration tests
+cargo test eval_suite         # Layer A (fake model) eval harness
+cargo clippy                  # zero warnings
+cargo clippy -- -W clippy::pedantic  # stricter linting
+```
+
+### Live agent eval suite
+
+The eval suite runs real agent tasks against a live model endpoint and grades the results. See [`evals/README.md`](evals/README.md) for full details. I run this to decide how well new models *could* run in this harness for your average usage, not as a hard evaluation of strength.
+
+```bash
+cargo build --release
+
+# Against Ollama Cloud (needs RAVEN_API_KEY)
+python3 evals/run.py --model qwen3.8 --host https://api.ollama.ai/api/v1
+
+# Against local Ollama
+python3 evals/run.py --model qwen3.8:latest --host http://127.0.0.1:11434/v1
+
+# Against OpenRouter (needs RAVEN_API_KEY)
+python3 evals/run.py --model grok-4.5 --host https://openrouter.ai/api/v1
+
+# View results
+cat evals/out/<run-id>.md
+```
+
+**Top-performing models (current):**
+- **Ollama Cloud (daily-use recommended):** `kimi-k3:cloud` (latest, excellent), `deepseek-v4-pro:cloud` (high quality), `deepseek-v4-flash:cloud` (efficient), `glm-5.2:cloud` (long-horizon)
+- **OpenRouter (frontier):** `x-ai/grok-4.5` (best reasoning, multimodal), `x-ai/grok-4.6` (frontier), `Stealth/ox-alpha` (pretty noice)
+- **Local (when cloud unavailable):** `qwen3.8:latest`
+
+See `docs/testing.md` for coverage and mutation testing details.
+
+**Troubleshooting:** common failure modes (Windows `.exe`, stream errors,
+sandbox denies, SearXNG fallback, ACP) are covered in
+[`docs/troubleshooting.md`](docs/troubleshooting.md).
+
 ---
 
 ## Privacy & local-only operation

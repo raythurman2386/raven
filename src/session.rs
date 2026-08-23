@@ -227,6 +227,37 @@ impl SessionStore {
         write_atomic(&path, &bytes)
     }
 
+    /// Export this session as a local Markdown + JSON bundle.
+    ///
+    /// Writes `session.md` and `session.json` under `dest_dir` (created if
+    /// needed). Copies `last.patch` when the session directory has one.
+    /// Nothing is sent off-machine.
+    pub fn export_bundle(&self, session: &Session, dest_dir: &Path) -> Result<PathBuf> {
+        std::fs::create_dir_all(dest_dir)
+            .with_context(|| format!("create export dir {}", dest_dir.display()))?;
+        let md_path = dest_dir.join("session.md");
+        let json_path = dest_dir.join("session.json");
+        write_atomic(&md_path, render_session_markdown(session).as_bytes())?;
+        let json = serde_json::json!({
+            "summary": session.summary,
+            "messages": session.messages,
+        });
+        write_atomic(&json_path, serde_json::to_string_pretty(&json)?.as_bytes())?;
+        let src_patch = self.session_dir(&session.summary.id).join("last.patch");
+        if src_patch.exists() {
+            let _ = std::fs::copy(&src_patch, dest_dir.join("last.patch"));
+        }
+        Ok(dest_dir.to_path_buf())
+    }
+
+    /// Default export directory for a session: `{workspace}/.raven/exports/{id}/`.
+    pub fn default_export_dir(&self, session: &Session) -> PathBuf {
+        self.workspace
+            .join(".raven")
+            .join("exports")
+            .join(&session.summary.id)
+    }
+
     /// Snapshot the current repo diff for this session as a patch file.
     ///
     /// This creates a reviewable artifact in `.raven/sessions/<id>/last.patch`
@@ -310,6 +341,53 @@ fn migrate_summary(mut summary: SessionSummary) -> Result<SessionSummary> {
 
     summary.version = CURRENT_SESSION_FORMAT_VERSION;
     Ok(summary)
+}
+
+/// Render a session as readable Markdown for a local export bundle.
+fn render_session_markdown(session: &Session) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("# Raven session {}\n\n", session.summary.id));
+    out.push_str(&format!("- Model: {}\n", session.summary.model));
+    out.push_str(&format!("- Created: {}\n", session.summary.created_at));
+    out.push_str(&format!("- Updated: {}\n", session.summary.updated_at));
+    if !session.summary.title.is_empty() {
+        out.push_str(&format!("- Title: {}\n", session.summary.title));
+    }
+    out.push_str("\n## Messages\n");
+    for (i, msg) in session.messages.iter().enumerate() {
+        let heading = match msg.role.as_str() {
+            "system" => "system".to_string(),
+            "user" => "user".to_string(),
+            "assistant" => "assistant".to_string(),
+            "tool" => format!(
+                "tool{}",
+                msg.tool_call_id
+                    .as_deref()
+                    .map(|id| format!(" (`{id}`)"))
+                    .unwrap_or_default()
+            ),
+            other => other.to_string(),
+        };
+        out.push_str(&format!("\n### {}. {}\n\n", i + 1, heading));
+        if let Some(tcs) = &msg.tool_calls {
+            for tc in tcs {
+                out.push_str(&format!(
+                    "- `{}` {}\n",
+                    tc.function.name, tc.function.arguments
+                ));
+            }
+            out.push('\n');
+        }
+        if let Some(content) = &msg.content {
+            if !content.is_empty() {
+                out.push_str(content);
+                if !content.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Load messages from a JSONL file.
@@ -508,6 +586,39 @@ mod tests {
             .filter(|e| e.file_name().to_string_lossy().contains(".tmp"))
             .collect();
         assert!(leftovers.is_empty(), "no temp files should remain");
+    }
+
+    #[test]
+    fn export_bundle_writes_markdown_and_json() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = SessionStore::for_workspace(tmp.path()).unwrap();
+        let mut session = store.create("test-model").unwrap();
+        session.summary.title = "fix parser".into();
+        let _ = store.update_summary(&mut session, Some("fix parser".into()));
+        store
+            .append_message(
+                &session,
+                &ChatMessage {
+                    role: "user".into(),
+                    content: Some("please fix it".into()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+            )
+            .unwrap();
+        let loaded = store.load(&session.summary.id).unwrap();
+        let dest = tmp.path().join("out");
+        let written = store.export_bundle(&loaded, &dest).unwrap();
+        assert_eq!(written, dest);
+        let md = std::fs::read_to_string(dest.join("session.md")).unwrap();
+        assert!(md.contains(&session.summary.id));
+        assert!(md.contains("please fix it"));
+        assert!(md.contains("fix parser"));
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dest.join("session.json")).unwrap())
+                .unwrap();
+        assert_eq!(json["summary"]["model"], "test-model");
+        assert_eq!(json["messages"][0]["content"], "please fix it");
     }
 
     #[test]

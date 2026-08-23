@@ -66,11 +66,19 @@ pub async fn drain_events_logged(
             AgentEvent::Compacted {
                 before_tokens,
                 after_tokens,
+                note,
             } => {
-                eprintln!(
-                    "[compacted context: ~{} → ~{} tokens]",
-                    before_tokens, after_tokens
-                );
+                if note.is_empty() {
+                    eprintln!(
+                        "[compacted context: ~{} → ~{} tokens]",
+                        before_tokens, after_tokens
+                    );
+                } else {
+                    eprintln!(
+                        "[compacted context: ~{} → ~{} tokens — {}]",
+                        before_tokens, after_tokens, note
+                    );
+                }
             }
             AgentEvent::Retry { attempt, delay_ms } => {
                 eprintln!("[retry {}/3 in {}ms]", attempt, delay_ms);

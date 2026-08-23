@@ -85,9 +85,9 @@ When `history_tokens(messages) > compact_threshold × (context_window − output
 2. **Soft-prune old tool results** — trim tool outputs older than 3 turns (keep head 1500 + tail 1500 chars with a truncation marker). If this brings tokens under the limit, stop here.
 3. **Compute a trailing budget** = ~40% of `(context_window − output_reserve)`.
 4. **Find the tail**: walk backward from the end, accumulating messages until the trailing budget is exceeded. Adjust the start so tool-call/tool-result pairs aren't split (see `find_safe_tail_start`).
-5. **LLM summarization**: the middle messages are sent to the model in a dedicated non-streaming request for summarization (max ~150 words). If the LLM call fails, an extractive fallback summarizer condenses the middle into a synthetic user message (`[Compacted conversation summary]`) + an assistant acknowledgement. User asks, assistant actions, tool names, and truncated tool bodies are captured. Summary is capped at 4000 chars.
+5. **LLM summarization**: the middle messages are sent to the model in a dedicated non-streaming request for summarization (max ~150 words, structured: Goal / Open todos / Key paths / Last verification + recap). If the LLM call fails, an extractive fallback summarizer condenses the middle. A structured facts block (goal, open todos, key paths, last `run_tests`/`run_lint` result) is always prepended so those anchors survive even if the LLM drops them. Summary is capped at 4000 chars.
 6. **Replace history**: `[system, summary_user, summary_assistant, ...tail]`.
-7. **Emit a `Compacted` event** with `before_tokens` / `after_tokens`.
+7. **Emit a `Compacted` event** with `before_tokens` / `after_tokens` and a short `note` ("what was compacted").
 
 ### Limitations
 

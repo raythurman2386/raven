@@ -703,3 +703,42 @@ async fn eval_suite_verify_before_done_emits_gate() {
         .iter()
         .any(|e| matches!(e, AgentEvent::ToolStart { name, .. } if name == "run_tests")));
 }
+
+/// Claiming "tests passed" in assistant text without calling `run_tests`
+/// must still arm the enforced-verify gate.
+#[tokio::test]
+async fn eval_suite_claims_tests_passed_without_run_tests_still_gates() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[package]\nname=\"v\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(tmp.path().join("src")).unwrap();
+    std::fs::write(tmp.path().join("src/lib.rs"), "pub fn id(n:i32)->i32{n}\n").unwrap();
+
+    let mut s = settings_for(tmp.path());
+    s.verify = true;
+    s.max_iterations = 6;
+
+    let mut agent = Agent::new(s).unwrap().with_completion_source(scripted(vec![
+        sse_tool_call(
+            "w1",
+            "write_file",
+            r#"{"path":"src/lib.rs","content":"pub fn id(n:i32)->i32{n}\n"}"#,
+        ),
+        sse_text("All tests passed."),
+        sse_tool_call("t1", "run_tests", r#"{}"#),
+        sse_text("Verified after the gate."),
+    ]));
+    let (tx, mut rx) = mpsc::channel(64);
+    agent.run("touch lib", tx).await.unwrap();
+    let events = drain(&mut rx).await;
+
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::VerifyRequired)),
+        "claiming tests passed in text must not skip the verify gate"
+    );
+}

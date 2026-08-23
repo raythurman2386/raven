@@ -49,10 +49,12 @@ pub enum AgentEvent {
     ToolEnd { name: String, preview: String },
     /// A new agent iteration is starting (1-based).
     Iteration(usize),
-    /// Context was compacted; carries before/after token estimates.
+    /// Context was compacted; carries before/after token estimates and a
+    /// short "what was compacted" note (goal / todos / paths / last verify).
     Compacted {
         before_tokens: usize,
         after_tokens: usize,
+        note: String,
     },
     /// A transient error is being retried after a delay.
     Retry { attempt: usize, delay_ms: u64 },

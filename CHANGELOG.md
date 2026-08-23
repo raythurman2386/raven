@@ -23,6 +23,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Session debug-events for `run_shell`** — commands that actually start
   (allowlisted, confirmed, or `--yolo`) are recorded locally in
   `debug-events.jsonl` as `shell` events.
+- **Structured compaction** — extractive and LLM summaries now lead with
+  Goal / Open todos / Key paths / Last verification. The `Compacted` event
+  carries a one-line "what was compacted" note shown in the TUI and
+  headless log.
+- **Session export** — `/export [dir]` (alias `/x`) and `raven --export
+  [session-id]` write a local Markdown + JSON bundle (plus `last.patch`
+  when present) under `.raven/exports/<id>/` by default. Nothing is sent
+  off-machine.
 
 ### Changed
 

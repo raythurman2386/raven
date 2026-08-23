@@ -95,6 +95,12 @@ pub fn commands() -> Vec<CommandSpec> {
             summary: "Switch the color theme: /theme <name> (or /theme to list)",
             arg_help: Some("[name]"),
         },
+        CommandSpec {
+            name: "export",
+            aliases: &["x"],
+            summary: "Export this session as a local Markdown/JSON bundle",
+            arg_help: Some("[dir]"),
+        },
     ]
 }
 
@@ -255,6 +261,14 @@ mod tests {
         assert_eq!(parse("/t").unwrap().name, "theme");
         assert_eq!(parse("/theme nord").unwrap().args, "nord");
         assert!(help_text().contains("/theme"), "help should list /theme");
+    }
+
+    #[test]
+    fn export_command_registered() {
+        assert_eq!(parse("/export").unwrap().name, "export");
+        assert_eq!(parse("/x").unwrap().name, "export");
+        assert_eq!(parse("/export /tmp/out").unwrap().args, "/tmp/out");
+        assert!(help_text().contains("/export"), "help should list /export");
     }
 
     #[test]

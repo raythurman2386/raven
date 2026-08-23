@@ -196,6 +196,28 @@ fn find_safe_tail_start(messages: &[ChatMessage], desired_start: usize) -> usize
 /// The result of a compaction: the new token estimate and how it changed.
 pub type CompactionResult = (usize, usize);
 
+/// Outcome of a compaction pass, including a short user-visible note.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompactionReport {
+    /// Token estimate before this pass.
+    pub before_tokens: usize,
+    /// Token estimate after this pass (never greater than `before_tokens`).
+    pub after_tokens: usize,
+    /// One-line "what was compacted" for the TUI / headless log.
+    pub note: String,
+}
+
+/// Structured facts lifted out of compacted turns so the model keeps its
+/// bearings after the middle is replaced by a summary.
+#[derive(Debug, Default, Clone)]
+struct CompactFacts {
+    goal: Option<String>,
+    open_todos: Vec<String>,
+    key_paths: Vec<String>,
+    last_verification: Option<String>,
+    middle_len: usize,
+}
+
 /// The outcome of [`prepare_compaction`].
 enum CompactionOutcome {
     /// History is under the soft limit — no compaction performed.
@@ -269,24 +291,210 @@ fn prepare_compaction(
     })
 }
 
+fn json_str_field(raw: &str, field: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(raw).ok()?;
+    v.get(field)?
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn json_todos(raw: &str) -> Vec<String> {
+    let v: serde_json::Value = match serde_json::from_str(raw) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let Some(arr) = v.get("todos").and_then(|t| t.as_array()) else {
+        return Vec::new();
+    };
+    arr.iter()
+        .filter_map(|t| {
+            let status = t
+                .get("status")
+                .and_then(|s| s.as_str())
+                .unwrap_or("pending");
+            if status == "completed" || status == "complete" || status == "done" {
+                return None;
+            }
+            t.get("content")
+                .and_then(|c| c.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        })
+        .collect()
+}
+
+fn section_after<'a>(text: &'a str, heading: &str) -> Option<&'a str> {
+    let rest = text.split_once(heading)?.1;
+    let rest = rest.trim_start_matches('\n');
+    let end = rest.find("\n--- ").unwrap_or(rest.len());
+    let body = rest[..end].trim();
+    if body.is_empty() {
+        None
+    } else {
+        Some(body)
+    }
+}
+
+fn push_unique_path(paths: &mut Vec<String>, path: String) {
+    if path.is_empty() || path.contains("..") {
+        return;
+    }
+    if !paths.iter().any(|p| p == &path) {
+        paths.push(path);
+    }
+}
+
+fn first_exit_token(output: &str) -> Option<&str> {
+    output.split_whitespace().find(|t| t.starts_with("exit="))
+}
+
+fn extract_facts(system: Option<&ChatMessage>, middle: &[ChatMessage]) -> CompactFacts {
+    let mut facts = CompactFacts {
+        middle_len: middle.len(),
+        ..CompactFacts::default()
+    };
+
+    if let Some(sys) = system.and_then(|m| m.content.as_deref()) {
+        if let Some(g) = section_after(sys, "--- Current goal ---") {
+            facts.goal = Some(g.lines().next().unwrap_or(g).to_string());
+        }
+        if let Some(block) = section_after(sys, "--- Task list ---") {
+            facts.open_todos = block
+                .lines()
+                .filter(|l| l.starts_with("[pending]") || l.starts_with("[in_progress]"))
+                .map(|l| {
+                    l.trim_start_matches("[pending]")
+                        .trim_start_matches("[in_progress]")
+                        .trim()
+                        .to_string()
+                })
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+    }
+
+    let mut pending_verify: Vec<Option<String>> = Vec::new();
+    for msg in middle {
+        if let Some(tcs) = &msg.tool_calls {
+            for tc in tcs {
+                match tc.function.name.as_str() {
+                    "goal_set" => {
+                        if let Some(d) = json_str_field(&tc.function.arguments, "description") {
+                            facts.goal = Some(d);
+                        }
+                    }
+                    "todo_write" => {
+                        let open = json_todos(&tc.function.arguments);
+                        if !open.is_empty() {
+                            facts.open_todos = open;
+                        }
+                    }
+                    "read_file" | "write_file" | "search_replace" | "list_dir" | "grep" => {
+                        if let Some(p) = json_str_field(&tc.function.arguments, "path") {
+                            push_unique_path(&mut facts.key_paths, p);
+                        }
+                    }
+                    _ => {}
+                }
+                let verify_label = match tc.function.name.as_str() {
+                    "run_tests" | "run_lint" => Some(tc.function.name.clone()),
+                    _ => None,
+                };
+                pending_verify.push(verify_label);
+            }
+        }
+        if msg.role == "tool" {
+            let label = if pending_verify.is_empty() {
+                None
+            } else {
+                pending_verify.remove(0)
+            };
+            if let Some(name) = label {
+                let body = msg.content.as_deref().unwrap_or("");
+                let exit = first_exit_token(body).unwrap_or("exit=?");
+                facts.last_verification = Some(format!("{name} {exit}"));
+            }
+        }
+    }
+    if facts.key_paths.len() > 8 {
+        facts.key_paths.truncate(8);
+    }
+    if facts.open_todos.len() > 8 {
+        facts.open_todos.truncate(8);
+    }
+    facts
+}
+
+fn format_facts(facts: &CompactFacts) -> String {
+    let mut out = String::new();
+    if let Some(g) = &facts.goal {
+        out.push_str(&format!("Goal: {}\n", truncate(g, 200)));
+    }
+    if !facts.open_todos.is_empty() {
+        let todos: Vec<String> = facts.open_todos.iter().map(|t| truncate(t, 80)).collect();
+        out.push_str(&format!("Open todos: {}\n", todos.join("; ")));
+    }
+    if !facts.key_paths.is_empty() {
+        out.push_str(&format!("Key paths: {}\n", facts.key_paths.join(", ")));
+    }
+    if let Some(v) = &facts.last_verification {
+        out.push_str(&format!("Last verification: {v}\n"));
+    }
+    out
+}
+
+fn compaction_note(facts: &CompactFacts, kind: &str) -> String {
+    let mut parts = vec![kind.to_string()];
+    if facts.goal.is_some() {
+        parts.push("goal kept".into());
+    }
+    if !facts.open_todos.is_empty() {
+        parts.push(format!("{} open todos", facts.open_todos.len()));
+    }
+    if !facts.key_paths.is_empty() {
+        parts.push(format!("{} paths", facts.key_paths.len()));
+    }
+    if let Some(v) = &facts.last_verification {
+        parts.push(format!("last verify: {v}"));
+    }
+    parts.join(" · ")
+}
+
 /// Assemble the compacted history from a plan, replacing `messages` in place.
 ///
 /// `llm_summary` is an optional pre-computed LLM summary of the middle. When
-/// `None`, the extractive [`build_summary_user`] fallback is used.
+/// `None`, the extractive [`extractive_body`] fallback is used. A structured
+/// facts block (goal, open todos, key paths, last verification) is always
+/// prepended so those anchors survive even if the LLM summary drops them.
 fn assemble_compaction(
     messages: &mut Vec<ChatMessage>,
     plan: CompactionPlan,
     llm_summary: Option<String>,
-) -> CompactionResult {
-    // Build summary (LLM-provided or extractive fallback).
-    let summary_user = match llm_summary {
-        Some(text) => ChatMessage {
-            role: "user".into(),
-            content: Some(format!("[Compacted conversation summary]\n{}", text)),
-            tool_calls: None,
-            tool_call_id: None,
-        },
-        None => build_summary_user(&plan.middle),
+) -> CompactionReport {
+    let facts = extract_facts(messages.first(), &plan.middle);
+    let facts_block = format_facts(&facts);
+    let body = match llm_summary {
+        Some(text) => text,
+        None => extractive_body(&plan.middle),
+    };
+    let mut content = String::from("[Compacted conversation summary]\n");
+    if !facts_block.is_empty() {
+        content.push_str(&facts_block);
+        content.push('\n');
+    }
+    content.push_str(&body);
+    // Hard cap the assembled summary (facts + body).
+    const MAX_SUMMARY_CHARS: usize = 4000;
+    if content.chars().count() > MAX_SUMMARY_CHARS {
+        content = content.chars().take(MAX_SUMMARY_CHARS).collect();
+        content.push_str("...[summary truncated]");
+    }
+    let summary_user = ChatMessage {
+        role: "user".into(),
+        content: Some(content),
+        tool_calls: None,
+        tool_call_id: None,
     };
     let summary_assistant = ChatMessage {
         role: "assistant".into(),
@@ -316,11 +524,19 @@ fn assemble_compaction(
     // the compacted form can be larger than the original. In that case keep the
     // original unchanged rather than make things worse.
     if after >= plan.before {
-        return (plan.before, plan.before);
+        return CompactionReport {
+            before_tokens: plan.before,
+            after_tokens: plan.before,
+            note: "compaction skipped (would not shrink)".into(),
+        };
     }
 
     *messages = compacted;
-    (plan.before, after)
+    CompactionReport {
+        before_tokens: plan.before,
+        after_tokens: after,
+        note: compaction_note(&facts, &format!("summarized {} messages", facts.middle_len)),
+    }
 }
 
 /// LLM-structured compaction: summarize the middle with the model, falling
@@ -337,11 +553,15 @@ pub async fn compact_if_needed_llm(
     summarizer: impl FnOnce(
         Vec<ChatMessage>,
     ) -> futures_util::future::BoxFuture<'static, Option<String>>,
-) -> Option<(usize, usize)> {
+) -> Option<CompactionReport> {
     match prepare_compaction(messages, context_window, compact_threshold) {
         CompactionOutcome::None => None,
         // Soft-pruning alone sufficed — no LLM round-trip needed.
-        CompactionOutcome::PrunedOnly(before, after) => Some((before, after)),
+        CompactionOutcome::PrunedOnly(before, after) => Some(CompactionReport {
+            before_tokens: before,
+            after_tokens: after,
+            note: "pruned old tool results".into(),
+        }),
         CompactionOutcome::NeedsSummary(plan) => {
             // Clone the middle so the extractive fallback still has it if the
             // LLM summarizer returns `None`.
@@ -351,15 +571,12 @@ pub async fn compact_if_needed_llm(
     }
 }
 
-/// Build a synthetic user message summarizing the middle turns.
-///
-/// Captures: key user asks, assistant actions, tool names used.
-/// Truncates large tool bodies. Capped at a reasonable summary size.
-fn build_summary_user(middle: &[ChatMessage]) -> ChatMessage {
-    const MAX_SUMMARY_CHARS: usize = 4000;
+/// Extractive fallback body: user asks, assistant actions, tool names.
+/// Truncates large tool bodies. The facts header is added by the assembler.
+fn extractive_body(middle: &[ChatMessage]) -> String {
+    const MAX_BODY_CHARS: usize = 3200;
     const MAX_TOOL_BODY_CHARS: usize = 200;
-
-    let mut summary = String::from("[Compacted conversation summary]\n");
+    let mut summary = String::new();
 
     for msg in middle {
         match msg.role.as_str() {
@@ -395,19 +612,12 @@ fn build_summary_user(middle: &[ChatMessage]) -> ChatMessage {
             _ => {}
         }
 
-        // Hard cap on summary growth
-        if summary.chars().count() > MAX_SUMMARY_CHARS {
+        if summary.chars().count() > MAX_BODY_CHARS {
             summary.push_str("...[summary truncated]");
             break;
         }
     }
-
-    ChatMessage {
-        role: "user".into(),
-        content: Some(summary),
-        tool_calls: None,
-        tool_call_id: None,
-    }
+    summary
 }
 
 fn truncate(s: &str, max_chars: usize) -> String {
@@ -592,6 +802,7 @@ mod tests {
             Box::pin(async { None })
         })
         .await
+        .map(|r| (r.before_tokens, r.after_tokens))
     }
 
     #[tokio::test]
@@ -836,11 +1047,12 @@ mod tests {
             msgs.push(msg("user", &format!("message number {i}")));
             msgs.push(msg("assistant", &format!("response to message {i}")));
         }
-        let (before, after) = compact_if_needed_llm(&mut msgs, 8192, 0.1, |_middle| {
+        let report = compact_if_needed_llm(&mut msgs, 8192, 0.1, |_middle| {
             Box::pin(async { Some("LLM distilled: 200 turns of task work.".to_string()) })
         })
         .await
         .unwrap();
+        let (before, after) = (report.before_tokens, report.after_tokens);
         assert!(
             after < before,
             "after ({after}) should be < before ({before})"
@@ -869,11 +1081,12 @@ mod tests {
                 &format!("Added scoped permissions for user {i} in the auth middleware. Updated the route guards to enforce them."),
             ));
         }
-        let (before, after) = compact_if_needed_llm(&mut msgs, 8192, 0.1, |_middle| {
+        let report = compact_if_needed_llm(&mut msgs, 8192, 0.1, |_middle| {
             Box::pin(async { None }) // summarizer failed → extractive fallback
         })
         .await
         .unwrap();
+        let (before, after) = (report.before_tokens, report.after_tokens);
         assert!(
             after < before,
             "fallback should still reduce tokens ({after} < {before})"
@@ -887,6 +1100,127 @@ mod tests {
         assert!(
             fallback_present,
             "extractive fallback summary should be present"
+        );
+    }
+
+    #[test]
+    fn extract_facts_from_system_goal_and_todos() {
+        let sys = msg(
+            "system",
+            "sys\n--- Current goal ---\n[in_progress] fix the parser\n\n\
+             --- Task list ---\n[pending] 1: write tests\n[in_progress] 2: run clippy\n\
+             [completed] 3: read the file\n",
+        );
+        let facts = extract_facts(Some(&sys), &[]);
+        assert_eq!(facts.goal.as_deref(), Some("[in_progress] fix the parser"));
+        assert_eq!(facts.open_todos.len(), 2);
+        assert!(facts.open_todos[0].contains("write tests"));
+        assert!(facts.open_todos[1].contains("run clippy"));
+    }
+
+    #[test]
+    fn extract_facts_from_tool_calls() {
+        let middle = vec![
+            msg_with_tools(
+                "assistant",
+                "",
+                vec![
+                    tool_call("g1", "goal_set", r#"{"description":"ship the feature"}"#),
+                    tool_call(
+                        "t1",
+                        "todo_write",
+                        r#"{"todos":[{"content":"edit parser","status":"pending"},{"content":"done bit","status":"completed"}]}"#,
+                    ),
+                    tool_call("r1", "read_file", r#"{"path":"src/parser.rs"}"#),
+                    tool_call(
+                        "w1",
+                        "write_file",
+                        r#"{"path":"src/parser.rs","content":"x"}"#,
+                    ),
+                    tool_call("v1", "run_tests", "{}"),
+                ],
+            ),
+            tool_msg("g1", "goal set"),
+            tool_msg("t1", "todos written"),
+            tool_msg("r1", "fn parse() {}"),
+            tool_msg("w1", "Wrote src/parser.rs"),
+            tool_msg("v1", "--- run_tests (cargo) exit=0 ---\nok"),
+        ];
+        let facts = extract_facts(None, &middle);
+        assert_eq!(facts.goal.as_deref(), Some("ship the feature"));
+        assert_eq!(facts.open_todos, vec!["edit parser".to_string()]);
+        assert_eq!(facts.key_paths, vec!["src/parser.rs".to_string()]);
+        assert_eq!(facts.last_verification.as_deref(), Some("run_tests exit=0"));
+    }
+
+    #[tokio::test]
+    async fn compaction_summary_includes_structured_facts() {
+        let mut msgs = vec![msg(
+            "system",
+            "sys\n--- Current goal ---\n[in_progress] keep the goal\n",
+        )];
+        for i in 0..80 {
+            msgs.push(msg(
+                "user",
+                &format!("Refactor module {i} with enough padding to force compaction now."),
+            ));
+            msgs.push(msg_with_tools(
+                "assistant",
+                &format!("Working on module {i} with enough padding here too."),
+                vec![tool_call(
+                    &format!("c{i}"),
+                    "read_file",
+                    r#"{"path":"src/lib.rs"}"#,
+                )],
+            ));
+            msgs.push(tool_msg(&format!("c{i}"), "pub fn f() {}"));
+        }
+        compact_extractive(&mut msgs, 8192, 0.1).await.unwrap();
+        let summary = msgs[1].content.as_deref().unwrap();
+        assert!(
+            summary.contains("Goal: [in_progress] keep the goal"),
+            "goal should be in summary: {summary}"
+        );
+        assert!(
+            summary.contains("Key paths: src/lib.rs"),
+            "key paths should be in summary: {summary}"
+        );
+    }
+
+    #[tokio::test]
+    async fn compaction_report_note_mentions_what_was_kept() {
+        let mut msgs = vec![msg("system", "sys")];
+        for i in 0..80 {
+            msgs.push(msg(
+                "user",
+                &format!("Do work item {i} with extra padding so tokens climb quickly here."),
+            ));
+            msgs.push(msg_with_tools(
+                "assistant",
+                "",
+                vec![
+                    tool_call(
+                        &format!("w{i}"),
+                        "write_file",
+                        r#"{"path":"src/main.rs","content":"fn main(){}"}"#,
+                    ),
+                    tool_call(&format!("v{i}"), "run_tests", "{}"),
+                ],
+            ));
+            msgs.push(tool_msg(&format!("w{i}"), "Wrote"));
+            msgs.push(tool_msg(
+                &format!("v{i}"),
+                "--- run_tests (cargo) exit=0 ---\nok",
+            ));
+        }
+        let report =
+            compact_if_needed_llm(&mut msgs, 8192, 0.1, |_middle| Box::pin(async { None }))
+                .await
+                .unwrap();
+        assert!(
+            report.note.contains("paths") || report.note.contains("last verify"),
+            "note should surface what was kept: {}",
+            report.note
         );
     }
 }

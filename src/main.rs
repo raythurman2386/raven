@@ -151,6 +151,18 @@ struct Cli {
     #[arg(long)]
     list_sessions: bool,
 
+    /// Export a session as a local Markdown/JSON bundle and exit.
+    ///
+    /// With no ID, exports the most recent session. Optional value is a
+    /// session ID (same as `--resume`). Writes to
+    /// `{workspace}/.raven/exports/{id}/` unless `--export-dir` is set.
+    #[arg(long, num_args = 0..=1)]
+    export: Option<Option<String>>,
+
+    /// Destination directory for `--export` (default: `.raven/exports/<id>/`).
+    #[arg(long)]
+    export_dir: Option<PathBuf>,
+
     /// Speak Agent Client Protocol v1 on stdin/stdout (editor attachment).
     #[arg(long)]
     acp: bool,
@@ -335,6 +347,34 @@ async fn main() -> Result<()> {
                 }
             }
         }
+        return Ok(());
+    }
+
+    // --export [id]: write a local Markdown/JSON bundle and exit
+    if let Some(maybe_id) = &cli.export {
+        let session = if let Some(id) = maybe_id {
+            store
+                .load(id)
+                .map_err(|e| anyhow::anyhow!("Failed to load session {id}: {e}"))?
+        } else {
+            match store.latest()? {
+                Some(s) => s,
+                None => {
+                    println!("No saved sessions to export.");
+                    return Ok(());
+                }
+            }
+        };
+        let dest = cli
+            .export_dir
+            .clone()
+            .unwrap_or_else(|| store.default_export_dir(&session));
+        let path = store.export_bundle(&session, &dest)?;
+        println!(
+            "Exported session {} → {}",
+            session.summary.id,
+            path.display()
+        );
         return Ok(());
     }
 

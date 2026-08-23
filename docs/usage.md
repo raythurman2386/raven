@@ -176,6 +176,9 @@ host. Type one and press `Enter`; `/help` lists everything.
 | `/model <name>` | `/m` | Switch the model for subsequent turns |
 | `/theme [name]` | `/t` | List themes, or switch the active color theme |
 | `/stop` | `/s` | Interrupt the running task |
+| `/undo` | `/u` | Undo the last commit, keeping the working tree |
+| `/provider [name]` | `/p` | List providers, or switch the active one |
+| `/export [dir]` | `/x` | Write a local Markdown/JSON bundle of this session |
 | `/quit` | `/q`, `/exit` | Quit Raven |
 
 ### Interrupting and steering

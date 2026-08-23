@@ -280,9 +280,14 @@ pub(crate) async fn summarize_request(
 ) -> Option<String> {
     let prompt = format!(
         "Distill the following conversation segment into a compact summary \
-         (max ~150 words) preserving the key user requests, decisions, and \
-         actions taken. This will replace the original messages in a \
-         long-running agent session.\n\n{}\n\nSummary:",
+         (max ~150 words). Use this layout when the information exists:\n\
+         Goal: <current goal>\n\
+         Open todos: <pending items>\n\
+         Key paths: <files touched>\n\
+         Last verification: <run_tests/run_lint result>\n\
+         Then a short factual recap of user requests, decisions, and actions. \
+         This will replace the original messages in a long-running agent session.\n\n\
+         {}\n\nSummary:",
         middle
             .iter()
             .map(|m| format!("{}: {}", m.role, m.content.clone().unwrap_or_default()))

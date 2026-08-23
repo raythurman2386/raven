@@ -898,10 +898,14 @@ pub async fn run_tui(
                 AgentEvent::Compacted {
                     before_tokens,
                     after_tokens,
+                    note,
                 } => {
-                    state.push_system(format!(
-                        "⟳ compacted ~{before_tokens} → ~{after_tokens} tokens"
-                    ));
+                    let line = if note.is_empty() {
+                        format!("⟳ compacted ~{before_tokens} → ~{after_tokens} tokens")
+                    } else {
+                        format!("⟳ compacted ~{before_tokens} → ~{after_tokens} tokens — {note}")
+                    };
+                    state.push_system(line);
                     state.log_dirty = true;
                 }
                 AgentEvent::Retry { attempt, delay_ms } => {
@@ -2199,6 +2203,31 @@ async fn dispatch_slash_command(
             match sandbox.git_undo() {
                 Ok(out) => state.push_system(out),
                 Err(e) => state.push_system(format!("undo failed: {e}")),
+            }
+            state.log_dirty = true;
+        }
+        "export" => {
+            let dest = if pc.args.trim().is_empty() {
+                store.default_export_dir(session)
+            } else {
+                let p = std::path::PathBuf::from(pc.args.trim());
+                if p.is_absolute() {
+                    p
+                } else {
+                    settings.workspace.join(p)
+                }
+            };
+            let mut snapshot = session.clone();
+            if !state.session_messages.is_empty() {
+                snapshot.messages = state.session_messages.clone();
+            }
+            match store.export_bundle(&snapshot, &dest) {
+                Ok(path) => state.push_system(format!(
+                    "exported session {} → {}",
+                    session.summary.id,
+                    path.display()
+                )),
+                Err(e) => state.push_system(format!("export failed: {e}")),
             }
             state.log_dirty = true;
         }

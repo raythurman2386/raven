@@ -35,6 +35,7 @@ fn help_succeeds_and_lists_flags() {
         "--context-window",
         "--no-stream",
         "--resume",
+        "--export",
         "--acp",
         "--version",
     ] {

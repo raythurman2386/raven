@@ -502,7 +502,7 @@ impl Agent {
         let compact_paused =
             self.compact_thrash_count >= MAX_COMPACT_THRASH && !iter.is_multiple_of(4);
         if !compact_paused {
-            if let Some((before, after)) = compact_if_needed_llm(
+            if let Some(report) = compact_if_needed_llm(
                 &mut self.messages,
                 self.settings.context_window,
                 self.settings.compact_threshold,
@@ -520,15 +520,16 @@ impl Agent {
             {
                 // If compaction didn't actually reduce the history (context
                 // refilled immediately), count it toward the thrash cap.
-                if after >= before {
+                if report.after_tokens >= report.before_tokens {
                     self.compact_thrash_count += 1;
                 } else {
                     self.compact_thrash_count = 0;
                 }
                 let _ = tx
                     .send(AgentEvent::Compacted {
-                        before_tokens: before,
-                        after_tokens: after,
+                        before_tokens: report.before_tokens,
+                        after_tokens: report.after_tokens,
+                        note: report.note,
                     })
                     .await;
             }

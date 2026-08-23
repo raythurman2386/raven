@@ -32,7 +32,8 @@ fmt, and `cargo check --target x86_64-pc-windows-gnu`.
 ### Agent loop & context
 - **Streaming agent loop** — OpenAI-compatible `/v1/chat/completions`, incremental SSE parsing (UTF-8-safe across TCP chunks), non-streaming fallback (`--no-stream`).
 - **Plan mode** — parse → approve → revise → execute, human-gated, read-only plan toolset (`src/plan.rs`, `src/agent/`).
-- **Context management** — pure-Rust token estimator, context-window inference (live `/api/show` + name heuristic), automatic compaction (tool-result pruning + LLM-structured summary with extractive fallback), compaction thrashing protection.
+- **Context management** — pure-Rust token estimator, context-window inference (live `/api/show` + name heuristic), automatic compaction (tool-result pruning + LLM-structured summary with extractive fallback, facts block for goal/todos/paths/last verification, compaction note), compaction thrashing protection.
+- **Session export** — `/export` and `--export` write a local Markdown/JSON bundle.
 - **Stall/verify recovery** — blank-response retry (capped), enforced-verify gate (must run tests after edits, `exit=0` exact), repeated-failure detection, goal-aware reflection reminders.
 - **Long-horizon task management** — persistent goal + todos (`.raven/state/`), `delegate_task` (depth-1 sub-agents), `think` tool, goal-aware reminders.
 - **Parallel sub-agents** — `--parallel` runs N focused agents concurrently.

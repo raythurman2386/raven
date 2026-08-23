@@ -296,6 +296,7 @@ pub fn map_event(event: &AgentEvent, tool_seq: &mut u64) -> Vec<Value> {
         AgentEvent::Compacted {
             before_tokens,
             after_tokens,
+            note: _,
         } => vec![json!({
             "sessionUpdate": "usage_update",
             "used": after_tokens,
