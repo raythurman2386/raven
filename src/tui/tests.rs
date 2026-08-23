@@ -1341,6 +1341,54 @@ fn history_recall_down_moves_forward_then_baseline() {
 }
 
 #[test]
+fn history_recall_active_stays_active_until_typing_resets() {
+    let hist = ["a".to_string(), "b".to_string(), "c".to_string()];
+    // Empty input: recall is active.
+    assert!(history_recall_active(true, hist.len(), hist.len()));
+    // Mid-recall (a recalled prompt still in the box, hist_idx < len):
+    // still active, so Up keeps walking back through history.
+    assert!(history_recall_active(false, hist.len(), 2));
+    assert!(history_recall_active(false, hist.len(), 0));
+    // After typing resets hist_idx to len: recall no longer active, so
+    // Up/Down scroll the transcript.
+    assert!(!history_recall_active(false, hist.len(), hist.len()));
+    // Empty history, non-empty input, live position: inactive (scrolls).
+    assert!(!history_recall_active(false, 0, 0));
+}
+
+#[test]
+fn multi_step_up_recall_walks_entire_history() {
+    // Simulate the sequence of Up presses: start at the live position and
+    // walk back through every prompt, verifying each step recalls the prior.
+    let hist = [
+        "first".to_string(),
+        "second".to_string(),
+        "third".to_string(),
+    ];
+    let mut hist_idx = hist.len();
+
+    // 1st Up -> "third"
+    let (recalled, idx) = history_recall_up(&hist, hist_idx).unwrap();
+    assert_eq!(recalled, "third");
+    hist_idx = idx;
+    assert!(history_recall_active(true, hist.len(), hist_idx));
+
+    // 2nd Up (input now non-empty, but still mid-recall) -> "second"
+    let (recalled, idx) = history_recall_up(&hist, hist_idx).unwrap();
+    assert_eq!(recalled, "second");
+    hist_idx = idx;
+    assert!(history_recall_active(false, hist.len(), hist_idx));
+
+    // 3rd Up -> "first"
+    let (recalled, idx) = history_recall_up(&hist, hist_idx).unwrap();
+    assert_eq!(recalled, "first");
+    hist_idx = idx;
+
+    // 4th Up -> None (at the oldest prompt)
+    assert!(history_recall_up(&hist, hist_idx).is_none());
+}
+
+#[test]
 fn format_tool_args_compact_scalars() {
     let args = json!({"path": "src/main.rs", "line_range": [1, 40]});
     let s = format_tool_args(&args);

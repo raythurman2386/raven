@@ -582,8 +582,22 @@ pub async fn run_tui(
                             reset_session(&mut state, &mut session, &store, &settings, app_name)?;
                         }
                         KeyCode::Up => {
-                            if state.input.is_empty() {
-                                // Empty input: Up recalls the previous prompt.
+                            if let Some(comp) = state.completion.as_mut() {
+                                // Completion popup open: move the highlight
+                                // backward (Up = previous candidate).
+                                comp.prev();
+                                state.input_dirty = true;
+                            } else if history_recall_active(
+                                state.input.is_empty(),
+                                state.prompt_history.len(),
+                                state.hist_idx,
+                            ) {
+                                // Empty input, or mid-recall (a recalled prompt
+                                // still in the box): walk backward through the
+                                // prompt history. Gating on hist_idx rather than
+                                // only on empty input lets Up recall older
+                                // prompts repeatedly instead of returning a
+                                // single entry then scrolling.
                                 if let Some((recalled, idx)) =
                                     history_recall_up(&state.prompt_history, state.hist_idx)
                                 {
@@ -599,9 +613,19 @@ pub async fn run_tui(
                             }
                         }
                         KeyCode::Down => {
-                            if state.input.is_empty() {
-                                // Empty input: Down recalls forward (toward
-                                // the empty baseline), or stays empty at live.
+                            if let Some(comp) = state.completion.as_mut() {
+                                // Completion popup open: move the highlight
+                                // forward (Down = next candidate).
+                                comp.next();
+                                state.input_dirty = true;
+                            } else if history_recall_active(
+                                state.input.is_empty(),
+                                state.prompt_history.len(),
+                                state.hist_idx,
+                            ) {
+                                // Empty input or mid-recall: walk forward
+                                // toward the empty baseline (or stay empty at
+                                // the live position).
                                 if let Some((recalled, idx)) =
                                     history_recall_down(&state.prompt_history, state.hist_idx)
                                 {
@@ -1092,6 +1116,15 @@ fn history_recall_down(prompt_history: &[String], hist_idx: usize) -> Option<(St
     }
 }
 
+/// Whether Up/Down should walk the prompt history rather than scroll the
+/// transcript. True when the input is empty (fresh recall) or when the user
+/// is already mid-recall (`hist_idx < len`, i.e. a recalled prompt is still
+/// in the box and has not been reset by typing). Once `hist_idx` has been
+/// reset to the live position by typing, Up/Down scroll again.
+fn history_recall_active(input_is_empty: bool, prompt_history_len: usize, hist_idx: usize) -> bool {
+    input_is_empty || hist_idx < prompt_history_len
+}
+
 /// Compact `key=value` formatting of a tool-call arg object, so a tool block
 /// reads `read_file path=src/main.rs line=1-40` instead of raw JSON braces.
 /// Long string values are truncated to `ARG_VALUE_MAX` chars. Nested
@@ -1158,7 +1191,7 @@ fn keyhint(state: &TuiState) -> String {
     } else if state.running {
         "enter interrupt · ctrl+c quit".to_string()
     } else {
-        "enter send · /help · /model · /new · shift+tab mode · ctrl+c quit · up/down recall · wheel/pgup scroll · home/end jump".to_string()
+        "enter send · /help · /model · /new · shift+tab mode · ctrl+c quit · up/down recall · wheel/pgup scroll · home/end jump · ↑/↓ completion when popup open".to_string()
     }
 }
 
