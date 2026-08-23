@@ -308,6 +308,77 @@ pub(super) async fn dispatch_slash_command(
                 },
             );
         }
+        "cleanup" => {
+            let confirm = pc.args.split_whitespace().any(|t| t == "--yes");
+            let days_str = pc
+                .args
+                .split_whitespace()
+                .find(|t| *t != "--yes")
+                .unwrap_or("");
+            let days: usize = match days_str.parse() {
+                Ok(v) if v >= 1 => v,
+                _ => {
+                    state.push_system(
+                        "usage: /cleanup <days> [--yes]  (days must be a positive integer)",
+                    );
+                    state.log_dirty = true;
+                    return Ok(true);
+                }
+            };
+            let cutoff = date_minus_days(crate::session::now_iso_public().as_str(), days);
+            let current_id = session.summary.id.clone();
+            let mut stale = Vec::new();
+            match store.list() {
+                Ok(metas) => {
+                    for m in metas {
+                        if m.id == current_id {
+                            continue;
+                        }
+                        let mdate = &m.updated_at[..m.updated_at.len().min(10)];
+                        if mdate.as_bytes() < cutoff.as_bytes() {
+                            stale.push(m);
+                        }
+                    }
+                }
+                Err(e) => {
+                    state.push_system(format!("cleanup failed: {e}"));
+                    state.log_dirty = true;
+                    return Ok(true);
+                }
+            }
+            if stale.is_empty() {
+                state.push_system(format!("no sessions older than {days}d"));
+                state.log_dirty = true;
+                return Ok(true);
+            }
+            if !confirm {
+                state.push_system(format!(
+                    "{} session(s) older than {days}d (cutoff {cutoff}):\n{}\nRe-run with --yes to delete.",
+                    stale.len(),
+                    stale
+                        .iter()
+                        .map(|m| format!("  {}  (updated {})", m.id, m.updated_at))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                ));
+                state.log_dirty = true;
+                return Ok(true);
+            }
+            let mut deleted = 0usize;
+            let mut failed = Vec::new();
+            for m in &stale {
+                match store.delete(&m.id) {
+                    Ok(()) => deleted += 1,
+                    Err(e) => failed.push(format!("{}: {e}", m.id)),
+                }
+            }
+            let mut msg = format!("deleted {deleted} session(s)");
+            if !failed.is_empty() {
+                msg.push_str(&format!("\nfailed: {}", failed.join("; ")));
+            }
+            state.push_system(msg);
+            state.log_dirty = true;
+        }
         "theme" => {
             let name = pc.args.trim();
             if name.is_empty() {
@@ -335,4 +406,50 @@ pub(super) async fn dispatch_slash_command(
         }
     }
     Ok(true)
+}
+
+/// Return the ISO date prefix `YYYY-MM-DD` for `days` days before the given
+/// `now_iso` timestamp (UTC). `now_iso` is `YYYY-MM-DDTHH:MM:SS`; only the
+/// date part is used and returned. Handles month/year rollover without a
+/// date library.
+pub(super) fn date_minus_days(now_iso: &str, days: usize) -> String {
+    // Parse the leading date components (day-granularity; ignore time).
+    let date = &now_iso[..now_iso.len().min(10)];
+    let (y, m, d) = (
+        date[0..4].parse::<i64>().unwrap_or(1970),
+        date[5..7].parse::<i64>().unwrap_or(1),
+        date[8..10].parse::<i64>().unwrap_or(1),
+    );
+
+    // Convert to a serial day number and subtract.
+    let serial = days_from_civil(y, m, d) - days as i64;
+    let (ny, nm, nd) = civil_from_days(serial);
+
+    format!("{ny:04}-{nm:02}-{nd:02}")
+}
+
+/// Days since 1970-01-01 for a civil date (Howard Hinnant's algorithm).
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+/// Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
+fn civil_from_days(z: i64) -> (i64, i64, i64) {
+    let z = z + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
 }

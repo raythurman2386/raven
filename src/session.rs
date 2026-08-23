@@ -305,6 +305,20 @@ impl SessionStore {
         }
     }
 
+    /// Remove a session directory (summary + messages + debug-events).
+    ///
+    /// Used by `/cleanup` to prune old sessions. Irreversible — the caller
+    /// must confirm before invoking.
+    pub fn delete(&self, id: &str) -> Result<()> {
+        let dir = self.session_dir(id);
+        if !dir.exists() {
+            bail!("Session not found: {}", id);
+        }
+        std::fs::remove_dir_all(&dir)
+            .with_context(|| format!("remove session dir {}", dir.display()))?;
+        Ok(())
+    }
+
     // ── Internal helpers ──────────────────────────────────────────────
 
     fn session_dir(&self, id: &str) -> PathBuf {
@@ -938,6 +952,32 @@ mod tests {
         // surfacing a hard error for the whole list.
         let metas = store.list().unwrap();
         assert!(metas.is_empty());
+    }
+
+    #[test]
+    fn delete_removes_session_from_listing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = SessionStore::for_workspace(tmp.path()).unwrap();
+        let a = store.create("test-model").unwrap();
+        let b = store.create("test-model").unwrap();
+
+        // Both sessions are listed before deletion.
+        assert_eq!(store.list().unwrap().len(), 2);
+
+        store.delete(&a.summary.id).unwrap();
+        let metas = store.list().unwrap();
+        assert_eq!(metas.len(), 1);
+        assert_eq!(metas[0].id, b.summary.id);
+
+        // The session directory is actually gone from disk.
+        assert!(!store.session_dir(&a.summary.id).exists());
+    }
+
+    #[test]
+    fn delete_missing_session_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = SessionStore::for_workspace(tmp.path()).unwrap();
+        assert!(store.delete("does-not-exist").is_err());
     }
 
     #[test]

@@ -6,6 +6,7 @@ use super::*;
 use crate::config::{ConfigFile, Provider};
 use crate::plan::AgentState;
 use serde_json::json;
+use std::path::Path;
 #[test]
 fn cycle_mode_clears_stuck_pending_approval_when_leaving_plan() {
     let mut state = TuiState {
@@ -1048,6 +1049,158 @@ async fn steer_without_prior_turn_errors() {
             _ => false,
         }),
         "should report nothing to steer"
+    );
+}
+
+/// Create a session whose `updated_at` is rewritten to `date` (YYYY-MM-DD).
+/// Writes summary.json directly (write_summary is private to session.rs).
+fn session_with_updated_at(workspace: &Path, store: &SessionStore, date: &str) -> Session {
+    let mut s = store.create("gemma4:latest").unwrap();
+    s.summary.updated_at = format!("{date}T00:00:00");
+    let dir = workspace
+        .join(".raven")
+        .join("sessions")
+        .join(&s.summary.id);
+    std::fs::write(
+        dir.join("summary.json"),
+        serde_json::to_string_pretty(&s.summary).unwrap(),
+    )
+    .unwrap();
+    s
+}
+
+#[tokio::test]
+async fn cleanup_dry_run_deletes_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = SessionStore::for_workspace(tmp.path()).unwrap();
+    // The current session is the "now" reference.
+    let mut current = store.create("gemma4:latest").unwrap();
+    // An old session from 30 days ago.
+    let old = session_with_updated_at(tmp.path(), &store, "2020-01-01");
+    // A recent session.
+    let recent = session_with_updated_at(tmp.path(), &store, "2099-01-01");
+
+    let mut settings = test_settings(tmp.path());
+    let mut compact_at = 128_000 - 128_000 / 8;
+    let mut state = dummy_state();
+
+    let pc = commands::parse("/cleanup 10").unwrap();
+    let handled = dispatch::dispatch_slash_command(
+        &mut state,
+        &pc,
+        &mut settings,
+        &store,
+        &mut current,
+        &mut compact_at,
+        &ConfigFile::default(),
+    )
+    .await
+    .unwrap();
+
+    assert!(handled);
+    // Dry-run must not delete anything.
+    assert!(store.load(&old.summary.id).is_ok());
+    assert!(store.load(&recent.summary.id).is_ok());
+    // And it should report the old session as a candidate.
+    assert!(
+        state.blocks.iter().any(|b| match b {
+            BlockKind::System(s) => s.text().contains("Re-run with --yes"),
+            _ => false,
+        }),
+        "dry-run should prompt to confirm"
+    );
+}
+
+#[tokio::test]
+async fn cleanup_with_yes_deletes_only_old_sessions() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = SessionStore::for_workspace(tmp.path()).unwrap();
+    let mut current = store.create("gemma4:latest").unwrap();
+    let old = session_with_updated_at(tmp.path(), &store, "2020-01-01");
+    let recent = session_with_updated_at(tmp.path(), &store, "2099-01-01");
+
+    let mut settings = test_settings(tmp.path());
+    let mut compact_at = 128_000 - 128_000 / 8;
+    let mut state = dummy_state();
+
+    let pc = commands::parse("/cleanup 10 --yes").unwrap();
+    let handled = dispatch::dispatch_slash_command(
+        &mut state,
+        &pc,
+        &mut settings,
+        &store,
+        &mut current,
+        &mut compact_at,
+        &ConfigFile::default(),
+    )
+    .await
+    .unwrap();
+
+    assert!(handled);
+    // Old session deleted.
+    assert!(store.load(&old.summary.id).is_err());
+    // Recent session kept.
+    assert!(store.load(&recent.summary.id).is_ok());
+    // Current session kept (never deleted).
+    assert!(store.load(&current.summary.id).is_ok());
+    // Report deletion.
+    assert!(
+        state.blocks.iter().any(|b| match b {
+            BlockKind::System(s) => s.text().contains("deleted 1 session(s)"),
+            _ => false,
+        }),
+        "should report deletion count"
+    );
+}
+
+#[tokio::test]
+async fn cleanup_rejects_invalid_days() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = SessionStore::for_workspace(tmp.path()).unwrap();
+    let mut current = store.create("gemma4:latest").unwrap();
+    let mut settings = test_settings(tmp.path());
+    let mut compact_at = 128_000 - 128_000 / 8;
+    let mut state = dummy_state();
+
+    let pc = commands::parse("/cleanup").unwrap();
+    let handled = dispatch::dispatch_slash_command(
+        &mut state,
+        &pc,
+        &mut settings,
+        &store,
+        &mut current,
+        &mut compact_at,
+        &ConfigFile::default(),
+    )
+    .await
+    .unwrap();
+
+    assert!(handled);
+    assert!(
+        state.blocks.iter().any(|b| match b {
+            BlockKind::System(s) => s.text().contains("usage: /cleanup"),
+            _ => false,
+        }),
+        "should show usage on missing days"
+    );
+}
+
+#[test]
+fn date_minus_days_handles_rollover() {
+    // Straight subtraction within a month.
+    assert_eq!(
+        dispatch::date_minus_days("2026-08-23T10:00:00", 3),
+        "2026-08-20"
+    );
+    // Month rollover.
+    assert_eq!(
+        dispatch::date_minus_days("2026-08-02T10:00:00", 5),
+        "2026-07-28"
+    );
+    // Year rollover.
+    assert_eq!(
+        dispatch::date_minus_days("2026-01-03T10:00:00", 4),
+        "2025-12-30"
     );
 }
 

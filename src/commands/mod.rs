@@ -119,6 +119,12 @@ pub fn commands() -> Vec<CommandSpec> {
             summary: "Redirect the running agent: /steer <message> (restarts the turn with your direction appended)",
             arg_help: Some("<message>"),
         },
+        CommandSpec {
+            name: "cleanup",
+            aliases: &["purge"],
+            summary: "Prune sessions older than N days (dry-run unless confirmed): /cleanup <days> [--yes]",
+            arg_help: Some("<days> [--yes]"),
+        },
     ]
 }
 
