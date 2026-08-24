@@ -72,6 +72,16 @@ impl Mode {
             Mode::Chat => "chat",
         }
     }
+
+    /// Parse a mode id as advertised over ACP (`plan` / `agent` / `chat`).
+    pub fn from_id(id: &str) -> Option<Self> {
+        match id {
+            "plan" => Some(Mode::Plan),
+            "agent" => Some(Mode::Agent),
+            "chat" => Some(Mode::Chat),
+            _ => None,
+        }
+    }
 }
 
 /// Resolve the effective interaction mode from the configured/explicit mode and

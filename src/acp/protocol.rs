@@ -135,6 +135,10 @@ pub fn agent_info() -> Value {
 }
 
 /// Session modes Raven can switch between via `session/set_mode`.
+///
+/// Kept for clients that only speak the older modes API. Clients that
+/// support [`configOptions`](https://agentclientprotocol.com/protocol/session-config-options)
+/// SHOULD ignore this field and use the `mode` select option instead.
 pub fn session_modes(current: &str) -> Value {
     json!({
         "currentModeId": current,
@@ -142,6 +146,28 @@ pub fn session_modes(current: &str) -> Value {
             {"id": "plan", "name": "Plan", "description": "Propose a plan, then execute after approval"},
             {"id": "agent", "name": "Agent", "description": "Full tools, no plan step"},
             {"id": "chat", "name": "Chat", "description": "Read-only Q&A"}
+        ]
+    })
+}
+
+/// ACP `mode` select config option (category `mode`).
+///
+/// Session Config Options supersede the older `modes` field. When both are
+/// present, modern clients (Zed, etc.) use `configOptions` exclusively — so
+/// without this option the editor has no mode picker and the session stays
+/// on whatever `Settings.mode` defaulted to (plan).
+pub fn mode_config_option(current: &str) -> Value {
+    json!({
+        "id": "mode",
+        "name": "Session Mode",
+        "description": "Plan (propose then execute), Agent (full tools), or Chat (read-only)",
+        "category": "mode",
+        "type": "select",
+        "currentValue": current,
+        "options": [
+            {"value": "plan", "name": "Plan", "description": "Propose a plan, then execute after approval"},
+            {"value": "agent", "name": "Agent", "description": "Full tools, no plan step"},
+            {"value": "chat", "name": "Chat", "description": "Read-only Q&A"}
         ]
     })
 }

@@ -19,7 +19,7 @@ from the editor — plan mode, verification gates, workspace isolation,
 
 - **Zed 1.14+** (external agents require a recent Zed)
 - **Raven** installed and on your `PATH` (see the root [README](../README.md#install));
-  verify with `raven --version` → should print `raven 0.5.0` or newer.
+  verify with `raven --version` → should print `raven 0.5.1` or newer.
 - A reachable model endpoint for Raven (local Ollama, Ollama Cloud, or
   OpenRouter — whatever your `~/.raven/config.toml` already uses).
 
@@ -127,12 +127,19 @@ and give each a distinct key:
 
 ## Switching providers / models in the editor
 
-Raven advertises a `model` session config option over ACP listing **every
-configured provider's** models as provider-qualified ids (`provider/model`),
-so you can switch providers and models without restarting the thread. If the
-editor exposes the ACP session config options (e.g. a model selector in the
-Agent Panel), picking any entry switches that Raven session onto the chosen
-provider + model:
+Raven advertises session config options over ACP:
+
+- **`mode`** (`plan` / `agent` / `chat`) — editors that support config options
+  use this picker instead of the older `modes` field. Without it, a client
+  that prefers `configOptions` would hide the mode selector and leave you
+  stuck in the default (plan).
+- **`model`** — every configured provider's models as provider-qualified ids
+  (`provider/model`), so you can switch providers and models without
+  restarting the thread.
+
+If the editor exposes ACP session config options (e.g. selectors in the
+Agent Panel), picking a model entry switches that Raven session onto the
+chosen provider + model:
 
 - Each provider's list comes from its live `/models` endpoint when reachable,
   else its curated fallback list.

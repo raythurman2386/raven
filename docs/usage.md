@@ -23,7 +23,8 @@ on stdin/stdout. Point an ACP-capable editor at the `raven` binary with the
 Supported: `initialize`, `authenticate`, `session/new`, `session/prompt`,
 `session/cancel`, `session/load` (replays history), `session/resume`,
 `session/list`, `session/close`, `session/set_mode` (`plan` / `agent` / `chat`),
-`session/set_model`. `ask_user` and shell confirmation become
+`session/set_config_option` (`mode` and `model`), `session/set_model`.
+`ask_user` and shell confirmation become
 `session/request_permission`. `initialize` advertises a single `agent`-type
 auth method (`agent-auth`): credentials are already resolved in-process, so
 `authenticate` is a no-op acknowledgement.

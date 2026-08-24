@@ -6,6 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-08-23
+
+### Added
+
+- **ACP session mode as a config option** — Raven now advertises a `mode`
+  select (`plan` / `agent` / `chat`, category `mode`) in `configOptions`
+  alongside the model picker. Modern ACP clients ignore the legacy `modes`
+  field when `configOptions` is present, so without this the editor had no
+  mode selector and every thread stayed on the default (plan).
+  `session/set_config_option` with `configId: "mode"` switches the live
+  session; `session/set_mode` still works for older clients.
+
 ## [0.5.0] - 2026-08-23
 
 ### Added
@@ -154,7 +166,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Bumped `anydoc` 0.1.8 → 0.1.9.
 
-[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/raythurman2386/raven/compare/v0.5.0...v0.5.1
 [0.4.2]: https://github.com/raythurman2386/raven/compare/v0.4.1...v0.4.2
 
 ## [0.4.0] - 2026-08-21
@@ -878,7 +891,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Ratatui 0.30, crossterm 0.29.
 
-[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.4.0...HEAD
 [0.4.0]: https://github.com/raythurman2386/raven/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/raythurman2386/raven/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/raythurman2386/raven/compare/v0.2.7...v0.3.0

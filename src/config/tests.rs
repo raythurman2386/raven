@@ -49,6 +49,15 @@ fn resolve_mode_no_yolo_respects_explicit_mode() {
 }
 
 #[test]
+fn mode_from_id_round_trips_labels() {
+    for mode in [Mode::Plan, Mode::Agent, Mode::Chat] {
+        assert_eq!(Mode::from_id(mode.label()), Some(mode));
+    }
+    assert_eq!(Mode::from_id("code"), None);
+    assert_eq!(Mode::from_id(""), None);
+}
+
+#[test]
 fn resolve_mode_no_yolo_respects_config_file_mode() {
     assert_eq!(resolve_mode(None, Some(Mode::Agent), false), Mode::Agent);
     assert_eq!(resolve_mode(None, Some(Mode::Chat), false), Mode::Chat);

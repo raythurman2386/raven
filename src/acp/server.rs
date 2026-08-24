@@ -22,8 +22,8 @@ use crate::session::{Session, SessionStore};
 
 use super::protocol::{
     agent_capabilities, agent_info, auth_methods, error_code, error_msg, extract_prompt_text,
-    map_event, model_config_option, permission_allowed, result_msg, session_modes, session_update,
-    Incoming, StopReason, AUTH_METHOD_ID, PROTOCOL_VERSION,
+    map_event, mode_config_option, model_config_option, permission_allowed, result_msg,
+    session_modes, session_update, Incoming, StopReason, AUTH_METHOD_ID, PROTOCOL_VERSION,
 };
 
 /// Shared writer so request handlers and the event pump can emit frames.
@@ -111,13 +111,30 @@ impl AcpServer {
     }
 }
 
-/// Build the session `configOptions` array (model select). The live `/models`
-/// fetches use a blocking reqwest client, which panics if dropped on the async
-/// runtime — so run the whole build on a blocking thread.
-async fn build_config_options(cfg: crate::config::ConfigFile, current_value: String) -> Value {
-    tokio::task::spawn_blocking(move || model_config_option(&cfg, &current_value))
-        .await
-        .unwrap_or_else(|_| json!({}))
+/// Build the session `configOptions` array (mode + model selects).
+///
+/// Mode is advertised as a `category: "mode"` select so clients that ignore
+/// the legacy `modes` field (when `configOptions` is present) still get a
+/// mode picker. The live `/models` fetches use a blocking reqwest client,
+/// which panics if dropped on the async runtime — so run the whole build
+/// on a blocking thread.
+async fn build_config_options(
+    cfg: crate::config::ConfigFile,
+    current_model: String,
+    current_mode: String,
+) -> Value {
+    tokio::task::spawn_blocking(move || {
+        json!([
+            mode_config_option(&current_mode),
+            model_config_option(&cfg, &current_model)
+        ])
+    })
+    .await
+    .unwrap_or_else(|_| json!([]))
+}
+
+fn current_model_id(settings: &Settings) -> String {
+    format!("{}/{}", settings.provider.name, settings.model)
 }
 
 /// Dispatch one incoming frame. Prompt turns are spawned so stdin stays live.
@@ -255,8 +272,8 @@ async fn on_session_new(srv: &mut AcpServer, id: &Value, params: &Value) -> Valu
     };
     let sid = persisted.summary.id.clone();
     let mode = settings.mode.label().to_string();
-    let current_value = format!("{}/{}", settings.provider.name, settings.model);
-    let config_options = build_config_options(srv.cfg.clone(), current_value).await;
+    let config_options =
+        build_config_options(srv.cfg.clone(), current_model_id(&settings), mode.clone()).await;
     srv.sessions.insert(
         sid.clone(),
         LiveSession {
@@ -272,7 +289,7 @@ async fn on_session_new(srv: &mut AcpServer, id: &Value, params: &Value) -> Valu
         json!({
             "sessionId": sid,
             "modes": session_modes(&mode),
-            "configOptions": [config_options]
+            "configOptions": config_options
         }),
     )
 }
@@ -337,8 +354,8 @@ async fn on_session_load(
         }
     }
     let mode = settings.mode.label().to_string();
-    let current_value = format!("{}/{}", settings.provider.name, settings.model);
-    let config_options = build_config_options(srv.cfg.clone(), current_value).await;
+    let config_options =
+        build_config_options(srv.cfg.clone(), current_model_id(&settings), mode.clone()).await;
     srv.sessions.insert(
         sid,
         LiveSession {
@@ -353,7 +370,7 @@ async fn on_session_load(
         id,
         json!({
             "modes": session_modes(&mode),
-            "configOptions": [config_options]
+            "configOptions": config_options
         }),
     )
 }
@@ -372,13 +389,17 @@ async fn on_session_resume(srv: &mut AcpServer, id: &Value, params: &Value) -> V
     if srv.sessions.contains_key(&sid) {
         let sess = &srv.sessions[&sid];
         let mode = sess.settings.mode.label().to_string();
-        let current_value = format!("{}/{}", sess.settings.provider.name, sess.settings.model);
-        let config_options = build_config_options(srv.cfg.clone(), current_value).await;
+        let config_options = build_config_options(
+            srv.cfg.clone(),
+            current_model_id(&sess.settings),
+            mode.clone(),
+        )
+        .await;
         return result_msg(
             id,
             json!({
                 "modes": session_modes(&mode),
-                "configOptions": [config_options]
+                "configOptions": config_options
             }),
         );
     }
@@ -400,8 +421,8 @@ async fn on_session_resume(srv: &mut AcpServer, id: &Value, params: &Value) -> V
         Err(e) => return error_msg(Some(id), error_code::INVALID_PARAMS, &e.to_string()),
     };
     let mode = settings.mode.label().to_string();
-    let current_value = format!("{}/{}", settings.provider.name, settings.model);
-    let config_options = build_config_options(srv.cfg.clone(), current_value).await;
+    let config_options =
+        build_config_options(srv.cfg.clone(), current_model_id(&settings), mode.clone()).await;
     srv.sessions.insert(
         sid,
         LiveSession {
@@ -416,7 +437,7 @@ async fn on_session_resume(srv: &mut AcpServer, id: &Value, params: &Value) -> V
         id,
         json!({
             "modes": session_modes(&mode),
-            "configOptions": [config_options]
+            "configOptions": config_options
         }),
     )
 }
@@ -468,6 +489,17 @@ fn on_session_close(srv: &mut AcpServer, id: &Value, params: &Value) -> Value {
     result_msg(id, json!({}))
 }
 
+fn apply_mode(srv: &mut AcpServer, sid: &str, mode_id: &str) -> Result<(), String> {
+    let mode = Mode::from_id(mode_id).ok_or_else(|| format!("unknown mode: {mode_id}"))?;
+    match srv.sessions.get_mut(sid) {
+        Some(sess) => {
+            sess.settings.mode = mode;
+            Ok(())
+        }
+        None => Err("unknown session".into()),
+    }
+}
+
 fn on_set_mode(srv: &mut AcpServer, id: &Value, params: &Value) -> Value {
     let sid = match params.get("sessionId").and_then(|v| v.as_str()) {
         Some(s) => s.to_string(),
@@ -480,24 +512,9 @@ fn on_set_mode(srv: &mut AcpServer, id: &Value, params: &Value) -> Value {
         }
     };
     let mode_id = params.get("modeId").and_then(|v| v.as_str()).unwrap_or("");
-    let mode = match mode_id {
-        "plan" => Mode::Plan,
-        "agent" => Mode::Agent,
-        "chat" => Mode::Chat,
-        _ => {
-            return error_msg(
-                Some(id),
-                error_code::INVALID_PARAMS,
-                &format!("unknown mode: {mode_id}"),
-            );
-        }
-    };
-    match srv.sessions.get_mut(&sid) {
-        Some(sess) => {
-            sess.settings.mode = mode;
-            result_msg(id, json!({}))
-        }
-        None => error_msg(Some(id), error_code::INVALID_PARAMS, "unknown session"),
+    match apply_mode(srv, &sid, mode_id) {
+        Ok(()) => result_msg(id, json!({})),
+        Err(e) => error_msg(Some(id), error_code::INVALID_PARAMS, &e),
     }
 }
 
@@ -562,8 +579,11 @@ async fn on_set_model(srv: &mut AcpServer, id: &Value, params: &Value) -> Value 
     }
 }
 
-/// Handle `session/set_config_option`. Supports the `model` select option
-/// (value is a `provider/model` id); other option ids are rejected.
+/// Handle `session/set_config_option`. Supports `mode` (`plan`/`agent`/`chat`)
+/// and `model` (`provider/model` id); other option ids are rejected.
+///
+/// The response includes the full `configOptions` list with current values,
+/// as required by the Session Config Options spec.
 async fn on_set_config_option(srv: &mut AcpServer, id: &Value, params: &Value) -> Value {
     let sid = match params.get("sessionId").and_then(|v| v.as_str()) {
         Some(s) => s.to_string(),
@@ -579,27 +599,35 @@ async fn on_set_config_option(srv: &mut AcpServer, id: &Value, params: &Value) -
         .get("configId")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    if config_id != "model" {
-        return error_msg(
-            Some(id),
-            error_code::INVALID_PARAMS,
-            &format!("unknown config option: {config_id}"),
-        );
-    }
     let value = match params.get("value").and_then(|v| v.as_str()) {
         Some(v) if !v.trim().is_empty() => v.to_string(),
         _ => {
             return error_msg(
                 Some(id),
                 error_code::INVALID_PARAMS,
-                "value is required for config option 'model'",
+                &format!("value is required for config option '{config_id}'"),
             );
         }
     };
-    match apply_model_selection(srv, &sid, &value).await {
-        Ok(()) => result_msg(id, json!({})),
-        Err(e) => error_msg(Some(id), error_code::INVALID_PARAMS, &e),
+    let applied = match config_id {
+        "mode" => apply_mode(srv, &sid, &value),
+        "model" => apply_model_selection(srv, &sid, &value).await,
+        _ => Err(format!("unknown config option: {config_id}")),
+    };
+    if let Err(e) = applied {
+        return error_msg(Some(id), error_code::INVALID_PARAMS, &e);
     }
+    let (model, mode) = match srv.sessions.get(&sid) {
+        Some(sess) => (
+            current_model_id(&sess.settings),
+            sess.settings.mode.label().to_string(),
+        ),
+        None => {
+            return error_msg(Some(id), error_code::INVALID_PARAMS, "unknown session");
+        }
+    };
+    let config_options = build_config_options(srv.cfg.clone(), model, mode).await;
+    result_msg(id, json!({"configOptions": config_options}))
 }
 
 async fn run_prompt(

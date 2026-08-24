@@ -267,6 +267,20 @@ async fn session_new_advertises_model_config_option() {
     let frames = frames_from(&buf);
     let opts = &frames[1]["result"]["configOptions"];
     let opts = opts.as_array().unwrap();
+    let mode = opts
+        .iter()
+        .find(|o| o["id"] == "mode")
+        .expect("mode option");
+    assert_eq!(mode["type"], "select");
+    assert_eq!(mode["category"], "mode");
+    assert_eq!(mode["currentValue"], "agent");
+    let values: Vec<&str> = mode["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|o| o["value"].as_str())
+        .collect();
+    assert_eq!(values, vec!["plan", "agent", "chat"]);
     let model = opts
         .iter()
         .find(|o| o["id"] == "model")
@@ -405,6 +419,63 @@ async fn set_mode_and_close() {
     let frames = frames_from(&buf);
     assert!(frames[2]["result"].is_object());
     assert!(frames[3]["result"].is_object());
+}
+
+#[tokio::test]
+async fn set_config_option_switches_mode() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().canonicalize().unwrap();
+    let server = Arc::new(Mutex::new(test_server(&ws)));
+    let buf = Arc::new(StdMutex::new(Vec::new()));
+    let writer: Arc<Mutex<dyn FrameWrite>> = Arc::new(Mutex::new(BufWriter { buf: buf.clone() }));
+
+    send(
+        &server,
+        &writer,
+        req(1, "initialize", json!({"protocolVersion": 1})),
+    )
+    .await;
+    send(
+        &server,
+        &writer,
+        req(
+            2,
+            "session/new",
+            json!({"cwd": ws.display().to_string(), "mcpServers": []}),
+        ),
+    )
+    .await;
+    let sid = frames_from(&buf)[1]["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    send(
+        &server,
+        &writer,
+        req(
+            3,
+            "session/set_config_option",
+            json!({"sessionId": sid, "configId": "mode", "value": "chat"}),
+        ),
+    )
+    .await;
+    let frames = frames_from(&buf);
+    let opts = frames[2]["result"]["configOptions"].as_array().unwrap();
+    let mode = opts.iter().find(|o| o["id"] == "mode").unwrap();
+    assert_eq!(mode["currentValue"], "chat");
+
+    send(
+        &server,
+        &writer,
+        req(4, "session/resume", json!({"sessionId": sid})),
+    )
+    .await;
+    let frames = frames_from(&buf);
+    assert_eq!(frames[3]["result"]["modes"]["currentModeId"], "chat");
+    let opts = frames[3]["result"]["configOptions"].as_array().unwrap();
+    let mode = opts.iter().find(|o| o["id"] == "mode").unwrap();
+    assert_eq!(mode["currentValue"], "chat");
 }
 
 #[tokio::test]

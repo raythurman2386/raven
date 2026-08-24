@@ -116,7 +116,8 @@ raven --acp
 - **Supported methods:** `initialize`, `authenticate`, `session/new`,
   `session/prompt`, `session/cancel`, `session/load`, `session/resume`,
   `session/list`, `session/close`, `session/set_mode` (`plan`/`agent`/`chat`),
-  `session/set_model`. `ask_user` and shell confirmation become
+  `session/set_config_option` (`mode` / `model`), `session/set_model`.
+  `ask_user` and shell confirmation become
   `session/request_permission`. `initialize` advertises one `agent`-type auth
   method (`agent-auth`); `authenticate` acknowledges it (credentials are
   resolved in-process).
