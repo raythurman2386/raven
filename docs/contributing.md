@@ -42,7 +42,7 @@ src/
 │   ├── dispatch.rs    # Tool dispatch by name
 │   ├── sandbox.rs     # Sandbox (path confinement, shell filtering, file ops)
 │   ├── document.rs    # Document extraction (.docx, .pdf, .xlsx, .odt, .epub)
-│   ├── git.rs         # Git operations (status, diff, log, commit, undo)
+│   ├── git.rs         # Git operations (status, diff, log, worktrees, patch-apply)
 │   └── patch.rs       # Unified diff parsing and application
 ├── tui/          # ratatui interactive UI (mod, render, markdown, blocks, status, selection)
 ├── commands.rs   # Slash-command registry and parsing

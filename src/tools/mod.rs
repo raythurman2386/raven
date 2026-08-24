@@ -13,7 +13,6 @@ mod document;
 mod git;
 mod patch;
 mod sandbox;
-mod secrets;
 mod validate;
 #[cfg(windows)]
 mod windows;

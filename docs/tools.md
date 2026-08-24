@@ -24,7 +24,6 @@ All file paths are **relative to the workspace root** and confined to it. See [a
 | `git_status` | Show working tree status | Read-only; runs `git status --porcelain` |
 | `git_diff` | Show unstaged or staged changes | Read-only; runs `git diff` |
 | `git_log` | Show recent commit history | Read-only; runs `git log` |
-| `git_commit` | Stage all changes and create a commit | Mutates repo; runs `git add -A && git commit`; refuses if staged files match well-known secret patterns |
 | `apply_patch` | Apply a unified diff patch to files | Workspace-confined; parses and applies patches |
 | `run_tests` | Auto-detect and run project test suite | Runs `cargo test` / `npm test` / `pytest` |
 | `run_lint` | Auto-detect and run project linter/type checker | Runs `cargo clippy` / `tsc` / `eslint` / `python -m compileall` |
@@ -238,17 +237,7 @@ Returns `git diff` (unstaged) or `git diff --staged` output.
 
 Returns the last N commits in `git log --oneline` format.
 
-### `git_commit`
-
-```json
-{
-  "message": "string (required)"
-}
-```
-
-Stages all changes (`git add -A`, excluding `.raven/`, `data/`, `.env`, `.env.*`) and creates a commit with the given message. Returns the new HEAD line. Only available in the full toolset (not during planning).
-
-Before `git commit` runs, staged files are scanned for well-known secret patterns (AWS access keys, GitHub/GitLab tokens, OpenAI/Anthropic/OpenRouter/Stripe keys, PEM private keys, JWTs, …). A match refuses the commit and reports the path plus rule name — never the secret value. Harness checkpoint commits use the same gate. This complements the `.env` pathspec exclusion; it is a guardrail, not a complete secret detector.
+The harness does not create commits. Use `git_status` / `git_diff` / `git_log` to inspect; only create a commit via `run_shell` if the user explicitly asks.
 
 ### `apply_patch`
 
@@ -260,7 +249,7 @@ Before `git commit` runs, staged files are scanned for well-known secret pattern
 
 Parses and applies a unified diff patch to workspace files. Returns a summary of files changed.
 
-Before each file is patched, a safety backup is written to `<file>.bak` (e.g. `main.rs.bak`). These backups are ignored by git (`*.bak` in `.gitignore`) so they are never staged by `git_commit`; they exist purely as a manual safety net in the working tree.
+Before each file is patched, a safety backup is written to `<file>.bak` (e.g. `main.rs.bak`). These backups exist purely as a manual safety net in the working tree.
 
 ### `run_tests`
 

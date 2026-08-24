@@ -296,7 +296,7 @@ pub fn tool_kind(name: &str) -> &'static str {
         "read_file" | "list_dir" => "read",
         "write_file" | "search_replace" | "apply_patch" => "edit",
         "grep" | "search_code" | "memory_search" | "skill_search" => "search",
-        "run_shell" | "run_tests" | "run_lint" | "git_commit" => "execute",
+        "run_shell" | "run_tests" | "run_lint" => "execute",
         "git_status" | "git_diff" | "git_log" => "read",
         "web_search" | "web_fetch" => "fetch",
         "todo_write" | "memory_update" | "skill_load" | "goal_set" | "think" => "think",
@@ -374,10 +374,6 @@ pub fn map_event(event: &AgentEvent, tool_seq: &mut u64) -> Vec<Value> {
             "sessionUpdate": "usage_update",
             "used": after_tokens,
             "size": before_tokens
-        })],
-        AgentEvent::Checkpoint { summary } => vec![json!({
-            "sessionUpdate": "agent_message_chunk",
-            "content": {"type": "text", "text": format!("\n[{summary}]\n")}
         })],
         AgentEvent::RecoveryPatch { path, reason } => vec![json!({
             "sessionUpdate": "agent_message_chunk",

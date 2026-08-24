@@ -6,6 +6,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed
+
+- **`git_commit` tool** — the agent no longer has a dedicated commit tool.
+  Inspect-only `git_status` / `git_diff` / `git_log` remain. The harness does
+  not create commits unless the user explicitly asks via `run_shell`.
+- **Auto-checkpoint commits** — budget exhaustion no longer auto-commits a
+  dirty tree. Work stays in the working tree for the user to review.
+- **`/undo`** — it existed to reverse agent checkpoint commits and would
+  otherwise rewind the user's last commit.
+- **Secrets gate on `git_commit`** — the scanner existed only to refuse
+  harness-created commits.
+
+### Changed
+
+- **Parallel sub-agents** apply each worktree's diff onto the parent working
+  tree (no merge commit). Failed applies still write
+  `.raven/recovery-sub-N.patch`.
+- System prompt: do not commit, amend, or push unless the user explicitly asks.
+
 ## [0.5.1] - 2026-08-23
 
 ### Added

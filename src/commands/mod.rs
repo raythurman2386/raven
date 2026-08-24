@@ -84,12 +84,6 @@ pub fn commands() -> Vec<CommandSpec> {
             arg_help: None,
         },
         CommandSpec {
-            name: "undo",
-            aliases: &["u"],
-            summary: "Undo the last commit, keeping changes in the working tree",
-            arg_help: None,
-        },
-        CommandSpec {
             name: "theme",
             aliases: &["t"],
             summary: "Switch the color theme: /theme <name> (or /theme to list)",
@@ -270,13 +264,6 @@ mod tests {
         );
         let h = command_help("provider").expect("/provider has help");
         assert!(h.contains("Switch the provider"), "help text: {h}");
-    }
-
-    #[test]
-    fn undo_command_registered() {
-        assert_eq!(parse("/undo").unwrap().name, "undo");
-        assert_eq!(parse("/u").unwrap().name, "undo");
-        assert!(help_text().contains("/undo"), "help should list /undo");
     }
 
     #[test]

@@ -257,7 +257,7 @@ fn max_tokens_clamped_to_remaining_context() {
 }
 
 #[tokio::test]
-async fn dirty_tree_guard_auto_commits_on_budget_exhaustion() {
+async fn budget_exhaustion_does_not_auto_commit() {
     let tmp = tempfile::tempdir().unwrap();
     std::process::Command::new("git")
         .args(["init"])
@@ -274,17 +274,32 @@ async fn dirty_tree_guard_auto_commits_on_budget_exhaustion() {
         .current_dir(tmp.path())
         .output()
         .unwrap();
+    std::fs::write(tmp.path().join("seed.txt"), "seed\n").unwrap();
+    std::process::Command::new("git")
+        .args(["add", "seed.txt"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["commit", "-m", "seed"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    let log_before = std::process::Command::new("git")
+        .args(["log", "--oneline"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
 
     // Every iteration the model writes a file (dirtying the tree), never
-    // finishing on its own. After max_iterations (2) the budget is exhausted
-    // but the tree is dirty — the harness must auto-commit directly (not
-    // rely on a model nudge), then wrap up with a toolless summary.
+    // finishing on its own. After max_iterations the budget is exhausted —
+    // the harness must wrap up without creating a commit.
     let write_round = sse_tool_call(
         "call_w",
         "write_file",
         r#"{"path":"out.txt","content":"done"}"#,
     );
-    let summary_round = sse_text("Budget exhausted, work auto-committed.");
+    let summary_round = sse_text("Budget exhausted, work left uncommitted.");
 
     let mut s = settings_for(tmp.path());
     s.max_iterations = 2;
@@ -306,15 +321,21 @@ async fn dirty_tree_guard_auto_commits_on_budget_exhaustion() {
         "turn must not emit Error"
     );
     assert!(
-        agent.sandbox.is_working_tree_clean(),
-        "working tree should be clean after auto-commit"
+        !agent.sandbox.is_working_tree_clean(),
+        "working tree must stay dirty — harness must not auto-commit"
+    );
+    let log_after = std::process::Command::new("git")
+        .args(["log", "--oneline"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        log_before.stdout, log_after.stdout,
+        "HEAD must not move on budget exhaustion"
     );
     assert!(
-        events.iter().any(|e| matches!(
-            e,
-            AgentEvent::Checkpoint { summary } if summary.contains("auto-checkpoint")
-        )),
-        "auto-checkpoint must be visible as an event"
+        tmp.path().join("out.txt").exists(),
+        "edited file must still be on disk"
     );
 }
 

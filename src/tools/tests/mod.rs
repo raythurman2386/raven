@@ -5,7 +5,7 @@
 //!
 //! - [`sandbox_fs`] — path resolution, file I/O, `search_replace`, `grep`, globs
 //! - [`sandbox_shell`] — `run_shell`, OS confinement, command allow/deny lists
-//! - [`git`] — commit/undo, worktrees, merges, checkpoints
+//! - [`git`] — status/diff/log, worktrees, patch-apply merge
 //! - [`dispatch`] — tool dispatch and the plan/chat/full toolsets
 //! - [`patch`] — unified-diff parsing and `apply_patch`
 //! - [`verify`] — `run_tests`/`run_lint` and the verification-gate matcher

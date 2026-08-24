@@ -179,14 +179,6 @@ pub(super) async fn dispatch_slash_command(
         "quit" => {
             state.quit = true;
         }
-        "undo" => {
-            let sandbox = crate::tools::Sandbox::new(settings.workspace.clone());
-            match sandbox.git_undo() {
-                Ok(out) => state.push_system(out),
-                Err(e) => state.push_system(format!("undo failed: {e}")),
-            }
-            state.log_dirty = true;
-        }
         "export" => {
             let dest = if pc.args.trim().is_empty() {
                 store.default_export_dir(session)

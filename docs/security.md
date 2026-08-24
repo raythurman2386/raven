@@ -224,20 +224,7 @@ goes through `sh -c` (or `cmd /C` on Windows), which is inherently
 injection-prone. The denylist is not a security boundary. The real safety net
 is `confirm_shell` (user approval) and the OS-level layers above.
 
-### 7. Secrets gate (`git_commit`)
-
-**What it does:** After staging (and excluding `.env` / `.raven/` / `data/`),
-`git_commit` and harness checkpoints scan staged files for well-known
-credential prefixes (AWS `AKIA…`, GitHub `ghp_`/`github_pat_`, OpenAI /
-Anthropic / OpenRouter / Stripe keys, PEM private-key headers, JWTs, …). A
-match **refuses the commit** with a path + rule-name report. The secret value
-is never copied into the tool result.
-
-**Limitation:** Best-effort pattern match. Obfuscated, novel, or low-entropy
-secrets will slip through. Pathspec exclusions still apply (`.env` is never
-staged). The gate is fail-closed if the staged file list is too large to scan.
-
-### 8. Tool-argument hygiene
+### 7. Tool-argument hygiene
 
 **What it does:** Before dispatch, Raven rejects tool calls whose arguments
 JSON exceeds 1 MiB, are not a JSON object, or omit/mis-type required fields
@@ -293,8 +280,6 @@ cargo test --lib tools::tests::confined_child
 cargo test --lib tools::tests::open_beneath
 cargo test --lib tools::tests::is_direct_exec_command
 cargo test --lib tools::tests::confined_child_oversized_write_capped_by_fsize
-cargo test --lib tools::secrets
-cargo test --lib tools::tests::git_commit_refuses_secret
 cargo test --lib tools::validate
 ```
 

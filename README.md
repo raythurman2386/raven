@@ -17,7 +17,7 @@ I wanted a coding agent I could actually understand and trust. The big harnesses
 - **Auditable** — about 21K lines of Rust. You can read the whole harness. No proprietary plugins, no external service dependencies.
 - **Small footprint** — a single binary that runs comfortably on a Raspberry Pi. No daemon, no background indexing.
 - **No personality layer** — no "soul file". It keeps a plain `.raven/MEMORY.md` with exactly what you tell it to remember.
-- **Production-grade safety** — workspace confinement (Landlock + seccomp on Linux), shell command filters, git-worktree isolation, and a verify-before-commit gate.
+- **Production-grade safety** — workspace confinement (Landlock + seccomp on Linux), shell command filters, git-worktree isolation, and a verify-before-done gate.
 
 It's built for focused, supervised work — not an autonomous loop trying to complete entire projects unsupervised. I review everything it produces.
 
@@ -86,7 +86,7 @@ switch providers and models from the editor's model selector. See
 | In scope | Intentionally out of scope |
 |---|---|
 | Streaming agent loop (OpenAI-compatible `/v1/chat/completions`) | MCP marketplace — Raven stays lean |
-| 25 tools: `list_dir`, `read_file`, `search_replace`, `write_file`, `grep`, `run_shell`, `search_code`, `todo_write`, `goal_set`, `delegate_task`, `think`, `memory_update`, `memory_search`, `git_status`, `git_diff`, `git_log`, `git_commit`, `apply_patch`, `run_tests`, `run_lint`, `ask_user`, `web_search`, `web_fetch`, `skill_search`, `skill_load` | Remote config sync |
+| 24 tools: `list_dir`, `read_file`, `search_replace`, `write_file`, `grep`, `run_shell`, `search_code`, `todo_write`, `goal_set`, `delegate_task`, `think`, `memory_update`, `memory_search`, `git_status`, `git_diff`, `git_log`, `apply_patch`, `run_tests`, `run_lint`, `ask_user`, `web_search`, `web_fetch`, `skill_search`, `skill_load` | Remote config sync |
 | Small footprint — runs on a Raspberry Pi | Personality / "soul file" |
 | Document extraction (`read_file` → Markdown via `anydoc`: `.docx`, `.pdf`, `.xlsx`, …) | Multi-model routing |
 | Workspace sandbox (path confinement + dangerous-command filter) | GUI / web frontend |

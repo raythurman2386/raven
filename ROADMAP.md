@@ -38,11 +38,11 @@ fmt, and `cargo check --target x86_64-pc-windows-gnu`.
 - **Long-horizon task management** — persistent goal + todos (`.raven/state/`), `delegate_task` (depth-1 sub-agents), `think` tool, goal-aware reminders.
 - **Parallel sub-agents** — `--parallel` runs N focused agents concurrently.
 
-### Tools (25)
+### Tools (24)
 `list_dir`, `read_file`, `search_replace`, `write_file`, `grep`, `run_shell`,
 `search_code`, `todo_write`, `goal_set`, `delegate_task`, `think`,
 `memory_update`, `memory_search`, `git_status`, `git_diff`, `git_log`,
-`git_commit`, `apply_patch`, `run_tests`, `run_lint`, `ask_user`, `web_search`,
+`apply_patch`, `run_tests`, `run_lint`, `ask_user`, `web_search`,
 `web_fetch`, `skill_search`, `skill_load`.
 
 - **Document extraction** — `read_file` converts `.docx`, `.pdf`, `.xlsx`, `.odt`, `.epub`, `.pptx`, `.csv`, `.rtf`, `.ods`, `.odp`, `.doc`, `.xls`, `.ppt` and more to Markdown (via the `anydoc` engine).
@@ -50,7 +50,7 @@ fmt, and `cargo check --target x86_64-pc-windows-gnu`.
 - **Skills** — `SKILL.md` discovery over `.raven/skills/` + `~/.raven/skills/`, `skill_search`/`skill_load`.
 - **Repo symbol map** — `<repo_map>` injected for large workspaces (≥15 files / ≥80 symbols), cached per workspace, off the hot path.
 - **Memory** — `.raven/MEMORY.md` injected (first 25KB) + `memory_search` keyword recall.
-- **Git** — `git_commit` (checkpoint mode excludes stray temp files + collateral deletions), `/undo` (`git reset --soft HEAD~1`), worktree isolation for sub-agents.
+- **Git** — inspect-only `git_status` / `git_diff` / `git_log`; worktree isolation for sub-agents with patch-apply back to the parent working tree (no harness commits).
 
 ### Sandbox & safety
 - **Path confinement** — `openat2`/`RESOLVE_BENEATH` on Linux (atomic, no TOCTOU); lexical `..` rejection + canonicalization elsewhere.
@@ -58,7 +58,7 @@ fmt, and `cargo check --target x86_64-pc-windows-gnu`.
 - **seccomp network block** (Linux) — denies `AF_INET`/`AF_INET6` sockets; sanctioned test runners exempted.
 - **Resource limits** — `RLIMIT_CPU`/`RLIMIT_FSIZE`/`RLIMIT_NOFILE` (Linux + macOS); Windows Job Objects (process-tree + memory caps + kill-on-close).
 - **Shell safety** — denylist + allowlist + direct-exec (no shell for safe single-binary commands), `confirm_shell` gate, never-execute patterns even under `--yolo`, `run_shell` logged to session debug-events.
-- **Secrets gate** — `git_commit` / checkpoints scan staged files for well-known credential patterns and refuse the commit (path + rule name only).
+- **No harness commits** — the agent never auto-commits; dirty work stays in the working tree for the user to review.
 
 ### Config, providers, sessions
 - **Named providers** — `ollama`/`openrouter` presets + `[providers.<name>]` config; `--provider`/`/provider` switch endpoint + auth + default model as one unit. Removed legacy `--host`/`--api-key`/`RAVEN_HOST`/`OLLAMA_MODEL` surface.
@@ -71,11 +71,11 @@ fmt, and `cargo check --target x86_64-pc-windows-gnu`.
 - TUI polish pass (`docs/tui-polish.md`): tool calls as bordered blocks, code-block language labels, Home/End jump-to-top/live, context-sensitive keyhint footer, provider in the top bar, empty-state guidance + error recovery, prompt history recall (Up/Down), table-cell width cap, compact `key=value` tool-call args.
 
 ### Eval suite
-- **Layer A** — offline fake-model harness (`cargo test eval_suite`) covering blank-stall, verify gate, sandbox escape, git-commit cleanliness, secrets-stay-uncommitted, goal persistence, large tool-output caps, same-file serial edits, auto-checkpoint events.
+- **Layer A** — offline fake-model harness (`cargo test eval_suite`) covering blank-stall, verify gate, sandbox escape, edits-finish-uncommitted, goal persistence, large tool-output caps, same-file serial edits.
 - **Layer B/C** — live fixtures (`evals/run.py`) + batch runner (`evals/run_all_models.py`); recommended-model table with Recommended / Passing / Partial / Flaky status. Cases include `14_large_tool_output` and Windows-only `15_windows_fs_edge`.
 
 ### Recovery visibility
-- Auto-checkpoint and recovery-patch events; `.raven/RECOVERY.md` index with `git apply` instructions; TUI `last.patch` snapshot after dirty turns.
+- Recovery-patch events for failed sub-agent applies; `.raven/RECOVERY.md` index with `git apply` instructions; TUI `last.patch` snapshot after dirty turns.
 
 ---
 

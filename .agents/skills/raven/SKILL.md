@@ -64,7 +64,7 @@ CLI (main.rs)
 | `src/skills.rs` | `SKILL.md` discovery + `skill_search`/`skill_load` |
 | `src/state.rs` | Persistent agent state — `.raven/state/todos.json` + `goal.json`, injected into the system prompt |
 | `src/tokenizer.rs` | Pure-Rust BPE token estimator (no external vocab) |
-| `src/tools/` | 25 tools + sandbox — `mod.rs`, `definitions.rs`, `dispatch.rs`, `sandbox/` (`mod.rs` + `confinement.rs`), `document.rs`, `git.rs`, `patch.rs`, `windows.rs` |
+| `src/tools/` | 24 tools + sandbox — `mod.rs`, `definitions.rs`, `dispatch.rs`, `sandbox/` (`mod.rs` + `confinement.rs`), `document.rs`, `git.rs`, `patch.rs`, `windows.rs` |
 | `src/tui/` | ratatui TUI with status bar, streaming, scrollback, /commands |
 | `src/web.rs` | Web tools (`web_search`, `web_fetch`) |
 | `src/acp/` | ACP v1 stdio adapter (`raven acp`) — protocol + server, no MCP |
@@ -93,7 +93,7 @@ CLI (main.rs)
 ```bash
 cargo build                    # debug build, must be warning-free
 cargo build --release          # LTO + strip
-cargo test                     # 689 tests, all offline (no Ollama needed)
+cargo test                     # 653 tests, all offline (no Ollama needed)
 cargo clippy --all-targets -- -D warnings   # must be zero warnings
 cargo fmt --all --check        # formatting check
 cargo doc --no-deps            # docs must build with no warnings

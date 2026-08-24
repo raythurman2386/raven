@@ -80,7 +80,7 @@ logs`**. Include those logs when reporting issues.
 1. Open the **Agent Panel** (`cmd-1` / `ctrl-1`) or **Threads Sidebar**.
 2. Open the new-thread / agent selector menu and choose **Raven**.
 3. Start a thread and type your task. Everything runs through Raven's loop —
-   plan mode, tools, verify-before-commit — just as it would in the terminal.
+   plan mode, tools, verify-before-done — just as it would in the terminal.
 
 ### Handy Zed actions
 

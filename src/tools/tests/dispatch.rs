@@ -201,7 +201,6 @@ fn chat_toolset_excludes_write_tools() {
         "memory_update",
         "apply_patch",
         "run_tests",
-        "git_commit",
     ];
     for bad in forbidden {
         assert!(
@@ -268,38 +267,42 @@ fn dispatch_read_only_allows_read_file() {
 }
 
 #[test]
-fn git_commit_in_full_toolset_not_plan_toolset() {
-    let full = tool_definitions();
-    let full_names: Vec<String> = full
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|t| {
-            t.get("function")
-                .and_then(|f| f.get("name"))
-                .and_then(|n| n.as_str())
-                .map(str::to_string)
-        })
-        .collect();
+fn git_commit_is_not_a_tool() {
+    let names_of = |defs: &serde_json::Value| -> Vec<String> {
+        defs.as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| {
+                t.get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(|n| n.as_str())
+                    .map(str::to_string)
+            })
+            .collect()
+    };
+    for (label, defs) in [
+        ("full", tool_definitions()),
+        ("plan", plan_tool_definitions()),
+        ("chat", chat_tool_definitions()),
+    ] {
+        let names = names_of(&defs);
+        assert!(
+            !names.iter().any(|n| n == "git_commit"),
+            "{label} toolset must not include git_commit, got {names:?}"
+        );
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
+    let result = dispatch(
+        &sb,
+        "git_commit",
+        &serde_json::json!({"message": "nope"}),
+        false,
+    )
+    .unwrap();
     assert!(
-        full_names.iter().any(|n| n == "git_commit"),
-        "full toolset should include git_commit, got {full_names:?}"
-    );
-    let plan = plan_tool_definitions();
-    let plan_names: Vec<String> = plan
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|t| {
-            t.get("function")
-                .and_then(|f| f.get("name"))
-                .and_then(|n| n.as_str())
-                .map(str::to_string)
-        })
-        .collect();
-    assert!(
-        !plan_names.iter().any(|n| n == "git_commit"),
-        "git_commit is mutating and must not be advertised during planning"
+        result.contains("Unknown tool"),
+        "git_commit must not dispatch: {result}"
     );
 }
 

@@ -245,9 +245,10 @@ async fn eval_suite_skill_load_and_write() {
     );
 }
 
-/// 05_git_commit_clean — edit + git_commit leaves clean tree.
+/// Edits finish uncommitted — the harness has no git_commit tool and does
+/// not auto-commit.
 #[tokio::test]
-async fn eval_suite_git_commit_cleans_tree() {
+async fn eval_suite_edits_finish_uncommitted() {
     let tmp = tempfile::tempdir().unwrap();
     let git = |args: &[&str]| {
         std::process::Command::new("git")
@@ -262,6 +263,7 @@ async fn eval_suite_git_commit_cleans_tree() {
     std::fs::write(tmp.path().join("lib.rs"), "pub fn id(n:i32)->i32{n}\n").unwrap();
     git(&["add", "-A"]);
     git(&["commit", "-m", "seed"]);
+    let log_before = git(&["log", "--oneline"]);
 
     let mut agent = Agent::new(settings_for(tmp.path()))
         .unwrap()
@@ -271,25 +273,26 @@ async fn eval_suite_git_commit_cleans_tree() {
                 "write_file",
                 r#"{"path":"lib.rs","content":"pub fn square(n:i32)->i32{n*n}\n"}"#,
             ),
-            sse_tool_call("c1", "git_commit", r#"{"message":"add square"}"#),
-            sse_text("Committed."),
+            sse_text("Edited square."),
         ]));
     let (tx, mut rx) = mpsc::channel(64);
-    agent.run("add square and commit", tx).await.unwrap();
+    agent.run("add square", tx).await.unwrap();
     let events = drain(&mut rx).await;
 
     assert!(
-        events
+        !events
             .iter()
             .any(|e| matches!(e, AgentEvent::ToolStart { name, .. } if name == "git_commit")),
-        "git_commit should run"
+        "git_commit must not run"
     );
     assert!(
-        agent.sandbox.is_working_tree_clean(),
-        "tree should be clean after commit"
+        !agent.sandbox.is_working_tree_clean(),
+        "tree should stay dirty — no auto-commit"
     );
     let content = std::fs::read_to_string(tmp.path().join("lib.rs")).unwrap();
     assert!(content.contains("square"), "square should be present");
+    let log_after = git(&["log", "--oneline"]);
+    assert_eq!(log_before.stdout, log_after.stdout, "HEAD must not move");
 }
 
 /// Stall recovery — blank responses retry (eval control-plane theme).
@@ -413,118 +416,6 @@ async fn eval_suite_readonly_read_then_answer() {
                 if name == "write_file" || name == "search_replace" || name == "run_shell"
         )
     }));
-}
-
-/// 11_secrets_stay_uncommitted — git_commit must not stage `.env`.
-#[tokio::test]
-async fn eval_suite_git_commit_leaves_env_untracked() {
-    let tmp = tempfile::tempdir().unwrap();
-    let git = |args: &[&str]| {
-        std::process::Command::new("git")
-            .args(args)
-            .current_dir(tmp.path())
-            .output()
-            .unwrap()
-    };
-    git(&["init"]);
-    git(&["config", "user.email", "eval@test"]);
-    git(&["config", "user.name", "Eval"]);
-    std::fs::write(tmp.path().join("lib.rs"), "pub fn id(n:i32)->i32{n}\n").unwrap();
-    std::fs::write(tmp.path().join(".env"), "RAVEN_EVAL_SECRET=do-not-commit\n").unwrap();
-    git(&["add", "lib.rs"]);
-    git(&["commit", "-m", "seed"]);
-
-    let mut agent = Agent::new(settings_for(tmp.path()))
-        .unwrap()
-        .with_completion_source(scripted(vec![
-            sse_tool_call(
-                "w1",
-                "write_file",
-                r#"{"path":"lib.rs","content":"pub fn square(n:i32)->i32{n*n}\n"}"#,
-            ),
-            sse_tool_call("c1", "git_commit", r#"{"message":"add square"}"#),
-            sse_text("Committed."),
-        ]));
-    let (tx, mut rx) = mpsc::channel(64);
-    agent.run("add square and commit", tx).await.unwrap();
-    let _ = drain(&mut rx).await;
-
-    let env_path = tmp.path().join(".env");
-    assert!(env_path.exists(), ".env must remain on disk");
-    let tracked = std::process::Command::new("git")
-        .args(["ls-files", "--error-unmatch", ".env"])
-        .current_dir(tmp.path())
-        .output()
-        .unwrap();
-    assert!(
-        !tracked.status.success(),
-        ".env must not be tracked after git_commit"
-    );
-    let show = std::process::Command::new("git")
-        .args(["grep", "RAVEN_EVAL_SECRET", "HEAD"])
-        .current_dir(tmp.path())
-        .output()
-        .unwrap();
-    assert!(
-        !show.status.success(),
-        "secret must not appear in HEAD: {}",
-        String::from_utf8_lossy(&show.stdout)
-    );
-}
-
-/// git_commit must refuse a well-known secret in a tracked source file.
-#[tokio::test]
-async fn eval_suite_git_commit_refuses_secret_in_source() {
-    let tmp = tempfile::tempdir().unwrap();
-    let git = |args: &[&str]| {
-        std::process::Command::new("git")
-            .args(args)
-            .current_dir(tmp.path())
-            .output()
-            .unwrap()
-    };
-    git(&["init"]);
-    git(&["config", "user.email", "eval@test"]);
-    git(&["config", "user.name", "Eval"]);
-    std::fs::write(tmp.path().join("lib.rs"), "pub fn id(n:i32)->i32{n}\n").unwrap();
-    git(&["add", "lib.rs"]);
-    git(&["commit", "-m", "seed"]);
-
-    let mut agent = Agent::new(settings_for(tmp.path()))
-        .unwrap()
-        .with_completion_source(scripted(vec![
-            sse_tool_call(
-                "w1",
-                "write_file",
-                r#"{"path":"lib.rs","content":"pub const KEY: &str = \"AKIATESTTESTTEST1234\";\n"}"#,
-            ),
-            sse_tool_call("c1", "git_commit", r#"{"message":"add key"}"#),
-            sse_text("Tried to commit."),
-        ]));
-    let (tx, mut rx) = mpsc::channel(64);
-    agent.run("commit the key", tx).await.unwrap();
-    let _ = drain(&mut rx).await;
-
-    let show = std::process::Command::new("git")
-        .args(["grep", "AKIATESTTESTTEST1234", "HEAD"])
-        .current_dir(tmp.path())
-        .output()
-        .unwrap();
-    assert!(
-        !show.status.success(),
-        "secret must not appear in HEAD: {}",
-        String::from_utf8_lossy(&show.stdout)
-    );
-    let log = std::process::Command::new("git")
-        .args(["log", "--oneline", "-n", "5"])
-        .current_dir(tmp.path())
-        .output()
-        .unwrap();
-    let log_s = String::from_utf8_lossy(&log.stdout);
-    assert!(
-        !log_s.contains("add key"),
-        "secret-bearing commit must not exist: {log_s}"
-    );
 }
 
 /// 13_goal_set — goal_set persists to `.raven/state/goal.json` and is

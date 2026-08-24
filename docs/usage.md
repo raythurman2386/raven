@@ -108,13 +108,15 @@ During the plan-proposal turn (and any revision turn), the agent is limited to a
 - `list_dir`, `read_file`, `grep`, `search_code`, `git_status`, `git_diff`, `git_log`
 - `web_search`, `web_fetch`, `skill_search`, `skill_load`, `memory_search`, `think`
 
-The mutating and shell tools (`write_file`, `search_replace`, `run_shell`, `todo_write`, `goal_set`, `delegate_task`, `memory_update`, `apply_patch`, `run_tests`, `run_lint`, `git_commit`, `ask_user`) are **not advertised** to the model during planning, so it physically cannot change files or run commands until you approve. Only after approval does the full toolset become available.
+The mutating and shell tools (`write_file`, `search_replace`, `run_shell`, `todo_write`, `goal_set`, `delegate_task`, `memory_update`, `apply_patch`, `run_tests`, `run_lint`, `ask_user`) are **not advertised** to the model during planning, so it physically cannot change files or run commands until you approve. Only after approval does the full toolset become available.
 
 ---
 
 ## Parallel sub-agents
 
-Run N independent agent tasks concurrently. Each gets a fresh conversation; results are printed in order.
+Run N independent agent tasks concurrently. Each gets a fresh conversation;
+in a git workspace each also gets an isolated worktree. Results are printed
+in order. Sub-agent diffs are applied to your working tree without committing.
 
 ```bash
 raven --parallel \
@@ -177,7 +179,6 @@ host. Type one and press `Enter`; `/help` lists everything.
 | `/model <name>` | `/m` | Switch the model for subsequent turns |
 | `/theme [name]` | `/t` | List themes, or switch the active color theme |
 | `/stop` | `/s` | Interrupt the running task |
-| `/undo` | `/u` | Undo the last commit, keeping the working tree |
 | `/provider [name]` | `/p` | List providers, or switch the active one |
 | `/export [dir]` | `/x` | Write a local Markdown/JSON bundle of this session |
 | `/quit` | `/q`, `/exit` | Quit Raven |
@@ -259,22 +260,15 @@ Grok Build uses indexed keyword + vector search; a mini harness gets the
 high-value subset with a dependency-light keyword scan of the single memory
 file. Read-only and available during planning.
 
-### Git checkpointing (`git_commit`) and `/undo`
+### Git inspect (`git_status`, `git_diff`, `git_log`)
 
-The agent can checkpoint its own work with `git_commit(message)`, which stages
-all changes (`git add -A`, excluding `.env` / `.raven/` / `data/`) and commits
-them. If staged files match well-known secret patterns the commit is refused.
-It only appears in the **full** toolset — never during planning, since it
-mutates the repo.
+The agent can inspect the repo with `git_status`, `git_diff`, and `git_log`.
+It does **not** create commits on its own — no `git_commit` tool, and no
+auto-checkpoint when the iteration budget is exhausted. Dirty work stays in
+the working tree for you to review. Only create a commit if you explicitly
+ask.
 
-To step back from the last commit, use the `/undo` (or `/u`) slash command in
-the TUI. It runs `git reset --soft HEAD~1`, which undoes the commit while
-**keeping all changes in the working tree** — nothing is lost, and you can
-re-commit once the agent's next move is clearer.
-
-When the iteration budget is exhausted with a dirty tree, Raven auto-commits a
-harness checkpoint and prints a `✓ auto-checkpoint committed — …` line (TUI
-and headless). If a parallel sub-agent cannot merge, a recovery patch is
+If a parallel sub-agent's diff cannot be applied, a recovery patch is
 written to `.raven/recovery-sub-N.patch` and indexed in `.raven/RECOVERY.md`
 (`git apply .raven/recovery-sub-N.patch`). After each TUI turn that produced
 a git diff, a snapshot is saved to `.raven/sessions/<id>/last.patch`.

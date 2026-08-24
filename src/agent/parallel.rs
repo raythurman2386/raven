@@ -29,7 +29,7 @@ pub struct SubAgentReport {
     pub index: usize,
     pub text: String,
     pub elapsed: std::time::Duration,
-    /// "merged", "conflict", "no changes", "uncommitted (preserved)", or "error: ..."
+    /// "applied", "no changes", "uncommitted (preserved)", or "error: ..."
     pub merge_status: String,
     /// Path to a recovery patch file when the sub-agent's work could not be
     /// merged but was preserved as a diff.
@@ -80,9 +80,9 @@ pub async fn delegate_task(mut settings: Settings, task: String) -> Result<Strin
 /// Run several focused sub-agents in parallel and return their final reports.
 ///
 /// Each sub-agent gets its own isolated git worktree on a unique branch so
-/// that `git add -A` and `git commit` only stage and commit that sub-agent's
-/// own work. After all sub-agents finish, each branch is merged back into the
-/// original branch and the worktrees are cleaned up.
+/// uncommitted edits cannot clobber each other. After all sub-agents finish,
+/// each worktree's diff versus the original HEAD is applied to the parent
+/// working tree (no commit) and the worktrees are cleaned up.
 ///
 /// If the workspace is not a git repository, sub-agents share the workspace
 /// directly (no isolation).
@@ -169,9 +169,6 @@ pub async fn run_parallel(settings: &Settings, tasks: Vec<String>) -> Result<Vec
                     AgentEvent::Iteration(n) => {
                         eprintln!("[sub-agent {}] [iter {}]", i, n);
                     }
-                    AgentEvent::Checkpoint { summary } => {
-                        eprintln!("[sub-agent {}] {summary}", i);
-                    }
                     AgentEvent::Done | AgentEvent::Error(_) => break,
                     _ => {}
                 }
@@ -200,57 +197,37 @@ pub async fn run_parallel(settings: &Settings, tasks: Vec<String>) -> Result<Vec
     }
     results.sort_by_key(|r| r.index);
 
+    let base_rev = if is_git {
+        sandbox.rev_parse_head().unwrap_or_default()
+    } else {
+        String::new()
+    };
+
     if is_git {
         let mut conflicted: Vec<(usize, String)> = Vec::new();
         for (i, branch_name, wt_path, sandbox) in &branches_to_merge {
             let main_ws = sandbox.workspace.clone();
             let wt_sandbox = Sandbox::with_extra_rw(wt_path.clone(), vec![main_ws.clone()]);
-            if !wt_sandbox.is_working_tree_clean() {
-                let _ = wt_sandbox.git_commit_checkpoint(&format!(
-                    "checkpoint: uncommitted work from sub-agent {}",
-                    i
-                ));
-            }
-
-            let merge_result = sandbox.merge_branch(branch_name);
-            let status = match merge_result {
-                Ok(out) if out.contains("Already up to date") => "no changes".to_string(),
-                Ok(out)
-                    if out.contains("CONFLICT")
-                        || sandbox.has_merge_conflicts().unwrap_or(false) =>
-                {
-                    let _ = sandbox.abort_merge();
-                    let patch_rel = persist_recovery_patch(
-                        &main_ws,
-                        *i,
-                        branch_name,
-                        sandbox,
-                        "merge conflict",
-                    );
-                    conflicted.push((*i, branch_name.clone()));
-                    tracing::warn!(
-                        "merge conflict for sub-agent {} (branch {}), merge aborted; \
-                         recovery patch written to {}",
-                        i,
-                        branch_name,
-                        patch_rel,
-                    );
-                    format!("uncommitted (preserved) → {}", patch_rel)
-                }
-                Ok(_) => "merged".to_string(),
-                Err(e) => {
-                    let reason = format!("merge error: {e}");
-                    let patch_rel =
-                        persist_recovery_patch(&main_ws, *i, branch_name, sandbox, &reason);
-                    tracing::warn!(
-                        "merge error for sub-agent {} (branch {}): {}; \
-                         recovery patch written to {}",
-                        i,
-                        branch_name,
-                        e,
-                        patch_rel,
-                    );
-                    format!("uncommitted (preserved) → {}", patch_rel)
+            let patch = wt_sandbox.export_diff_from(&base_rev).unwrap_or_default();
+            let status = if patch.trim().is_empty() {
+                "no changes".to_string()
+            } else {
+                match sandbox.apply_git_patch(&patch) {
+                    Ok(_) => "applied".to_string(),
+                    Err(e) => {
+                        let reason = format!("apply failed: {e}");
+                        let patch_rel = persist_recovery_patch(&main_ws, *i, &patch, &reason);
+                        conflicted.push((*i, branch_name.clone()));
+                        tracing::warn!(
+                            "patch apply failed for sub-agent {} (branch {}): {}; \
+                             recovery patch written to {}",
+                            i,
+                            branch_name,
+                            e,
+                            patch_rel,
+                        );
+                        format!("uncommitted (preserved) → {}", patch_rel)
+                    }
                 }
             };
             if let Some(r) = results.iter_mut().find(|r| r.index == *i) {
@@ -281,8 +258,8 @@ pub async fn run_parallel(settings: &Settings, tasks: Vec<String>) -> Result<Vec
                 .map(|(i, b)| format!("sub-agent {} (branch {})", i, b))
                 .collect();
             anyhow::bail!(
-                "merge conflicts detected for {} sub-agent(s): {}. \
-                 The working tree has been restored to its pre-merge state. \
+                "patch apply failed for {} sub-agent(s): {}. \
+                 Successful applies remain uncommitted in the working tree. \
                  Recovery patches are under `.raven/recovery-sub-*.patch` \
                  (see `.raven/RECOVERY.md`). Apply with `git apply <patch>`. \
                  To avoid conflicts, assign disjoint files to each sub-agent.",
@@ -299,30 +276,21 @@ pub async fn run_parallel(settings: &Settings, tasks: Vec<String>) -> Result<Vec
     Ok(results)
 }
 
-/// Write a sub-agent's unmerged diff to `.raven/recovery-sub-N.patch` and
+/// Write a sub-agent's unapplied diff to `.raven/recovery-sub-N.patch` and
 /// append a line to `.raven/RECOVERY.md` so the artifact is findable after
 /// the CLI output has scrolled away.
-fn persist_recovery_patch(
-    workspace: &Path,
-    index: usize,
-    branch_name: &str,
-    sandbox: &Sandbox,
-    reason: &str,
-) -> String {
+fn persist_recovery_patch(workspace: &Path, index: usize, patch: &str, reason: &str) -> String {
     let rel = format!(".raven/recovery-sub-{index}.patch");
-    match sandbox.branch_diff(branch_name) {
-        Ok(diff) if !diff.trim().is_empty() => {
-            let full = workspace.join(&rel);
-            if let Some(parent) = full.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            if let Err(e) = std::fs::write(&full, &diff) {
-                tracing::warn!("failed to write recovery patch for sub-agent {index}: {e}");
-            } else {
-                append_recovery_index(workspace, index, &rel, reason);
-            }
+    if !patch.trim().is_empty() {
+        let full = workspace.join(&rel);
+        if let Some(parent) = full.parent() {
+            let _ = std::fs::create_dir_all(parent);
         }
-        _ => {}
+        if let Err(e) = std::fs::write(&full, patch) {
+            tracing::warn!("failed to write recovery patch for sub-agent {index}: {e}");
+        } else {
+            append_recovery_index(workspace, index, &rel, reason);
+        }
     }
     rel
 }

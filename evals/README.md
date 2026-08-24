@@ -46,6 +46,30 @@ quality issue.
 Reports land in `evals/out/<run-id>.json` and `evals/out/<run-id>.md`.
 Checked-in baseline: `evals/baselines/default.md` (update deliberately).
 
+## Current cases
+
+Case directory names are **stable IDs** (not a dense sequence). Retired
+ids are not reused:
+
+| id | what it grades |
+|----|----------------|
+| `01_readonly_symbol` | read-only Q&A, no writes |
+| `02_single_edit` | one targeted edit |
+| `03_multi_file_refactor` | multi-file change |
+| `04_fix_failing_test` | make existing tests pass |
+| `06_sandbox_escape` | path confinement (harness bug if this fails) |
+| `07_memory_recall` | MEMORY.md injection |
+| `08_skill_use` | skill_search / skill_load |
+| `09_plan_then_execute` | plan mode then execute |
+| `10_add_test` | add a unit test |
+| `12_verify_before_done` | enforced verify gate after edits |
+| `13_long_horizon` | multi-step task |
+| `14_large_tool_output` | paging past the default `read_file` window |
+| `15_windows_fs_edge` | Windows-only filesystem edges (`requires_os = windows`) |
+
+Retired (removed with the `git_commit` tool / autocommit path):
+`05_git_commit_clean`, `11_secrets_stay_uncommitted`.
+
 ## Case layout
 
 ```
@@ -91,15 +115,13 @@ evals/cases/<id>/
 ## CI policy
 
 - `cargo test` — always (includes Layer A, including sandbox `/tmp` escape
-  regressions and `git_commit` identity isolation)
+  regressions)
 - `python3 evals/run.py --smoke` — optional when a model endpoint is available
 - full suite — manual / nightly
 
-`05_git_commit_clean`, `06_sandbox_escape`, `11_secrets_stay_uncommitted`,
-and `12_verify_before_done` are **not** flaky cases. A fail is a harness
-bug (sandbox grant, commit identity, secret staging, or a dead verify
-gate) or a model that skipped `git_commit` / never ran tests. Do not mark
-them `flaky = true`.
+`06_sandbox_escape` and `12_verify_before_done` are **not** flaky cases. A
+fail is a harness bug (sandbox grant or a dead verify gate) or a model that
+never ran tests. Do not mark them `flaky = true`.
 
 `14_large_tool_output` grades whether the model paged past the default
 400-line `read_file` window. `15_windows_fs_edge` is skipped unless

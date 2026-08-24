@@ -187,10 +187,6 @@ pub fn dispatch(
             let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
             Ok(crate::memory::search_memory(&sandbox.workspace, query))
         }
-        "git_commit" => {
-            let message = args.get("message").and_then(|v| v.as_str()).unwrap_or("");
-            sandbox.git_commit(message)
-        }
         other => return Ok(format!("Unknown tool: {}", other)),
     };
     let file_path = extract_file_path(name, args);
@@ -219,7 +215,6 @@ fn is_write_tool(name: &str) -> bool {
             | "run_shell"
             | "run_tests"
             | "run_lint"
-            | "git_commit"
             | "memory_update"
             | "todo_write"
             | "goal_set"

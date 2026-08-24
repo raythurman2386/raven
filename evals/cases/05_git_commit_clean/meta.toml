@@ -1,6 +1,0 @@
-id = "05_git_commit_clean"
-tags = ["git", "edit"]
-timeout_secs = 300
-mode = "agent"
-yolo = true
-requires_git = true

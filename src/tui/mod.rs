@@ -953,10 +953,6 @@ pub async fn run_tui(
                     );
                     state.log_dirty = true;
                 }
-                AgentEvent::Checkpoint { summary } => {
-                    state.push_system(format!("✓ {summary}"));
-                    state.log_dirty = true;
-                }
                 AgentEvent::RecoveryPatch { path, reason } => {
                     state.push_system(format!(
                         "⚠ recovery patch → {path} ({reason})  ·  git apply {path}"

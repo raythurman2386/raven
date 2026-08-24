@@ -158,7 +158,6 @@ resolved via `Sandbox::safe_resolve`, which applies two defenses:
 - Blocks destructive command patterns even under `--yolo` (see [tools.md#blocked-commands](tools.md#blocked-commands)).
 - Runs allowlisted, metacharacter-free commands via **direct exec** (`Command::new(bin).args(...)`, no `sh -c`) — see [security.md §6](security.md).
 - Tool-call arguments are length-capped and schema-checked before dispatch.
-- `git_commit` refuses staged files that match well-known secret patterns (see [security.md §7](security.md)).
 - Enforces a timeout (default 60s, overridable per call).
 - Caps output at 12 000 chars.
 - Every confined subprocess additionally runs under OS-level confinement: **Landlock** (filesystem) + **seccomp** (network-block) + **rlimits** (CPU/file-size/fds) on Linux; rlimits on macOS; **Job Object** (process-tree + committed-memory) on Windows. Landlock write roots are the workspace, explicit extras (git worktrees), and `/dev` — never the process temp dir. `TMPDIR` is pinned under `.raven/tmp`. See [security.md](security.md) for the full defense layers.
@@ -193,7 +192,13 @@ Each `dispatch` is sync, so `spawn_blocking` moves it off the async runtime. Res
 
 ## Parallel sub-agents
 
-`run_parallel` spawns N independent `Agent`s, each with a fresh conversation. Tool events are consumed silently; only `TextDelta` output is accumulated and returned in order.
+`run_parallel` spawns N independent `Agent`s, each with a fresh conversation.
+When the workspace is a git repo, each sub-agent runs in an isolated git
+worktree. After they finish, each worktree's diff versus the original HEAD is
+applied to the parent working tree **without creating a commit**. A failed
+apply writes `.raven/recovery-sub-N.patch` (indexed in `.raven/RECOVERY.md`).
+Tool events are consumed silently; only `TextDelta` output is accumulated and
+returned in order.
 
 ---
 

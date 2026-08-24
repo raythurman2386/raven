@@ -88,9 +88,6 @@ pub fn validate_tool_call(name: &str, raw: &str, args: &Value) -> Result<(), Str
         "skill_load" => {
             require_nonempty_str(name, args, "name")?;
         }
-        "git_commit" => {
-            require_nonempty_str(name, args, "message")?;
-        }
         "apply_patch" => {
             require_nonempty_str(name, args, "patch")?;
         }
@@ -218,12 +215,6 @@ mod tests {
         let path = "a".repeat(MAX_PATH_CHARS + 1);
         let err = validate_tool_call("read_file", "{}", &json!({"path": path})).unwrap_err();
         assert!(err.contains("exceeds"));
-    }
-
-    #[test]
-    fn git_commit_requires_message() {
-        let err = validate_tool_call("git_commit", "{}", &json!({})).unwrap_err();
-        assert!(err.contains("message"));
     }
 
     #[test]

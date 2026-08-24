@@ -203,9 +203,8 @@ def init_git(repo: Path) -> None:
     env.setdefault("GIT_COMMITTER_NAME", "raven-eval")
     env.setdefault("GIT_COMMITTER_EMAIL", "eval@raven.local")
     subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
-    # Match git_commit's exclude list so a planted `.env` stays untracked
-    # in the seed (case 11). `git add -A` would otherwise bake secrets
-    # into the initial commit before the agent runs.
+    # Keep planted `.env` / `.raven/` / `data/` untracked in the seed.
+    # `git add -A` would otherwise bake them into the initial commit.
     subprocess.run(
         ["git", "add", "-A", "--", ".", ":!.env", ":!.env.*", ":!.raven/", ":!data/"],
         cwd=repo,

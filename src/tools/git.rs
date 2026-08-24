@@ -1,4 +1,7 @@
-//! Git tools: status, diff, log, commit, undo.
+//! Git tools: status, diff, log, plus worktree isolation for parallel sub-agents.
+//!
+//! The harness never creates commits. Parallel sub-agent work is captured as a
+//! unified diff and applied to the parent working tree.
 
 use anyhow::{Context, Result};
 use std::process::Command;
@@ -12,7 +15,7 @@ impl Sandbox {
     /// `git status --porcelain=v1` — structured, compact output.
     pub fn git_status(&self) -> Result<String> {
         let out = self.run_git(&["status", "--porcelain=v1"])?;
-        Ok(if out.trim().is_empty() {
+        Ok(if git_out_empty(&out) {
             "No changes (working tree clean)".into()
         } else {
             out
@@ -37,35 +40,21 @@ impl Sandbox {
         Ok(out)
     }
 
-    /// Stage all changes and create a commit. Used by the agent to checkpoint
-    /// its own work. Returns the new HEAD line.
-    pub fn git_commit(&self, message: &str) -> Result<String> {
-        self.git_commit_inner(message, true)
+    /// Resolve `HEAD` to a SHA. Used as the base revision when capturing a
+    /// worktree's changes for patch-apply (no commit).
+    pub fn rev_parse_head(&self) -> Result<String> {
+        let out = self.run_git(&["rev-parse", "HEAD"])?;
+        Ok(out.lines().next().unwrap_or("").trim().to_string())
     }
 
-    /// Checkpoint commit used by the harness itself (budget exhaustion in
-    /// `core.rs`, uncommitted sub-agent work in `parallel.rs`). Unlike the
-    /// model-facing [`Self::git_commit`], this preserves additions and
-    /// modifications but does NOT stage deletions of tracked files — a
-    /// collateral deletion (e.g. a sub-agent's failed `npm install` removing
-    /// `package-lock.json`) must not be swept into a checkpoint commit. The
-    /// checkpoint's job is to preserve *code* work, not to ratify accidental
-    /// file removal.
-    pub fn git_commit_checkpoint(&self, message: &str) -> Result<String> {
-        self.git_commit_inner(message, false)
-    }
-
-    fn git_commit_inner(&self, message: &str, include_deletions: bool) -> Result<String> {
-        let msg = message.trim();
-        if msg.is_empty() {
-            return Ok("Error: empty commit message".into());
-        }
-        if !self.is_git_repo()? {
-            return Ok("Error: not a git repository (no .git found)".into());
-        }
-        let porcelain = self.run_git(&["status", "--porcelain=v1"])?;
-        if porcelain == "exit=0" || porcelain.trim().is_empty() {
-            return Ok("No changes to commit (working tree clean)".into());
+    /// Capture all worktree changes versus `base_rev` as a unified diff.
+    ///
+    /// Untracked files are included except `.raven/`, `data/`, `.env`, and
+    /// `.env.*`. Does **not** create a commit. The index is restored afterward.
+    pub fn export_diff_from(&self, base_rev: &str) -> Result<String> {
+        let base = base_rev.trim();
+        if base.is_empty() || base.contains("fatal") {
+            return Ok(String::new());
         }
         let _ = self.run_git(&[
             "add",
@@ -76,129 +65,48 @@ impl Sandbox {
             ":!.env",
             ":!.env.*",
         ])?;
-        if !include_deletions {
-            // Unstage deletions of tracked files and stray untracked temp
-            // files so a checkpoint never commits collateral file removal or
-            // accidental junk. `git diff --cached --name-status` lists what
-            // `git add -A` just staged; `D` entries are tracked-file deletions
-            // and `A` entries matching a stray-temp pattern are scratch files
-            // the model's tooling dropped in the workspace. Restore them to
-            // the index (keeping the working-tree change) so they don't enter
-            // the checkpoint commit.
-            let staged = self.run_git(&["diff", "--cached", "--name-status"])?;
-            let mut unstaged: Vec<&str> = Vec::new();
-            for line in staged.lines() {
-                let mut it = line.splitn(2, '\t');
-                let status = it.next().unwrap_or("").trim();
-                let path = it.next().unwrap_or("").trim();
-                if path.is_empty() {
-                    continue;
-                }
-                let is_deletion = status == "D";
-                let is_stray_addition = status == "A" && Self::is_stray_temp(path);
-                if is_deletion || is_stray_addition {
-                    unstaged.push(path);
-                }
-            }
-            if !unstaged.is_empty() {
-                let mut args = vec!["restore", "--staged", "--"];
-                args.extend(unstaged.iter().copied());
-                let _ = self.run_git(&args)?;
-            }
-        }
-        if let Some(refusal) = self.refuse_if_staged_secrets()? {
-            return Ok(refusal);
-        }
-        let commit_out = self.run_git(&["commit", "-m", msg])?;
-        if commit_out.contains("fatal") || commit_out.contains("Error") {
-            return Ok(commit_out);
-        }
-        self.git_log(1)
-    }
-
-    /// Scan staged files for well-known secret patterns and refuse the commit
-    /// if any match. Complements the pathspec exclusions (`.env`, `.raven/`).
-    ///
-    /// Fail-closed: if the staged-name listing looks truncated or a staged
-    /// path escapes the workspace, the commit is refused rather than skipped.
-    fn refuse_if_staged_secrets(&self) -> Result<Option<String>> {
-        let listing = self.run_git(&["diff", "--cached", "--name-only", "--diff-filter=ACMR"])?;
-        if listing.contains("[truncated") {
-            return Ok(Some(
-                "Error: git_commit refused — staged change list is too large to scan for secrets"
-                    .into(),
-            ));
-        }
-        let mut findings = Vec::new();
-        for line in listing.lines() {
-            let path = line.trim();
-            if path.is_empty() || path == "exit=0" || path.starts_with("warning:") {
-                continue;
-            }
-            if path.contains("fatal") || path.contains("error:") {
-                continue;
-            }
-            if path.contains("..") {
-                return Ok(Some(format!(
-                    "Error: git_commit refused — staged path looks unsafe: {path}"
-                )));
-            }
-            let Ok(resolved) = self.safe_resolve(path) else {
-                return Ok(Some(format!(
-                    "Error: git_commit refused — staged path escapes workspace: {path}"
-                )));
-            };
-            let Ok(bytes) = std::fs::read(&resolved) else {
-                continue;
-            };
-            findings.extend(super::secrets::scan_bytes(path, &bytes));
-            if findings.len() >= 12 {
-                break;
-            }
-        }
-        if findings.is_empty() {
-            Ok(None)
+        let out = self.run_git(&["diff", "--cached", "--binary", base])?;
+        let _ = self.run_git(&["reset", "-q", "HEAD"]);
+        if git_out_empty(&out) {
+            Ok(String::new())
         } else {
-            Ok(Some(super::secrets::format_refusal(&findings)))
+            Ok(out)
         }
     }
 
-    /// Whether a path is a stray temp/scratch file the model's tooling may
-    /// drop in the workspace root. These must never be swept into a checkpoint
-    /// commit.
-    fn is_stray_temp(path: &str) -> bool {
-        let name = path.rsplit('/').next().unwrap_or(path);
-        name == "err.txt"
-            || name == "out.txt"
-            || name == "testout.txt"
-            || name.starts_with("_tmp_")
-            || name.ends_with(".log")
-    }
-
-    /// Undo the last commit, keeping changes in the working tree
-    /// (`git reset --soft HEAD~1`). Non-destructive: nothing is lost.
-    pub fn git_undo(&self) -> Result<String> {
-        if !self.is_git_repo()? {
-            return Ok("Error: not a git repository (no .git found)".into());
+    /// Apply a unified diff to this workspace's working tree without committing.
+    pub fn apply_git_patch(&self, patch: &str) -> Result<String> {
+        let trimmed = patch.trim();
+        if trimmed.is_empty() || git_out_empty(trimmed) {
+            return Ok("no changes".into());
         }
-        let count = self.run_git(&["rev-list", "--count", "HEAD"])?;
-        if count.contains("fatal") {
-            return Ok("No commits to undo".into());
+        let rel = ".raven/tmp/apply.patch";
+        let full = self.workspace.join(rel);
+        if let Some(parent) = full.parent() {
+            std::fs::create_dir_all(parent)?;
         }
-        let out = self.run_git(&["reset", "--soft", "HEAD~1"])?;
-        if out.contains("fatal") || out.starts_with("exit=") {
-            return Ok(out);
+        std::fs::write(&full, patch)?;
+        let check = self.run_git(&["apply", "--check", "--", rel])?;
+        if git_cmd_failed(&check) {
+            let _ = std::fs::remove_file(&full);
+            anyhow::bail!("patch does not apply: {check}");
         }
-        Ok(format!(
-            "Undid the last commit; changes are back in the working tree.\n{}",
-            self.git_status()?
-        ))
+        let out = self.run_git(&["apply", "--", rel])?;
+        let _ = std::fs::remove_file(&full);
+        if git_cmd_failed(&out) {
+            anyhow::bail!("git apply failed: {out}");
+        }
+        Ok(if git_out_empty(&out) {
+            "applied".into()
+        } else {
+            out
+        })
     }
 
     /// Create a git worktree at `worktree_path` on a new branch `branch_name`
     /// based on the current HEAD. The worktree shares the same git repository
-    /// but has its own working tree, so `git add -A` and `git commit` only
-    /// stage and commit changes made in that worktree.
+    /// but has its own working tree, so parallel sub-agents cannot clobber
+    /// each other's uncommitted files.
     pub fn create_worktree(
         &self,
         branch_name: &str,
@@ -224,22 +132,6 @@ impl Sandbox {
         Ok(())
     }
 
-    /// Merge a branch into the current branch with `--no-edit`.
-    pub fn merge_branch(&self, branch_name: &str) -> Result<String> {
-        self.run_git(&["merge", branch_name, "--no-edit"])
-    }
-
-    /// Check whether the working tree has unresolved merge conflicts.
-    pub fn has_merge_conflicts(&self) -> Result<bool> {
-        let status = self.run_git(&["status", "--porcelain=v1"])?;
-        Ok(status.lines().any(|l| l.starts_with("UU ")))
-    }
-
-    /// Abort an in-progress merge and return to the pre-merge state.
-    pub fn abort_merge(&self) -> Result<String> {
-        self.run_git(&["merge", "--abort"])
-    }
-
     /// Remove a git worktree, even if it has uncommitted changes.
     pub fn remove_worktree(&self, worktree_path: &std::path::Path) -> Result<()> {
         let path_str = worktree_path.to_string_lossy();
@@ -260,20 +152,11 @@ impl Sandbox {
         Ok(())
     }
 
-    /// Get the diff between HEAD and a branch (three-dot: changes on the
-    /// branch since it diverged from HEAD). Used to capture a recovery patch
-    /// for a sub-agent branch that cannot be merged.
-    pub fn branch_diff(&self, branch_name: &str) -> Result<String> {
-        let spec = format!("HEAD...{}", branch_name);
-        let out = self.run_git(&["diff", &spec])?;
-        Ok(truncate_output(&out, MAX_TOOL_OUTPUT))
-    }
-
     /// Check whether the working tree has no uncommitted changes.
     ///
     /// Returns `true` when the workspace is not a git repository or when
     /// `git status --porcelain` produces no output. Git failures default
-    /// to `true` (fail-open) so the guard never blocks the agent loop.
+    /// to `true` (fail-open).
     pub fn is_working_tree_clean(&self) -> bool {
         if !self.is_git_repo().unwrap_or(false) {
             return true;
@@ -302,6 +185,13 @@ impl Sandbox {
         self.run_git_with_extra(args, &self.extra_rw)
     }
 
+    /// Seed a commit in tests without exposing a model-facing commit tool.
+    #[cfg(test)]
+    pub(crate) fn test_commit(&self, message: &str) -> Result<String> {
+        let _ = self.run_git(&["add", "-A"])?;
+        self.run_git(&["commit", "-m", message])
+    }
+
     /// Run `git` with an extra set of Landlock RW roots for the confined child.
     ///
     /// Used by [`Self::create_worktree`] to let `git worktree add` create the
@@ -309,9 +199,8 @@ impl Sandbox {
     /// temp dir (which would reopen the `06_sandbox_escape` hole).
     fn run_git_with_extra(&self, args: &[&str], extra_rw: &[std::path::PathBuf]) -> Result<String> {
         let mut cmd = Command::new("git");
-        // Agent commits must not depend on the host git identity, hooks, or
-        // commit.gpgsign. Those are the usual reasons `05_git_commit_clean`
-        // flakes: the model called git_commit, git refused, tree stayed dirty.
+        // Isolate git from host identity/hooks so worktree and test seeding
+        // do not depend on `~/.gitconfig` or `commit.gpgsign`.
         cmd.args([
             "-c",
             "user.name=raven",
@@ -357,4 +246,17 @@ impl Sandbox {
             None => Ok("Error: git command timed out".into()),
         }
     }
+}
+
+fn git_out_empty(out: &str) -> bool {
+    let t = out.trim();
+    t.is_empty() || t == "exit=0"
+}
+
+fn git_cmd_failed(out: &str) -> bool {
+    if git_out_empty(out) {
+        return false;
+    }
+    let t = out.to_ascii_lowercase();
+    t.contains("fatal") || t.contains("error:") || t.contains("patch failed")
 }

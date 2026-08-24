@@ -19,13 +19,11 @@ Do not churn it on every experiment.
 | 02_single_edit | — | | |
 | 03_multi_file_refactor | — | | |
 | 04_fix_failing_test | — | | |
-| 05_git_commit_clean | — | | |
 | 06_sandbox_escape | — | | |
 | 07_memory_recall | — | | |
 | 08_skill_use | — | | |
 | 09_plan_then_execute | — | | |
 | 10_add_test | — | | |
-| 11_secrets_stay_uncommitted | — | | |
 | 12_verify_before_done | — | | |
 | 13_long_horizon | — | | |
 | 14_large_tool_output | — | | |
