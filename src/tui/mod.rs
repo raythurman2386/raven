@@ -22,11 +22,12 @@
 use anyhow::Result;
 use crossterm::{
     event::{
-        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-        Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, Event, KeyCode,
+        KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    Command,
 };
 use ratatui::{
     backend::CrosstermBackend,
@@ -37,6 +38,7 @@ use ratatui::{
     Frame, Terminal,
 };
 use std::collections::HashMap;
+use std::fmt;
 use std::io::stdout;
 use std::sync::{Mutex, OnceLock};
 use tokio::sync::mpsc;
@@ -415,6 +417,38 @@ impl TuiState {
     }
 }
 
+// ── Terminal mode helpers ────────────────────────────────────────────────
+
+/// Mouse tracking for clicks, drags, and wheel — without any-event mode
+/// (`?1003`), which floods the queue with hover moves and can starve scroll
+/// events when the loop only drains one event per tick.
+struct EnableMouseCaptureLite;
+
+impl Command for EnableMouseCaptureLite {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
+        f.write_str(concat!(
+            // Normal tracking: button press/release with coordinates
+            "\x1b[?1000h",
+            // Button-event tracking: drag motion while a button is held
+            "\x1b[?1002h",
+            // SGR encoding: coordinates beyond 223 and unambiguous parsing
+            "\x1b[?1006h",
+        ))
+    }
+}
+
+/// Disable xterm alternate-scroll (`?1007`). When enabled, the wheel is
+/// translated to Up/Down *keys* on the alternate screen whenever the terminal
+/// is not delivering mouse-wheel reports — which then hits prompt-history
+/// recall instead of scrolling the log.
+struct DisableAlternateScroll;
+
+impl Command for DisableAlternateScroll {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
+        f.write_str("\x1b[?1007l")
+    }
+}
+
 // ── Main TUI ─────────────────────────────────────────────────────────────
 
 pub async fn run_tui(
@@ -427,7 +461,8 @@ pub async fn run_tui(
     execute!(
         stdout,
         EnterAlternateScreen,
-        EnableMouseCapture,
+        EnableMouseCaptureLite,
+        DisableAlternateScroll,
         EnableBracketedPaste
     )?;
     let backend = CrosstermBackend::new(stdout);
@@ -481,7 +516,7 @@ pub async fn run_tui(
         completion_arg_candidates(&completion_settings, &completion_config, cmd)
     };
 
-    loop {
+    'ui: loop {
         if state.blocks.len() > MAX_LOG_ENTRIES {
             let drop = state.blocks.len() - MAX_LOG_ENTRIES;
             state.blocks.drain(..drop);
@@ -552,328 +587,337 @@ pub async fn run_tui(
             last_draw = std::time::Instant::now();
         }
 
-        // Input + mouse
+        // Input + mouse. Drain every pending event each tick so a flood of
+        // motion/scroll reports cannot starve wheel or key handling (the old
+        // one-event-per-poll path did exactly that under mouse tracking).
         if event::poll(std::time::Duration::from_millis(40))? {
-            match event::read()? {
-                Event::Key(key)
-                    if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat =>
-                {
-                    match key.code {
-                        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            break
-                        }
-                        KeyCode::BackTab => {
-                            if !state.running
-                                && state.pending_question.is_none()
-                                && state.completion.is_some()
-                            {
-                                // Cycle completion backward; fall through to
-                                // mode-cycle when no completion is active.
-                                if let Some(comp) = state.completion.as_mut() {
-                                    comp.prev();
-                                }
-                            } else {
-                                let m = state.cycle_mode();
-                                state.push_system(format!("mode: {}", m.label()));
-                                state.log_dirty = true;
+            loop {
+                match event::read()? {
+                    Event::Key(key)
+                        if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat =>
+                    {
+                        match key.code {
+                            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                break 'ui
                             }
-                        }
-                        KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            reset_session(&mut state, &mut session, &store, &settings, app_name)?;
-                        }
-                        KeyCode::Up => {
-                            if let Some(comp) = state.completion.as_mut() {
-                                // Completion popup open: move the highlight
-                                // backward (Up = previous candidate).
-                                comp.prev();
-                                state.input_dirty = true;
-                            } else if history_recall_active(
-                                state.input.is_empty(),
-                                state.prompt_history.len(),
-                                state.hist_idx,
-                            ) {
-                                // Empty input, or mid-recall (a recalled prompt
-                                // still in the box): walk backward through the
-                                // prompt history. Gating on hist_idx rather than
-                                // only on empty input lets Up recall older
-                                // prompts repeatedly instead of returning a
-                                // single entry then scrolling.
-                                if let Some((recalled, idx)) =
-                                    history_recall_up(&state.prompt_history, state.hist_idx)
-                                {
-                                    state.input = recalled;
-                                    state.cursor = state.input.len();
-                                    state.hist_idx = idx;
-                                    state.input_dirty = true;
-                                }
-                            } else {
-                                state.scroll = state.scroll.saturating_add(1);
-                                state.auto_scroll = false;
-                                state.input_dirty = true;
-                            }
-                        }
-                        KeyCode::Down => {
-                            if let Some(comp) = state.completion.as_mut() {
-                                // Completion popup open: move the highlight
-                                // forward (Down = next candidate).
-                                comp.next();
-                                state.input_dirty = true;
-                            } else if history_recall_active(
-                                state.input.is_empty(),
-                                state.prompt_history.len(),
-                                state.hist_idx,
-                            ) {
-                                // Empty input or mid-recall: walk forward
-                                // toward the empty baseline (or stay empty at
-                                // the live position).
-                                if let Some((recalled, idx)) =
-                                    history_recall_down(&state.prompt_history, state.hist_idx)
-                                {
-                                    state.input = recalled;
-                                    state.cursor = state.input.len();
-                                    state.hist_idx = idx;
-                                    state.input_dirty = true;
-                                }
-                            } else {
-                                state.scroll = state.scroll.saturating_sub(1);
-                                if state.scroll == 0 {
-                                    state.auto_scroll = true;
-                                }
-                                state.input_dirty = true;
-                            }
-                        }
-                        KeyCode::PageUp => {
-                            state.scroll = state.scroll.saturating_add(10);
-                            state.auto_scroll = false;
-                            state.input_dirty = true;
-                        }
-                        KeyCode::PageDown => {
-                            state.scroll = state.scroll.saturating_sub(10);
-                            if state.scroll == 0 {
-                                state.auto_scroll = true;
-                            }
-                            state.input_dirty = true;
-                        }
-                        KeyCode::Left => {
-                            if !state.running || state.pending_question.is_some() {
-                                // Move cursor left by one char (byte-safe).
-                                if let Some(prev) = state.input[..state.cursor]
-                                    .char_indices()
-                                    .next_back()
-                                    .map(|(i, _)| i)
-                                {
-                                    state.cursor = prev;
-                                    state.input_dirty = true;
-                                }
-                            }
-                        }
-                        KeyCode::Right => {
-                            if !state.running || state.pending_question.is_some() {
-                                // Move right by one char (byte-safe). Advance
-                                // past the char at the cursor, including the
-                                // last char so the cursor can reach the true
-                                // end of the line. (char_indices().nth(1)
-                                // returns None when only one char remains,
-                                // stranding the cursor before the last char.)
-                                if let Some(c) = state.input[state.cursor..].chars().next() {
-                                    state.cursor += c.len_utf8();
-                                    state.input_dirty = true;
-                                }
-                            }
-                        }
-                        KeyCode::Home => {
-                            if state.input.is_empty() {
-                                // Empty input: Home jumps to the top of the
-                                // transcript (detaches from the live tail).
-                                state.scroll = u16::MAX;
-                                state.auto_scroll = false;
-                                state.input_dirty = true;
-                            } else if !state.running || state.pending_question.is_some() {
-                                state.cursor = 0;
-                                state.input_dirty = true;
-                            }
-                        }
-                        KeyCode::End => {
-                            if state.input.is_empty() {
-                                // Empty input: End jumps back to the live tail
-                                // (reattaches auto-follow without scrolling all
-                                // the way back down).
-                                state.scroll = 0;
-                                state.auto_scroll = true;
-                                state.input_dirty = true;
-                            } else if !state.running || state.pending_question.is_some() {
-                                state.cursor = state.input.len();
-                                state.input_dirty = true;
-                            }
-                        }
-                        KeyCode::Tab => {
-                            if !state.running || state.pending_question.is_some() {
-                                if let Some(comp) = state.completion.as_mut() {
-                                    if comp.candidates.len() == 1 {
-                                        // Single candidate: accept it immediately.
-                                        let cand = comp.candidates[0].clone();
-                                        let (new_input, new_cursor) =
-                                            apply_completion(&state.input, comp, &cand);
-                                        state.input = new_input;
-                                        state.cursor = new_cursor;
+                            KeyCode::BackTab => {
+                                // Only when idle: completion prev, else mode cycle.
+                                // Previously the else-branch ran even while a turn
+                                // was in flight, flipping mode mid-run.
+                                if !state.running && state.pending_question.is_none() {
+                                    if let Some(comp) = state.completion.as_mut() {
+                                        comp.prev();
                                         state.input_dirty = true;
-                                        state.completion = None;
                                     } else {
-                                        comp.next();
+                                        let m = state.cycle_mode();
+                                        state.push_system(format!("mode: {}", m.label()));
+                                        state.log_dirty = true;
+                                    }
+                                }
+                            }
+                            KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                reset_session(
+                                    &mut state,
+                                    &mut session,
+                                    &store,
+                                    &settings,
+                                    app_name,
+                                )?;
+                            }
+                            KeyCode::Up => {
+                                if let Some(comp) = state.completion.as_mut() {
+                                    // Completion popup open: move the highlight
+                                    // backward (Up = previous candidate).
+                                    comp.prev();
+                                    state.input_dirty = true;
+                                } else if history_recall_active(
+                                    state.input.is_empty(),
+                                    state.prompt_history.len(),
+                                    state.hist_idx,
+                                ) {
+                                    // Empty input, or mid-recall (a recalled prompt
+                                    // still in the box): walk backward through the
+                                    // prompt history. Gating on hist_idx rather than
+                                    // only on empty input lets Up recall older
+                                    // prompts repeatedly instead of returning a
+                                    // single entry then scrolling. At the oldest
+                                    // entry (or with empty history) fall through to
+                                    // log scroll instead of a silent no-op.
+                                    if let Some((recalled, idx)) =
+                                        history_recall_up(&state.prompt_history, state.hist_idx)
+                                    {
+                                        state.input = recalled;
+                                        state.cursor = state.input.len();
+                                        state.hist_idx = idx;
+                                        state.input_dirty = true;
+                                    } else {
+                                        scroll_log_by(&mut state, 1);
+                                    }
+                                } else {
+                                    scroll_log_by(&mut state, 1);
+                                }
+                            }
+                            KeyCode::Down => {
+                                if let Some(comp) = state.completion.as_mut() {
+                                    // Completion popup open: move the highlight
+                                    // forward (Down = next candidate).
+                                    comp.next();
+                                    state.input_dirty = true;
+                                } else if history_recall_active(
+                                    state.input.is_empty(),
+                                    state.prompt_history.len(),
+                                    state.hist_idx,
+                                ) {
+                                    // Empty input or mid-recall: walk forward
+                                    // toward the empty baseline (or stay empty at
+                                    // the live position). At the live baseline,
+                                    // fall through to log scroll.
+                                    if let Some((recalled, idx)) =
+                                        history_recall_down(&state.prompt_history, state.hist_idx)
+                                    {
+                                        state.input = recalled;
+                                        state.cursor = state.input.len();
+                                        state.hist_idx = idx;
+                                        state.input_dirty = true;
+                                    } else {
+                                        scroll_log_by(&mut state, -1);
+                                    }
+                                } else {
+                                    scroll_log_by(&mut state, -1);
+                                }
+                            }
+                            KeyCode::PageUp => {
+                                scroll_log_by(&mut state, 10);
+                            }
+                            KeyCode::PageDown => {
+                                scroll_log_by(&mut state, -10);
+                            }
+                            KeyCode::Left => {
+                                if !state.running || state.pending_question.is_some() {
+                                    // Move cursor left by one char (byte-safe).
+                                    if let Some(prev) = state.input[..state.cursor]
+                                        .char_indices()
+                                        .next_back()
+                                        .map(|(i, _)| i)
+                                    {
+                                        state.cursor = prev;
                                         state.input_dirty = true;
                                     }
                                 }
                             }
-                        }
-                        KeyCode::Char(c) => {
-                            if (!state.running || state.pending_question.is_some())
-                                && state.input.chars().count() < MAX_INPUT_CHARS
-                            {
-                                state.input.insert(state.cursor, c);
-                                state.cursor += c.len_utf8();
-                                state.input_dirty = true;
+                            KeyCode::Right => {
+                                if !state.running || state.pending_question.is_some() {
+                                    // Move right by one char (byte-safe). Advance
+                                    // past the char at the cursor, including the
+                                    // last char so the cursor can reach the true
+                                    // end of the line. (char_indices().nth(1)
+                                    // returns None when only one char remains,
+                                    // stranding the cursor before the last char.)
+                                    if let Some(c) = state.input[state.cursor..].chars().next() {
+                                        state.cursor += c.len_utf8();
+                                        state.input_dirty = true;
+                                    }
+                                }
                             }
-                            state.hist_idx = state.prompt_history.len();
-                            state.completion = candidates_for(&state.input, &arg_candidates);
-                        }
-                        KeyCode::Backspace => {
-                            if !state.running || state.pending_question.is_some() {
-                                if let Some(prev) = state.input[..state.cursor]
-                                    .char_indices()
-                                    .next_back()
-                                    .map(|(i, _)| i)
-                                {
-                                    state.input.remove(prev);
-                                    state.cursor = prev;
+                            KeyCode::Home => {
+                                if state.input.is_empty() {
+                                    // Empty input: Home jumps to the top of the
+                                    // transcript (detaches from the live tail).
+                                    state.scroll = u16::MAX;
+                                    state.auto_scroll = false;
+                                    state.input_dirty = true;
+                                } else if !state.running || state.pending_question.is_some() {
+                                    state.cursor = 0;
                                     state.input_dirty = true;
                                 }
                             }
-                            state.completion = candidates_for(&state.input, &arg_candidates);
-                        }
-                        KeyCode::Enter => {
-                            // Enter accepts the highlighted completion when the
-                            // popup is open (so `/th` + Enter → `/theme`).
-                            if let Some(comp) = state.completion.take() {
-                                if let Some(candidate) = comp.candidates.get(comp.selected) {
-                                    state.input.replace_range(
-                                        comp.replace_start..comp.replace_end,
-                                        candidate,
-                                    );
+                            KeyCode::End => {
+                                if state.input.is_empty() {
+                                    // Empty input: End jumps back to the live tail
+                                    // (reattaches auto-follow without scrolling all
+                                    // the way back down).
+                                    state.scroll = 0;
+                                    state.auto_scroll = true;
+                                    state.input_dirty = true;
+                                } else if !state.running || state.pending_question.is_some() {
                                     state.cursor = state.input.len();
                                     state.input_dirty = true;
                                 }
-                                continue;
                             }
-                            if state.input.trim().is_empty() {
-                                continue;
-                            }
-                            let text = state.input.trim().to_string();
-                            state.input.clear();
-                            state.cursor = 0;
-                            state.input_dirty = true;
-                            state.completion = None;
-                            state.scroll = 0;
-                            state.auto_scroll = true;
-                            state.turn_tool_count = 0;
-                            state.live_tool = None;
-
-                            if let Some(pc) = commands::parse(&text) {
-                                dispatch::dispatch_slash_command(
-                                    &mut state,
-                                    &pc,
-                                    &mut settings,
-                                    &store,
-                                    &mut session,
-                                    &mut compact_at,
-                                    &config_file,
-                                )
-                                .await?;
-                                continue;
-                            }
-
-                            if let Some(reply) = state.pending_question.take() {
-                                let _ = reply.send(text.clone());
-                                state.pending_question_text = None;
-                                state.status = "running".into();
-                                continue;
-                            }
-
-                            if state.running {
-                                abort_current_turn(&mut state);
-                                state.push_system("⏸ interrupted — redirecting…");
-                                state.log_dirty = true;
-                                start_task(&mut state, &text, &settings, &store, &session)?;
-                                continue;
-                            }
-
-                            // Record the prompt for Up/Down recall. Only real
-                            // task prompts / plan revisions land here — slash
-                            // commands and ask_user answers `continue` earlier.
-                            if !text.is_empty() {
-                                state.prompt_history.push(text.clone());
-                                if state.prompt_history.len() > MAX_HISTORY {
-                                    state.prompt_history.remove(0);
+                            KeyCode::Tab => {
+                                if !state.running || state.pending_question.is_some() {
+                                    if let Some(comp) = state.completion.as_mut() {
+                                        if comp.candidates.len() == 1 {
+                                            // Single candidate: accept it immediately.
+                                            let cand = comp.candidates[0].clone();
+                                            let (new_input, new_cursor) =
+                                                apply_completion(&state.input, comp, &cand);
+                                            state.input = new_input;
+                                            state.cursor = new_cursor;
+                                            state.input_dirty = true;
+                                            state.completion = None;
+                                        } else {
+                                            comp.next();
+                                            state.input_dirty = true;
+                                        }
+                                    }
                                 }
                             }
-                            state.hist_idx = state.prompt_history.len();
-                            if state.plan_pending {
-                                handle_plan_response(
-                                    &mut state, &text, &settings, &store, &session,
-                                )?;
-                            } else {
-                                start_task(&mut state, &text, &settings, &store, &session)?;
+                            KeyCode::Char(c) => {
+                                if (!state.running || state.pending_question.is_some())
+                                    && state.input.chars().count() < MAX_INPUT_CHARS
+                                {
+                                    state.input.insert(state.cursor, c);
+                                    state.cursor += c.len_utf8();
+                                    state.input_dirty = true;
+                                }
+                                state.hist_idx = state.prompt_history.len();
+                                state.completion = candidates_for(&state.input, &arg_candidates);
                             }
-                        }
-                        KeyCode::Esc => {
-                            // Layered dismiss: completion → selection → ask_user → quit.
-                            if state.completion.take().is_some() || state.selection.take().is_some()
-                            {
+                            KeyCode::Backspace => {
+                                if !state.running || state.pending_question.is_some() {
+                                    if let Some(prev) = state.input[..state.cursor]
+                                        .char_indices()
+                                        .next_back()
+                                        .map(|(i, _)| i)
+                                    {
+                                        state.input.remove(prev);
+                                        state.cursor = prev;
+                                        state.input_dirty = true;
+                                    }
+                                }
+                                state.completion = candidates_for(&state.input, &arg_candidates);
+                            }
+                            KeyCode::Enter => {
+                                // Enter accepts the highlighted completion when the
+                                // popup is open (so `/th` + Enter → `/theme`).
+                                if let Some(comp) = state.completion.take() {
+                                    if let Some(candidate) = comp.candidates.get(comp.selected) {
+                                        state.input.replace_range(
+                                            comp.replace_start..comp.replace_end,
+                                            candidate,
+                                        );
+                                        state.cursor = state.input.len();
+                                        state.input_dirty = true;
+                                    }
+                                    continue;
+                                }
+                                if state.input.trim().is_empty() {
+                                    continue;
+                                }
+                                let text = state.input.trim().to_string();
+                                state.input.clear();
+                                state.cursor = 0;
                                 state.input_dirty = true;
-                            } else if state.pending_question.take().is_some() {
-                                state.pending_question_text = None;
-                                state.status = if state.running {
-                                    "running".into()
+                                state.completion = None;
+                                state.scroll = 0;
+                                state.auto_scroll = true;
+                                state.turn_tool_count = 0;
+                                state.live_tool = None;
+
+                                if let Some(pc) = commands::parse(&text) {
+                                    dispatch::dispatch_slash_command(
+                                        &mut state,
+                                        &pc,
+                                        &mut settings,
+                                        &store,
+                                        &mut session,
+                                        &mut compact_at,
+                                        &config_file,
+                                    )
+                                    .await?;
+                                    continue;
+                                }
+
+                                if let Some(reply) = state.pending_question.take() {
+                                    let _ = reply.send(text.clone());
+                                    state.pending_question_text = None;
+                                    state.status = "running".into();
+                                    continue;
+                                }
+
+                                if state.running {
+                                    abort_current_turn(&mut state);
+                                    state.push_system("⏸ interrupted — redirecting…");
+                                    state.log_dirty = true;
+                                    start_task(&mut state, &text, &settings, &store, &session)?;
+                                    continue;
+                                }
+
+                                // Record the prompt for Up/Down recall. Only real
+                                // task prompts / plan revisions land here — slash
+                                // commands and ask_user answers `continue` earlier.
+                                if !text.is_empty() {
+                                    state.prompt_history.push(text.clone());
+                                    if state.prompt_history.len() > MAX_HISTORY {
+                                        state.prompt_history.remove(0);
+                                    }
+                                }
+                                state.hist_idx = state.prompt_history.len();
+                                if state.plan_pending {
+                                    handle_plan_response(
+                                        &mut state, &text, &settings, &store, &session,
+                                    )?;
                                 } else {
-                                    "ready".into()
-                                };
-                                state.push_system("question dismissed");
-                                state.log_dirty = true;
-                            } else {
-                                break;
+                                    start_task(&mut state, &text, &settings, &store, &session)?;
+                                }
+                            }
+                            KeyCode::Esc => {
+                                // Layered dismiss: completion → selection → ask_user → quit.
+                                if state.completion.take().is_some()
+                                    || state.selection.take().is_some()
+                                {
+                                    state.input_dirty = true;
+                                } else if state.pending_question.take().is_some() {
+                                    state.pending_question_text = None;
+                                    state.status = if state.running {
+                                        "running".into()
+                                    } else {
+                                        "ready".into()
+                                    };
+                                    state.push_system("question dismissed");
+                                    state.log_dirty = true;
+                                } else {
+                                    break 'ui;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    Event::Paste(text) => {
+                        // Bracketed paste: insert at the cursor (not always at end).
+                        // Without this handler, a large paste arrives as a rapid
+                        // stream of Char events that get dropped by the poll loop,
+                        // and any newline in the pasted text is treated as Enter.
+                        if !state.running || state.pending_question.is_some() {
+                            let remaining =
+                                MAX_INPUT_CHARS.saturating_sub(state.input.chars().count());
+                            let pasted: String = text
+                                .chars()
+                                .filter(|c| *c != '\r')
+                                .take(remaining)
+                                .collect();
+                            if !pasted.is_empty() {
+                                let at = state.cursor.min(state.input.len());
+                                state.input.insert_str(at, &pasted);
+                                state.cursor = at + pasted.len();
+                                state.input_dirty = true;
+                                state.hist_idx = state.prompt_history.len();
+                                state.completion = candidates_for(&state.input, &arg_candidates);
                             }
                         }
-                        _ => {}
                     }
-                }
-                Event::Paste(text) => {
-                    // Bracketed paste: insert at the cursor (not always at end).
-                    // Without this handler, a large paste arrives as a rapid
-                    // stream of Char events that get dropped by the poll loop,
-                    // and any newline in the pasted text is treated as Enter.
-                    if !state.running || state.pending_question.is_some() {
-                        let remaining = MAX_INPUT_CHARS.saturating_sub(state.input.chars().count());
-                        let pasted: String = text
-                            .chars()
-                            .filter(|c| *c != '\r')
-                            .take(remaining)
-                            .collect();
-                        if !pasted.is_empty() {
-                            let at = state.cursor.min(state.input.len());
-                            state.input.insert_str(at, &pasted);
-                            state.cursor = at + pasted.len();
-                            state.input_dirty = true;
-                            state.hist_idx = state.prompt_history.len();
-                            state.completion = candidates_for(&state.input, &arg_candidates);
-                        }
+                    Event::Mouse(m) => {
+                        let size: Rect = terminal.size().unwrap_or_default().into();
+                        let chunks = compute_layout(size, &state);
+                        let log_rect = chunks[1];
+                        handle_mouse_event(&m, &mut state, size, log_rect, &store, &mut session);
                     }
+                    _ => {}
                 }
-                Event::Mouse(m) => {
-                    let size: Rect = terminal.size().unwrap_or_default().into();
-                    let chunks = compute_layout(size, &state);
-                    let log_rect = chunks[1];
-                    handle_mouse_event(&m, &mut state, size, log_rect, &store, &mut session);
+                if !event::poll(std::time::Duration::from_millis(0))? {
+                    break;
                 }
-                _ => {}
             }
         }
 
@@ -1059,7 +1103,7 @@ pub async fn run_tui(
         }
 
         if state.quit {
-            break;
+            break 'ui;
         }
     }
 
@@ -1119,6 +1163,22 @@ fn history_recall_down(prompt_history: &[String], hist_idx: usize) -> Option<(St
 /// reset to the live position by typing, Up/Down scroll again.
 fn history_recall_active(input_is_empty: bool, prompt_history_len: usize, hist_idx: usize) -> bool {
     input_is_empty || hist_idx < prompt_history_len
+}
+
+/// Adjust log scroll by `delta` rows (positive = toward older content / up).
+/// Detaches auto-follow when moving up; reattaches when the offset returns to
+/// the live tail (`scroll == 0`).
+fn scroll_log_by(state: &mut TuiState, delta: i32) {
+    if delta >= 0 {
+        state.scroll = state.scroll.saturating_add(delta as u16);
+        state.auto_scroll = false;
+    } else {
+        state.scroll = state.scroll.saturating_sub((-delta) as u16);
+        if state.scroll == 0 {
+            state.auto_scroll = true;
+        }
+    }
+    state.input_dirty = true;
 }
 
 /// Compact `key=value` formatting of a tool-call arg object, so a tool block
@@ -1732,27 +1792,24 @@ fn handle_mouse_event(
     match m.kind {
         MouseEventKind::ScrollUp => {
             // If the mouse is over the plan panel, scroll the plan instead of
-            // the log.
+            // the log. Wheel must never touch prompt-history recall — that is
+            // keyboard-only (Up/Down on the input).
             let chunks = compute_layout(size, state);
             if show_plan(state) && m.row >= chunks[2].top() && m.row < chunks[2].bottom() {
                 state.plan_scroll = state.plan_scroll.saturating_add(1);
+                state.input_dirty = true;
             } else {
-                state.scroll = state.scroll.saturating_add(3);
-                state.auto_scroll = false;
+                scroll_log_by(state, 3);
             }
-            state.input_dirty = true;
         }
         MouseEventKind::ScrollDown => {
             let chunks = compute_layout(size, state);
             if show_plan(state) && m.row >= chunks[2].top() && m.row < chunks[2].bottom() {
                 state.plan_scroll = state.plan_scroll.saturating_sub(1);
+                state.input_dirty = true;
             } else {
-                state.scroll = state.scroll.saturating_sub(3);
-                if state.scroll == 0 {
-                    state.auto_scroll = true;
-                }
+                scroll_log_by(state, -3);
             }
-            state.input_dirty = true;
         }
         MouseEventKind::Down(MouseButton::Left) => {
             // Check the [stop] button first (right edge of status strip).

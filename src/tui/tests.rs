@@ -1384,8 +1384,90 @@ fn multi_step_up_recall_walks_entire_history() {
     assert_eq!(recalled, "first");
     hist_idx = idx;
 
-    // 4th Up -> None (at the oldest prompt)
+    // 4th Up -> None (at the oldest prompt). The event loop must fall through
+    // to log scroll here (see scroll_log_by), not silently no-op.
     assert!(history_recall_up(&hist, hist_idx).is_none());
+}
+
+#[test]
+fn scroll_log_by_detaches_and_reattaches_auto_follow() {
+    let mut state = dummy_state();
+    assert!(state.auto_scroll);
+    assert_eq!(state.scroll, 0);
+
+    scroll_log_by(&mut state, 3);
+    assert_eq!(state.scroll, 3);
+    assert!(!state.auto_scroll);
+    assert!(state.input_dirty);
+
+    scroll_log_by(&mut state, -2);
+    assert_eq!(state.scroll, 1);
+    assert!(!state.auto_scroll);
+
+    scroll_log_by(&mut state, -1);
+    assert_eq!(state.scroll, 0);
+    assert!(state.auto_scroll, "returning to the live tail reattaches");
+}
+
+#[test]
+fn history_exhausted_fallthrough_scrolls_log() {
+    // Empty history + empty input: recall is "active" but Up returns None.
+    // The event loop must scroll instead of no-opping (pre-fix bug).
+    assert!(history_recall_active(true, 0, 0));
+    assert!(history_recall_up(&[], 0).is_none());
+
+    let mut state = dummy_state();
+    if history_recall_up(&state.prompt_history, state.hist_idx).is_none() {
+        scroll_log_by(&mut state, 1);
+    }
+    assert_eq!(state.scroll, 1);
+    assert!(!state.auto_scroll);
+
+    // At the oldest recalled entry, further Up also scrolls.
+    state.prompt_history = vec!["only".into()];
+    state.hist_idx = 0;
+    state.input = "only".into();
+    assert!(history_recall_active(false, 1, 0));
+    assert!(history_recall_up(&state.prompt_history, state.hist_idx).is_none());
+    scroll_log_by(&mut state, 1);
+    assert_eq!(state.scroll, 2);
+}
+
+#[test]
+fn mouse_scroll_moves_log_not_history() {
+    // Wheel handling must adjust scroll offsets and must not touch prompt
+    // history / hist_idx (history recall is keyboard Up/Down only).
+    let mut state = dummy_state();
+    state.prompt_history = vec!["prior".into()];
+    state.hist_idx = 1;
+    let size = Rect::new(0, 0, 80, 24);
+    let log_rect = Rect::new(0, 1, 80, 18);
+    let dir = tempfile::tempdir().unwrap();
+    let store = crate::session::SessionStore::for_workspace(dir.path()).unwrap();
+    let mut session = store.create("test-model").unwrap();
+
+    let up = MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: 10,
+        row: 5,
+        modifiers: KeyModifiers::NONE,
+    };
+    handle_mouse_event(&up, &mut state, size, log_rect, &store, &mut session);
+    assert_eq!(state.scroll, 3);
+    assert!(!state.auto_scroll);
+    assert_eq!(state.hist_idx, 1, "wheel must not walk prompt history");
+    assert!(state.input.is_empty());
+
+    let down = MouseEvent {
+        kind: MouseEventKind::ScrollDown,
+        column: 10,
+        row: 5,
+        modifiers: KeyModifiers::NONE,
+    };
+    handle_mouse_event(&down, &mut state, size, log_rect, &store, &mut session);
+    assert_eq!(state.scroll, 0);
+    assert!(state.auto_scroll);
+    assert_eq!(state.hist_idx, 1);
 }
 
 #[test]

@@ -16,28 +16,29 @@ agent-loop behavior change unless fixing a TUI bug.
   a real leap would be 0.4.0 with a CHANGELOG "TUI" section.
 - No theme store. One default ravenwood + the existing minimal alts.
 
-## Current state (verified at v0.3.0)
+## Current state (keybinds verified at v0.5.3)
 
-- `src/tui/mod.rs` — 2,045 lines / 82KB. Holds TuiState, event loop, layout,
-  draw_ui, input, mouse, slash commands, plan handling, agent-turn spawn.
-  This is the bottleneck; extract only when a surface stabilizes.
-- Already extracted and healthy: `blocks.rs`, `completion.rs`, `markdown.rs`,
-  `render.rs`, `selection.rs`, `status.rs`, `theme.rs`.
-- Layout (`compute_layout`, mod.rs:972): top bar | log | plan | status |
-  completion | input. No sidebar (default off).
-- Streaming: tail-patch + 60ms draw throttle + tool "glimmer" already shipped
-  (`render.rs:120`). Phase 2 streaming is largely done.
-- Markdown: headings/code/lists/tables/links/blockquote/tasklists render
-  (`markdown.rs`). Code blocks use a generic `┌─ code` label — no language.
-- Chrome: top bar has app·model·ctx%·mode; status strip has state·workspace·
-  steps·live-tool·waiting-diamond·copy-toast·[stop]. Missing: provider name.
+- `src/tui/mod.rs` — event loop, layout, draw_ui, input, mouse, plan handling,
+  agent-turn spawn. Extract only when a surface stabilizes.
+- Already extracted and healthy: `blocks.rs`, `completion.rs`, `dispatch.rs`,
+  `markdown.rs`, `render.rs`, `selection.rs`, `status.rs`, `theme.rs`.
+- Layout (`compute_layout`): top bar | log | plan | status | completion |
+  input. No sidebar (default off).
+- Streaming: tail-patch + draw throttle + tool "glimmer" already shipped.
+- Markdown: headings/code/lists/tables/links/blockquote/tasklists render;
+  fenced blocks label the language when present.
+- Chrome: top bar has app·model·provider·ctx%·mode; status strip has
+  state·workspace·steps·live-tool·waiting·copy-toast·[stop]; footer shows
+  context-sensitive keyhints.
 - Theme: ravenwood default + nord/dracula/solarized-dark, `/theme` works.
-  Phase 5 is essentially complete — do not churn it.
-- Empty state: 5 static SystemBlocks (app info, workspace, context, blank,
-  keyhints). No "what to try" guidance.
-- Errors: `✗ msg` bold red, one line, no recovery action.
-- Scroll: Up/Down/PgUp/PgDn adjust `state.scroll`; auto_scroll detaches on Up,
-  reattaches only when scroll hits 0. No single "jump to live" key.
+- Empty state: guidance line + keyhints; errors show a recovery action.
+- Scroll / recall (v0.5.3): mouse wheel and PgUp/PgDn always move the
+  transcript (`state.scroll`); Up/Down recall prompt history when the input
+  is empty or mid-recall, otherwise scroll; at history boundaries they fall
+  through to scroll. Home/End jump top/live when the input is empty.
+  `auto_scroll` detaches on upward scroll and reattaches at scroll 0.
+  Alternate-scroll (`?1007`) is disabled so the wheel is not remapped to
+  Up/Down keys on the alternate screen.
 
 ## Slice backlog (in execution order)
 
@@ -54,11 +55,12 @@ Each slice = one focused conventional commit + full gate + a live TUI look.
 - [x] **9. Compact tool-call args** (Phase 2/4) — `feat(tui): compact key=value tool-call args`. Tool blocks read `read_file path=src/main.rs line=1-40` instead of raw JSON braces; long values truncated.
 - [x] **10. Width-aware transcript wrap/scroll** (Phase 2, correctness) — `fix(tui): width-aware transcript wrap/scroll (CJK/emoji)`. The transcript wrap/scroll math now uses display width (`unicode_width`), so CJK/emoji content scrolls correctly instead of drifting. Stays in lockstep with the already-correct input path.
 - [x] **11. O(viewport) virtualization** (Phase 2, efficiency) — `perf(tui): cache total row count so virtualization is O(viewport)`. `prewrap_visible` recomputed every line's wrapped-row count each frame (O(history)); the total is now cached and refreshed only on log change or resize.
+- [x] **12. Wheel vs history recall** (Phase 1, correctness) — `fix(tui): mouse wheel scrolls log, not prompt history`. Disable alternate-scroll, lite mouse capture, drain pending events, history-boundary fallthrough to scroll; Shift+Tab mode cycle only when idle.
 
 ## Acceptance per slice
 
 - Before/after notes or screenshot.
-- `cargo test` (579 green baseline) + `cargo clippy --all-targets -- -D warnings`
+- `cargo test` (656 green baseline) + `cargo clippy --all-targets -- -D warnings`
   + `cargo fmt --all --check` + `cargo check --target x86_64-pc-windows-gnu`.
 - No agent-loop behavior change unless fixing a TUI bug.
 - Manual path the user actually uses, examined in the live TUI between slices.

@@ -217,4 +217,4 @@ unclosed tokens (e.g. a half-typed `**bold`) to literal text, so streaming
 never flashes raw markdown. Tool calls render as a live line with a spinner
 while active, then settle to a dim line once finished.
 
-Conversation history **is** carried across turns via `session_messages` (in-memory) and persisted to `.raven/sessions/`. Scrollback is supported with `↑`/`↓`/`PgUp`/`PgDn` and mouse wheel.
+Conversation history **is** carried across turns via `session_messages` (in-memory) and persisted to `.raven/sessions/`. Transcript scrollback uses the mouse wheel, `PgUp`/`PgDn`, and (when not recalling prompts) `↑`/`↓`. With an empty or mid-recall input, `↑`/`↓` walk prompt history instead; `Home`/`End` jump to the top of the transcript or reattach to the live tail.

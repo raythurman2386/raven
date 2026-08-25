@@ -155,11 +155,15 @@ raven --tui    # force TUI even with a task
 |---|---|
 | Type + `Enter` | Submit a task |
 | `Left` / `Right` | Move the edit cursor |
-| `Home` / `End` | Jump to start / end of input |
+| `Up` / `Down` | Recall prior prompts when the input is empty or mid-recall; otherwise scroll the transcript. With the completion popup open, move the highlight |
+| `Home` / `End` | Empty input: jump to the top of the transcript / reattach to the live tail. Otherwise: jump to start / end of the input line |
+| `PgUp` / `PgDn` | Scroll the transcript |
+| Mouse wheel | Scroll the transcript (or the plan panel when the pointer is over it). Never walks prompt history |
+| Mouse drag | Select transcript text to copy |
 | `Tab` | Cycle slash-command autocomplete (accept if one match) |
-| `Shift+Tab` | Cycle completion backward, or cycle mode when no completion |
+| `Shift+Tab` | When idle: cycle completion backward, or cycle mode when no completion is open |
 | `Backspace` | Delete the char before the cursor |
-| `Ctrl+C` / `Esc` | Quit |
+| `Ctrl+C` / `Esc` | Quit (Esc first dismisses completion, selection, or an `ask_user` prompt) |
 
 Assistant responses render as markdown — headings, bold/italic, code blocks,
 lists, tables, and links are styled in the terminal. Tool calls show a live

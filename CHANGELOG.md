@@ -4,6 +4,26 @@ All notable changes to Raven are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.3] - 2026-08-25
+
+### Fixed
+
+- **Mouse wheel scrolls the log again** — on alternate-screen terminals
+  (notably Ghostty), the wheel was often delivered as Up/Down *keys*, which
+  hit prompt-history recall instead of moving the transcript. Raven now
+  disables xterm alternate-scroll (`?1007`), enables a lighter mouse-capture
+  set (clicks/drags/wheel without hover-move flood), and drains every pending
+  input event each tick so scroll reports are not starved.
+- **Up/Down no longer silently no-op** at the ends of prompt history (empty
+  history or already on the oldest entry) — they fall through to log scroll.
+- **Shift+Tab no longer cycles mode mid-run** — completion prev / mode cycle
+  only apply when idle (not while a turn is in flight).
+
+### Changed
+
+- Docs: TUI keybind tables and architecture notes now match the split between
+  Up/Down (prompt recall) and wheel / PgUp / PgDn (log scroll).
+
 ## [0.5.2] - 2026-08-24
 
 ### Removed
@@ -84,8 +104,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   rejects non-bare session ids (empty, `.`, `..`, path separators, absolute
   paths) before joining onto the sessions dir, so a crafted id can't make
   `remove_dir_all` escape the sessions directory.
-
-[0.5.0]: https://github.com/raythurman2386/raven/compare/v0.4.2...v0.5.0
 
 ## [0.4.2] - 2026-08-22
 
@@ -185,9 +203,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Bumped `anydoc` 0.1.8 → 0.1.9.
 
-[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/raythurman2386/raven/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/raythurman2386/raven/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/raythurman2386/raven/compare/v0.5.0...v0.5.1
+[0.5.0]: https://github.com/raythurman2386/raven/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/raythurman2386/raven/compare/v0.4.1...v0.4.2
 
 ## [0.4.0] - 2026-08-21
