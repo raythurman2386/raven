@@ -248,12 +248,15 @@ planning.
 
 ### Repo symbol map (`<repo_map>`)
 
-For large workspaces (≥50 source files) Raven injects a compact `<repo_map>`
-into the system prompt: a list of `symbol — path:line` declarations extracted
-via per-language regex (fn/struct/enum/impl/class/function/etc.). This lets
-the agent know the codebase structure up front instead of burning turns
-listing and reading files. Small workspaces skip the map, and its output is
-capped at ~2K chars.
+For non-trivial workspaces (≥15 source files, or ≥80 extracted symbols) Raven
+injects a compact `<repo_map>` into the system prompt: ranked
+`symbol [kind]` declarations grouped by path, extracted via per-language
+regex (`fn` / `struct` / `class` / …). File discovery prefers
+`git ls-files --exclude-standard` (fast, respects `.gitignore`) and falls
+back to an ignore-aware walk; hard-coded vendor dirs (`node_modules`,
+`target`, …) are always skipped. Candidates are path-scored so the scan
+budget prefers entrypoints and shallow `src/` over deep tests. Small
+workspaces skip the map; output is capped at ~3.5K chars.
 
 ### Memory recall (`memory_search`)
 

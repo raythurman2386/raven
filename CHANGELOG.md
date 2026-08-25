@@ -4,6 +4,17 @@ All notable changes to Raven are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.6] - 2026-08-25
+
+### Changed
+
+- **Repo map discovery** — prefers `git ls-files --cached --others
+  --exclude-standard` (index-fast, respects `.gitignore`), falls back to an
+  `ignore`-crate walk when git is unavailable. Hard-coded vendor dirs remain
+  as a safety net. Candidates are path-scored before the extract budget so
+  entrypoints and shallow `src/` win over deep tests. Docs thresholds fixed
+  (15 files / ~3.5K chars).
+
 ## [0.5.5] - 2026-08-25
 
 ### Fixed
@@ -222,7 +233,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Bumped `anydoc` 0.1.8 → 0.1.9.
 
-[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.5.5...HEAD
+[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.5.6...HEAD
+[0.5.6]: https://github.com/raythurman2386/raven/compare/v0.5.5...v0.5.6
 [0.5.5]: https://github.com/raythurman2386/raven/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/raythurman2386/raven/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/raythurman2386/raven/compare/v0.5.2...v0.5.3

@@ -22,13 +22,18 @@
 //! The map is built only for non-trivial workspaces (at least
 //! `MIN_SOURCE_FILES` source files *or* `MIN_SYMBOLS` symbols), capped at
 //! `MAX_MAP_CHARS`, so small projects aren't weighed down and large ones get
-//! structure without burning turns. Walks are depth- and file-capped, and
-//! the rendered map is cached per workspace until [`invalidate`] is called.
+//! structure without burning turns. File discovery prefers `git ls-files`
+//! (tracked + untracked, exclude-standard — inherently `.gitignore`-aware and
+//! index-fast); otherwise falls back to an [`ignore`]-crate walk. Candidates
+//! are path-scored so the scan budget prefers entrypoints/shallow `src/` over
+//! deep tests. Depth- and file-capped; cached per workspace until
+//! [`invalidate`] is called.
 
+use ignore::WalkBuilder;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Mutex, OnceLock};
-use walkdir::WalkDir;
 
 mod patterns;
 
@@ -75,13 +80,15 @@ const ENTRYPOINT_PATHS: &[&str] = &[
 /// Kinds that represent type-like declarations.
 const TYPE_KINDS: &[&str] = &["struct", "enum", "trait", "class", "interface", "type"];
 
-/// Skip these directories entirely.
+/// Skip these directories entirely (belt-and-suspenders on top of `.gitignore`).
 const SKIP_DIRS: &[&str] = &[
     ".git",
     "node_modules",
     "target",
+    "target-local",
     "dist",
     "build",
+    "out",
     ".venv",
     "venv",
     "__pycache__",
@@ -94,6 +101,8 @@ const SKIP_DIRS: &[&str] = &[
     "vendor",
     "Pods",
     ".turbo",
+    ".tmp",
+    ".cache",
 ];
 /// Extensions considered source.
 const SOURCE_EXTS: &[&str] = &[
@@ -127,20 +136,6 @@ pub fn invalidate(workspace: &Path) {
     cache_lock().remove(workspace);
 }
 
-fn walk_source_entries(workspace: &Path) -> impl Iterator<Item = walkdir::DirEntry> {
-    WalkDir::new(workspace)
-        .max_depth(MAX_WALK_DEPTH)
-        .into_iter()
-        .filter_entry(|e| {
-            if e.depth() == 0 {
-                return true;
-            }
-            let name = e.file_name().to_string_lossy();
-            !SKIP_DIRS.iter().any(|s| *s == name.as_ref())
-        })
-        .filter_map(|e| e.ok())
-}
-
 /// Decide whether to build a repo map for `workspace`. This is a cheap
 /// superset check (source-file count only, no extraction); `build_map` makes
 /// the final call using both file and symbol counts.
@@ -152,26 +147,10 @@ pub fn should_build(workspace: &Path) -> bool {
 }
 
 fn count_source_files(workspace: &Path) -> usize {
-    let mut n = 0usize;
-    for entry in walk_source_entries(workspace) {
-        if entry.file_type().is_file()
-            && entry
-                .path()
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| SOURCE_EXTS.contains(&e))
-                .unwrap_or(false)
-        {
-            if entry.metadata().map(|m| m.len()).unwrap_or(0) > MAX_FILE_BYTES {
-                continue;
-            }
-            n += 1;
-            if n >= MIN_SOURCE_FILES {
-                break;
-            }
-        }
-    }
-    n
+    collect_source_files(workspace)
+        .into_iter()
+        .take(MIN_SOURCE_FILES)
+        .count()
 }
 
 /// Build a compact, ranked, grouped repo map string, or `None` if the
@@ -189,34 +168,22 @@ pub fn build_map(workspace: &Path) -> Option<String> {
 }
 
 fn build_map_uncached(workspace: &Path) -> Option<String> {
+    let candidates = collect_source_files(workspace);
+    let total_candidates = candidates.len();
     let mut symbols = Vec::new();
-    let mut source_files = 0usize;
-    for entry in walk_source_entries(workspace) {
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        let path = entry.path();
+    // Scan highest-value paths first so the file budget lands on entrypoints
+    // and shallow modules rather than deep test helpers (filesystem order).
+    for path in candidates.into_iter().take(MAX_SOURCE_FILES_SCANNED) {
         let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
             continue;
         };
-        if !SOURCE_EXTS.contains(&ext) {
-            continue;
-        }
-        // Skip likely-generated files (minified bundles, lockfiles, etc.).
-        if entry.metadata().map(|m| m.len()).unwrap_or(0) > MAX_FILE_BYTES {
-            continue;
-        }
-        source_files += 1;
-        let Ok(content) = std::fs::read_to_string(path) else {
+        let Ok(content) = std::fs::read_to_string(&path) else {
             continue;
         };
-        extract_symbols(&content, ext, path, &mut symbols);
-        if source_files >= MAX_SOURCE_FILES_SCANNED {
-            break;
-        }
+        extract_symbols(&content, ext, &path, &mut symbols);
     }
 
-    if source_files < MIN_SOURCE_FILES && symbols.len() < MIN_SYMBOLS {
+    if total_candidates < MIN_SOURCE_FILES && symbols.len() < MIN_SYMBOLS {
         return None;
     }
     if symbols.is_empty() {
@@ -248,6 +215,137 @@ fn build_map_uncached(workspace: &Path) -> Option<String> {
     });
 
     Some(render(&symbols))
+}
+
+/// Collect source files under `workspace`, preferring git's index (fast +
+/// exclude-standard) and falling back to an ignore-aware filesystem walk.
+/// Results are sorted by [`score_path`] descending so callers spend extract
+/// budget on the most useful paths first.
+fn collect_source_files(workspace: &Path) -> Vec<PathBuf> {
+    let mut files = git_list_sources(workspace).unwrap_or_else(|| ignore_walk_sources(workspace));
+    files.sort_by(|a, b| {
+        let ra = a.strip_prefix(workspace).unwrap_or(a);
+        let rb = b.strip_prefix(workspace).unwrap_or(b);
+        score_path(rb).cmp(&score_path(ra)).then_with(|| ra.cmp(rb))
+    });
+    files
+}
+
+/// `git ls-files --cached --others --exclude-standard`: tracked + untracked
+/// non-ignored paths. Returns `None` when git is missing or the workspace is
+/// not a repository so the caller can fall back to a filesystem walk.
+fn git_list_sources(workspace: &Path) -> Option<Vec<PathBuf>> {
+    let output = Command::new("git")
+        .args([
+            "-C",
+            workspace.to_str()?,
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let mut files = Vec::new();
+    for raw in output.stdout.split(|&b| b == 0) {
+        if raw.is_empty() {
+            continue;
+        }
+        let rel = PathBuf::from(String::from_utf8_lossy(raw).as_ref());
+        if !is_eligible_source(workspace, &rel) {
+            continue;
+        }
+        let abs = workspace.join(&rel);
+        if !abs.is_file() {
+            continue;
+        }
+        if abs.metadata().map(|m| m.len()).unwrap_or(0) > MAX_FILE_BYTES {
+            continue;
+        }
+        files.push(abs);
+    }
+    Some(files)
+}
+
+/// Filesystem walk that honors `.gitignore` / `.ignore` / `.git/info/exclude`
+/// plus [`SKIP_DIRS`]. Used when git is unavailable.
+fn ignore_walk_sources(workspace: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    let walker = WalkBuilder::new(workspace)
+        .max_depth(Some(MAX_WALK_DEPTH))
+        .git_ignore(true)
+        .git_exclude(true)
+        .git_global(false)
+        .ignore(true)
+        .hidden(false)
+        .require_git(false)
+        .filter_entry(|e| {
+            if e.depth() == 0 {
+                return true;
+            }
+            let name = e.file_name().to_string_lossy();
+            !SKIP_DIRS.iter().any(|s| *s == name.as_ref())
+        })
+        .build();
+    for entry in walker.flatten() {
+        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+            continue;
+        }
+        let path = entry.path();
+        let Ok(rel) = path.strip_prefix(workspace) else {
+            continue;
+        };
+        if !is_eligible_source(workspace, rel) {
+            continue;
+        }
+        if entry.metadata().map(|m| m.len()).unwrap_or(0) > MAX_FILE_BYTES {
+            continue;
+        }
+        files.push(path.to_path_buf());
+    }
+    files
+}
+
+/// Extension, depth, and hard skip-dir checks shared by git and walk listing.
+fn is_eligible_source(_workspace: &Path, rel: &Path) -> bool {
+    if rel.components().count() > MAX_WALK_DEPTH {
+        return false;
+    }
+    if rel.components().any(|c| {
+        let name = c.as_os_str().to_string_lossy();
+        SKIP_DIRS.iter().any(|s| *s == name.as_ref())
+    }) {
+        return false;
+    }
+    rel.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| SOURCE_EXTS.contains(&e))
+}
+
+/// Path-level priority before extraction (higher = scan sooner).
+fn score_path(rel: &Path) -> i32 {
+    let mut score = 0;
+    if is_entrypoint_path(rel) {
+        score += 50;
+    }
+    if rel
+        .components()
+        .next()
+        .is_some_and(|c| c.as_os_str() == "src")
+    {
+        score += 15;
+    }
+    if rel.components().count() <= SHALLOW_DEPTH {
+        score += 20;
+    }
+    if is_test_path(rel) {
+        score -= 40;
+    }
+    score
 }
 
 /// Select symbols by score under budget, then group by path, then render

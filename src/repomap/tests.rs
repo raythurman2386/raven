@@ -304,12 +304,118 @@ fn skips_vendor_dirs() {
 #[test]
 fn skips_new_skip_dirs() {
     let tmp = tempfile::tempdir().unwrap();
-    for d in [".next", "coverage", "vendor", "Pods", ".turbo"] {
+    for d in [
+        ".next",
+        "coverage",
+        "vendor",
+        "Pods",
+        ".turbo",
+        "target-local",
+        ".tmp",
+    ] {
         let dir = tmp.path().join(d);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("x.rs"), "pub fn foo() {}\n").unwrap();
     }
     assert_eq!(count_source_files(tmp.path()), 0);
+}
+
+#[test]
+fn respects_gitignore_without_git_repo() {
+    // No `.git` → ignore-crate walk still applies `.gitignore`.
+    let tmp = tempfile::tempdir().unwrap();
+    write_rs(tmp.path(), "src/lib.rs", "pub fn keep_me() {}\n");
+    std::fs::create_dir_all(tmp.path().join("build_out")).unwrap();
+    std::fs::write(
+        tmp.path().join("build_out/generated.rs"),
+        "pub fn ignored_symbol_xyz() {}\n",
+    )
+    .unwrap();
+    std::fs::write(tmp.path().join(".gitignore"), "build_out/\n").unwrap();
+    for f in 0..15 {
+        write_rs(tmp.path(), &format!("src/f{f}.rs"), "pub fn f() {}\n");
+    }
+    let files = collect_source_files(tmp.path());
+    assert!(
+        files
+            .iter()
+            .all(|p| !p.to_string_lossy().contains("build_out")),
+        "gitignore'd build_out must not be listed: {files:?}"
+    );
+    let map = build_map(tmp.path()).expect("map");
+    assert!(!map.contains("ignored_symbol_xyz"));
+    assert!(map.contains("keep_me") || map.contains("src/"));
+}
+
+#[test]
+fn respects_gitignore_via_git_ls_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(root)
+        .output()
+        .expect("git init");
+    // Avoid depending on the user's global template / identity.
+    let _ = std::process::Command::new("git")
+        .args(["config", "user.email", "repomap@test"])
+        .current_dir(root)
+        .output();
+    let _ = std::process::Command::new("git")
+        .args(["config", "user.name", "repomap"])
+        .current_dir(root)
+        .output();
+    write_rs(root, "main.rs", "pub fn entry() {}\n");
+    std::fs::create_dir_all(root.join("secret_gen")).unwrap();
+    std::fs::write(
+        root.join("secret_gen/x.rs"),
+        "pub fn must_not_appear_abc() {}\n",
+    )
+    .unwrap();
+    std::fs::write(root.join(".gitignore"), "secret_gen/\n").unwrap();
+    for f in 0..15 {
+        write_rs(root, &format!("m{f}.rs"), "pub fn m() {}\n");
+    }
+    // Stage something so ls-files has an index; untracked non-ignored still listed.
+    let _ = std::process::Command::new("git")
+        .args(["add", "main.rs", ".gitignore"])
+        .current_dir(root)
+        .output();
+    let files = collect_source_files(root);
+    assert!(
+        git_list_sources(root).is_some(),
+        "expected git listing path"
+    );
+    assert!(
+        files
+            .iter()
+            .all(|p| !p.to_string_lossy().contains("secret_gen")),
+        "git exclude-standard must drop secret_gen: {files:?}"
+    );
+}
+
+#[test]
+fn collect_prioritizes_entrypoints_over_deep_tests() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_rs(tmp.path(), "src/main.rs", "pub fn main() {}\n");
+    write_rs(
+        tmp.path(),
+        "src/deep/tests/helpers.rs",
+        "fn test_helper() {}\n",
+    );
+    for f in 0..5 {
+        write_rs(tmp.path(), &format!("src/util{f}.rs"), "pub fn u() {}\n");
+    }
+    let files = collect_source_files(tmp.path());
+    let first = files[0].strip_prefix(tmp.path()).unwrap();
+    assert!(
+        first.ends_with("main.rs"),
+        "entrypoint should sort first, got {}",
+        first.display()
+    );
+    assert!(
+        score_path(Path::new("src/main.rs")) > score_path(Path::new("src/deep/tests/helpers.rs"))
+    );
 }
 
 #[test]

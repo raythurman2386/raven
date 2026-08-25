@@ -93,7 +93,7 @@ CLI (main.rs)
 ```bash
 cargo build                    # debug build, must be warning-free
 cargo build --release          # LTO + strip
-cargo test                     # 658 tests, all offline (no Ollama needed)
+cargo test                     # 661 tests, all offline (no Ollama needed)
 cargo clippy --all-targets -- -D warnings   # must be zero warnings
 cargo fmt --all --check        # formatting check
 cargo doc --no-deps            # docs must build with no warnings
@@ -143,10 +143,12 @@ test`, `cargo clippy`, `cargo fmt`) — do not rely on the agent's simulated
 5. **Session IDs** — `{iso}-{pid}-{counter}` (issue #10 is fixed). Still
    don't invent a different scheme without updating `generate_session_id`.
 6. **Repo map is cached** per workspace path until `repomap::invalidate`
-   (called when `repo_map_stale` after a successful file edit). Walks are
-   capped (`MAX_WALK_DEPTH` / `MAX_SOURCE_FILES_SCANNED`) so a parent folder
-   of many repos is not a full-tree scan. Cache key is the raw `Path`, not
-   canonical — keep `settings.workspace` consistent.
+   (called when `repo_map_stale` after a successful file edit). Discovery
+   prefers `git ls-files --exclude-standard`, else an `ignore`-crate walk;
+   both honor `.gitignore` and hard `SKIP_DIRS`. Candidates are path-scored
+   before the extract budget (`MAX_WALK_DEPTH` / `MAX_SOURCE_FILES_SCANNED`).
+   Cache key is the raw `Path`, not canonical — keep `settings.workspace`
+   consistent.
 7. **Session writes are atomic** (`write_atomic` temp+rename) for both
    `append_message` and `save_all_messages`. Do not reintroduce in-place
    truncate.
