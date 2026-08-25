@@ -520,6 +520,7 @@ fn dummy_state() -> TuiState {
         agent_state: AgentState::Idle,
         scroll: 0,
         auto_scroll: true,
+        log_max_scroll: 0,
         plan_scroll: 0,
         quit: false,
         tick: 0,
@@ -1392,6 +1393,7 @@ fn multi_step_up_recall_walks_entire_history() {
 #[test]
 fn scroll_log_by_detaches_and_reattaches_auto_follow() {
     let mut state = dummy_state();
+    state.log_max_scroll = 100;
     assert!(state.auto_scroll);
     assert_eq!(state.scroll, 0);
 
@@ -1410,6 +1412,49 @@ fn scroll_log_by_detaches_and_reattaches_auto_follow() {
 }
 
 #[test]
+fn scroll_log_by_escapes_home_sentinel_toward_live() {
+    // Regression: Home used to set scroll = u16::MAX. Rendering clamped to
+    // max_scroll, but wheel/PgDn subtracted from MAX and stayed visually stuck
+    // at the top until End. Relative moves must clamp through log_max_scroll.
+    let mut state = dummy_state();
+    state.log_max_scroll = 20;
+    state.scroll = u16::MAX;
+    state.auto_scroll = false;
+
+    scroll_log_by(&mut state, -3);
+    assert_eq!(state.scroll, 17);
+    assert!(!state.auto_scroll);
+
+    scroll_log_by(&mut state, -10);
+    assert_eq!(state.scroll, 7);
+
+    // Upward moves also clamp to max (no overshoot past the top).
+    state.scroll = 18;
+    scroll_log_by(&mut state, 10);
+    assert_eq!(state.scroll, 20);
+    assert!(!state.auto_scroll);
+}
+
+#[test]
+fn sync_log_max_scroll_matches_viewport() {
+    let mut state = dummy_state();
+    // One cached line that wraps to 5 rows at width 4 ("abcdefghij" → 5 rows).
+    state.cached_log_lines = vec![Line::from("abcdefghij")];
+    state.log_gen = 1;
+    let size = Rect::new(0, 0, 20, 12);
+    // layout: top=1, log gets remaining minus status/input. Force a known
+    // size by using sync's geometry: content_width = 20-4=16 for full width
+    // log — but compute_layout splits. Just assert it is finite and ≤ total.
+    sync_log_max_scroll(&mut state, size);
+    assert!(
+        state.log_total_rows > 0,
+        "expected wrapped rows, got {}",
+        state.log_total_rows
+    );
+    assert!(state.log_max_scroll <= state.log_total_rows as u16);
+}
+
+#[test]
 fn history_exhausted_fallthrough_scrolls_log() {
     // Empty history + empty input: recall is "active" but Up returns None.
     // The event loop must scroll instead of no-opping (pre-fix bug).
@@ -1417,6 +1462,7 @@ fn history_exhausted_fallthrough_scrolls_log() {
     assert!(history_recall_up(&[], 0).is_none());
 
     let mut state = dummy_state();
+    state.log_max_scroll = 100;
     if history_recall_up(&state.prompt_history, state.hist_idx).is_none() {
         scroll_log_by(&mut state, 1);
     }
@@ -1438,6 +1484,7 @@ fn mouse_scroll_moves_log_not_history() {
     // Wheel handling must adjust scroll offsets and must not touch prompt
     // history / hist_idx (history recall is keyboard Up/Down only).
     let mut state = dummy_state();
+    state.log_max_scroll = 100;
     state.prompt_history = vec!["prior".into()];
     state.hist_idx = 1;
     let size = Rect::new(0, 0, 80, 24);

@@ -265,6 +265,11 @@ struct TuiState {
     agent_state: AgentState,
     scroll: u16,
     auto_scroll: bool,
+    /// Max `scroll` for the current log viewport (`total_rows - viewport_h`).
+    /// Kept in sync from `draw_ui` / `sync_log_max_scroll` so relative moves
+    /// (wheel, PgDn) clamp correctly after Home (which used to set `u16::MAX`
+    /// and trap the view at the top).
+    log_max_scroll: u16,
     plan_scroll: u16,
     quit: bool,
     tick: u64,
@@ -339,6 +344,7 @@ impl TuiState {
             agent_state: AgentState::Idle,
             scroll: 0,
             auto_scroll: true,
+            log_max_scroll: 0,
             plan_scroll: 0,
             quit: false,
             tick: 0,
@@ -738,7 +744,11 @@ pub async fn run_tui(
                                 if state.input.is_empty() {
                                     // Empty input: Home jumps to the top of the
                                     // transcript (detaches from the live tail).
-                                    state.scroll = u16::MAX;
+                                    // Use the real max offset — not u16::MAX —
+                                    // so wheel/PgDn can move back toward live.
+                                    let size: Rect = terminal.size().unwrap_or_default().into();
+                                    sync_log_max_scroll(&mut state, size);
+                                    state.scroll = state.log_max_scroll;
                                     state.auto_scroll = false;
                                     state.input_dirty = true;
                                 } else if !state.running || state.pending_question.is_some() {
@@ -1180,15 +1190,34 @@ fn history_recall_active(input_is_empty: bool, prompt_history_len: usize, hist_i
     input_is_empty || hist_idx < prompt_history_len
 }
 
+/// Recompute [`TuiState::log_max_scroll`] from the current terminal layout so
+/// Home / relative scroll agree with what `prewrap_visible` will render.
+fn sync_log_max_scroll(state: &mut TuiState, size: Rect) {
+    let chunks = compute_layout(size, state);
+    let log_rect = chunks[1];
+    let content_width = (log_rect.width.saturating_sub(4) as usize).max(1);
+    let log_h = log_rect.height.saturating_sub(1) as usize;
+    state.refresh_log_rows(content_width);
+    state.log_max_scroll = state
+        .log_total_rows
+        .saturating_sub(log_h)
+        .min(usize::from(u16::MAX)) as u16;
+}
+
 /// Adjust log scroll by `delta` rows (positive = toward older content / up).
 /// Detaches auto-follow when moving up; reattaches when the offset returns to
 /// the live tail (`scroll == 0`).
+///
+/// Clamps through [`TuiState::log_max_scroll`] first so a prior Home jump (or
+/// any overshoot) does not trap relative wheel/PgDn moves at the top.
 fn scroll_log_by(state: &mut TuiState, delta: i32) {
+    let max = state.log_max_scroll;
+    let cur = state.scroll.min(max);
     if delta >= 0 {
-        state.scroll = state.scroll.saturating_add(delta as u16);
+        state.scroll = cur.saturating_add(delta as u16).min(max);
         state.auto_scroll = false;
     } else {
-        state.scroll = state.scroll.saturating_sub((-delta) as u16);
+        state.scroll = cur.saturating_sub((-delta) as u16);
         if state.scroll == 0 {
             state.auto_scroll = true;
         }
@@ -1386,6 +1415,14 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &mut TuiSt
     // hit-testing (`current_display`); the Paragraph must NOT scroll again,
     // or the visible window would be pushed off-screen.
     state.refresh_log_rows(content_width.max(1));
+    state.log_max_scroll = state
+        .log_total_rows
+        .saturating_sub(log_h)
+        .min(usize::from(u16::MAX)) as u16;
+    // Heal overshoot (legacy Home sentinel, PageUp past the end, resize).
+    if state.scroll > state.log_max_scroll {
+        state.scroll = state.log_max_scroll;
+    }
     let (display_lines, _offset) = prewrap_visible(
         &state.cached_log_lines,
         state.log_total_rows,
