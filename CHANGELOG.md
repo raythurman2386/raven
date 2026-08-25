@@ -4,6 +4,15 @@ All notable changes to Raven are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.4] - 2026-08-25
+
+### Fixed
+
+- **Windows build** — custom crossterm `Command` helpers
+  (`EnableMouseCaptureLite`, `DisableAlternateScroll`) now implement
+  `execute_winapi`, which the trait requires on Windows. v0.5.3 failed to
+  compile for `x86_64-pc-windows-msvc` (CI Test + Release).
+
 ## [0.5.3] - 2026-08-25
 
 ### Fixed
@@ -203,7 +212,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Bumped `anydoc` 0.1.8 → 0.1.9.
 
-[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.5.3...HEAD
+[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.5.4...HEAD
+[0.5.4]: https://github.com/raythurman2386/raven/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/raythurman2386/raven/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/raythurman2386/raven/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/raythurman2386/raven/compare/v0.5.0...v0.5.1

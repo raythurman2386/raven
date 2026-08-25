@@ -435,6 +435,14 @@ impl Command for EnableMouseCaptureLite {
             "\x1b[?1006h",
         ))
     }
+
+    // Required on Windows by crossterm's Command trait. Prefer ANSI (default
+    // `is_ansi_code_supported`) on modern consoles; legacy WinAPI has no
+    // equivalent of these selective DECSET modes, so this is a no-op there.
+    #[cfg(windows)]
+    fn execute_winapi(&self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 /// Disable xterm alternate-scroll (`?1007`). When enabled, the wheel is
@@ -446,6 +454,13 @@ struct DisableAlternateScroll;
 impl Command for DisableAlternateScroll {
     fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
         f.write_str("\x1b[?1007l")
+    }
+
+    // Alternate-scroll is an xterm/DEC private mode; legacy WinAPI consoles
+    // have nothing to toggle. ANSI path handles Windows Terminal / VT hosts.
+    #[cfg(windows)]
+    fn execute_winapi(&self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 
