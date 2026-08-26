@@ -328,6 +328,54 @@ fn run_shell_verification_command_skips_seccomp_network_block() {
 
 #[test]
 #[cfg(target_os = "linux")]
+fn run_shell_verification_command_skips_rlimits() {
+    // Regression: `run_shell` applied RLIMIT_FSIZE (64 MiB) to every command,
+    // including sanctioned verification commands like `cargo test`. A test
+    // that writes a large file (or a linker emitting a >64 MiB binary) was
+    // SIGXFSZ-killed. Verification commands must skip rlimits the same way
+    // they skip the seccomp network block.
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("Cargo.toml"),
+        r#"[package]
+name = "eval_big_write_shell"
+version = "0.1.0"
+edition = "2021"
+"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(tmp.path().join("src")).unwrap();
+    std::fs::write(
+        tmp.path().join("src/lib.rs"),
+        "pub fn ok() -> bool { true }\n\
+         #[cfg(test)]\n\
+         mod tests {\n\
+             use super::*;\n\
+             #[test]\n\
+             fn writes_large_file() {\n\
+                 let mut f = std::fs::File::create(\"big.bin\").unwrap();\n\
+                 use std::io::Write;\n\
+                 let chunk = vec![0u8; 1 << 20];\n\
+                 for _ in 0..70 { f.write_all(&chunk).unwrap(); }\n\
+                 assert!(ok());\n\
+             }\n\
+         }\n",
+    )
+    .unwrap();
+    let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
+    let out = sb.run_shell("cargo test", 120).unwrap();
+    assert!(
+        !out.contains("killed by signal"),
+        "run_shell verification command must skip rlimits, got: {out}"
+    );
+    assert!(
+        out.contains("exit=0"),
+        "run_shell verification command must not be capped by RLIMIT_FSIZE, got: {out}"
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
 fn confined_child_network_blocked() {
     let tmp = tempfile::tempdir().unwrap();
     let sb = Sandbox::new(tmp.path().canonicalize().unwrap());

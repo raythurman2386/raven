@@ -69,12 +69,18 @@ impl Sandbox {
         // exfiltration guarantee. The flag is threaded into the pre_exec
         // closure — setting it via `command.env` alone is dead code because
         // pre_exec reads the parent env, not the Command::env override.
+        //
+        // rlimits are also skipped: a debug test binary can exceed the 64 MiB
+        // RLIMIT_FSIZE cap (SIGXFSZ), and a clean build can exceed the 30s
+        // RLIMIT_CPU cap. The test runner is user-sanctioned, so the exemption
+        // is limited to commands the enforced-verify gate would credit.
         let skip_network_block = matches!(runner, TestRunner::Npm);
         let mut confined = spawn_confined(
             &mut command,
             &self.workspace,
             &self.extra_rw,
             skip_network_block,
+            true,
         )
         .context("spawn test runner")?;
         match wait_for_child(&mut confined.child, 600) {
@@ -192,8 +198,12 @@ impl Sandbox {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
         setup_shell_env(&mut command, &self.workspace);
-        let mut confined = spawn_confined(&mut command, &self.workspace, &self.extra_rw, false)
-            .context("spawn linter")?;
+        // Linters (clippy/tsc/eslint) compile the project, so they need the
+        // same rlimits exemption as `run_tests` (large linker outputs, long
+        // clean builds). The network block stays on: linters don't need it.
+        let mut confined =
+            spawn_confined(&mut command, &self.workspace, &self.extra_rw, false, true)
+                .context("spawn linter")?;
         match wait_for_child(&mut confined.child, 600) {
             Some((status, stdout, stderr)) => {
                 #[cfg(unix)]

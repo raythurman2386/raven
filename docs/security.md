@@ -121,6 +121,17 @@ entirely (e.g. if a legitimate tool needs network access).
 **Why:** Caps oversized writes (`RLIMIT_FSIZE`), runaway CPU (`RLIMIT_CPU`),
 and fd exhaustion (`RLIMIT_NOFILE`).
 
+**Exemption for sanctioned verification commands:** `run_tests`, `run_lint`,
+and `run_shell` commands that match the verification-gate predicate
+(`cargo test`, `cargo clippy`, `cargo fmt --check`, `npm test`, `pytest`,
+`tsc`, `eslint`, …) skip rlimits entirely. These commands legitimately need
+to write linker outputs larger than 64 MiB (a debug test binary can exceed
+the `RLIMIT_FSIZE` cap, which would SIGXFSZ-kill the linker) and to burn more
+than 30s of CPU on a clean build. The exemption mirrors the seccomp
+network-block exemption already granted to the same sanctioned commands, and
+is limited to commands the enforced-verify gate would credit — not arbitrary
+model output. Landlock and seccomp still apply.
+
 **Platforms:** Linux + macOS.
 
 **Limitation:** Best-effort — a kernel that doesn't support a limit is ignored.

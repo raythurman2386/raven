@@ -160,6 +160,53 @@ fn is_verification_command_rejects_non_test_commands() {
 
 #[test]
 #[cfg(target_os = "linux")]
+fn run_tests_skips_rlimits_for_large_linker_outputs() {
+    // Regression: RLIMIT_FSIZE (64 MiB) was applied to `run_tests`, so a
+    // debug test binary larger than 64 MiB (or a test that writes a large
+    // file) was SIGXFSZ-killed. Sanctioned test runners must skip rlimits
+    // the same way they skip the seccomp network block.
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("Cargo.toml"),
+        r#"[package]
+name = "eval_big_write"
+version = "0.1.0"
+edition = "2021"
+"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(tmp.path().join("src")).unwrap();
+    std::fs::write(
+        tmp.path().join("src/lib.rs"),
+        "pub fn ok() -> bool { true }\n\
+         #[cfg(test)]\n\
+         mod tests {\n\
+             use super::*;\n\
+             #[test]\n\
+             fn writes_large_file() {\n\
+                 let mut f = std::fs::File::create(\"big.bin\").unwrap();\n\
+                 use std::io::Write;\n\
+                 let chunk = vec![0u8; 1 << 20];\n\
+                 for _ in 0..70 { f.write_all(&chunk).unwrap(); }\n\
+                 assert!(ok());\n\
+             }\n\
+         }\n",
+    )
+    .unwrap();
+    let sb = Sandbox::new(tmp.path().to_path_buf());
+    let out = sb.run_tests().expect("run_tests");
+    assert!(
+        out.contains("exit=0"),
+        "cargo test under confinement must not be capped by RLIMIT_FSIZE: {out}"
+    );
+    assert!(
+        !out.contains("killed by signal"),
+        "test runner must not be SIGXFSZ-killed: {out}"
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
 fn run_tests_npm_project_skips_seccomp_network_block() {
     // Regression for Finding 26: the previous #137 fix set the exemption via
     // `command.env(...)`, which a `pre_exec` closure cannot see (it reads the

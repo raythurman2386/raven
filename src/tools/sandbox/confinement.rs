@@ -103,6 +103,13 @@ impl FsPolicy {
 /// (RLIMIT_CPU), and fd exhaustion (RLIMIT_NOFILE). Best-effort: failures are
 /// ignored so a kernel that doesn't support a limit doesn't break the child.
 ///
+/// `skip_rlimits` is set for sanctioned verification commands (`run_tests`,
+/// `run_lint`, and `run_shell` test/lint/format invocations). Those commands
+/// legitimately need to write large linker outputs (a debug test binary can
+/// exceed 64 MiB, which `RLIMIT_FSIZE` would SIGXFSZ-kill) and to burn more
+/// than 30s of CPU on a clean build. The exemption mirrors the seccomp
+/// network-block exemption already granted to the same sanctioned commands.
+///
 /// Deliberately omitted:
 /// - `RLIMIT_AS` (virtual address space): V8/Node reserve large regions up
 ///   front, so a cap aborts them at startup. It bounds virtual, not resident,
@@ -113,7 +120,11 @@ impl FsPolicy {
 ///   busy machine it silently breaks any high-thread runtime (Node, etc.)
 ///   because the ambient thread count is already near the cap.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn apply_rlimits() {
+fn apply_rlimits(skip_rlimits: bool) {
+    if skip_rlimits {
+        tracing::info!("rlimits skipped for sanctioned verification command");
+        return;
+    }
     use rustix::process::{setrlimit, Resource, Rlimit};
     let limits = [
         (
@@ -279,10 +290,15 @@ fn apply_seccomp_network_block(skip_network_block: bool) {
 /// logs and continues on failure so a kernel that doesn't support a feature
 /// doesn't break the child.
 #[cfg(unix)]
-fn apply_os_confinement(workspace: &Path, extra_rw: &[PathBuf], skip_network_block: bool) {
+fn apply_os_confinement(
+    workspace: &Path,
+    extra_rw: &[PathBuf],
+    skip_network_block: bool,
+    skip_rlimits: bool,
+) {
     unsafe { libc::setpgid(0, 0) };
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    apply_rlimits();
+    apply_rlimits(skip_rlimits);
     #[cfg(target_os = "linux")]
     apply_landlock(workspace, extra_rw);
     #[cfg(target_os = "linux")]
@@ -385,6 +401,7 @@ pub(crate) fn spawn_confined(
     #[cfg_attr(not(unix), allow(unused_variables))] workspace: &Path,
     #[cfg_attr(not(unix), allow(unused_variables))] extra_rw: &[PathBuf],
     #[cfg_attr(not(unix), allow(unused_variables))] skip_network_block: bool,
+    #[cfg_attr(not(unix), allow(unused_variables))] skip_rlimits: bool,
 ) -> Result<ConfinedChild> {
     #[cfg(unix)]
     {
@@ -392,7 +409,7 @@ pub(crate) fn spawn_confined(
         let extra = extra_rw.to_vec();
         unsafe {
             cmd.pre_exec(move || {
-                apply_os_confinement(&ws, &extra, skip_network_block);
+                apply_os_confinement(&ws, &extra, skip_network_block, skip_rlimits);
                 Ok(())
             });
         }
@@ -425,8 +442,9 @@ pub(crate) fn run_confined(
     timeout_secs: u64,
     extra_rw: &[PathBuf],
     skip_network_block: bool,
+    skip_rlimits: bool,
 ) -> Result<String> {
-    let mut confined = spawn_confined(cmd, workspace, extra_rw, skip_network_block)?;
+    let mut confined = spawn_confined(cmd, workspace, extra_rw, skip_network_block, skip_rlimits)?;
     match wait_for_child(&mut confined.child, timeout_secs) {
         Some((status, stdout, stderr)) => {
             #[cfg(unix)]

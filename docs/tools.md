@@ -25,8 +25,8 @@ All file paths are **relative to the workspace root** and confined to it. See [a
 | `git_diff` | Show unstaged or staged changes | Read-only; runs `git diff` |
 | `git_log` | Show recent commit history | Read-only; runs `git log` |
 | `apply_patch` | Apply a unified diff patch to files | Workspace-confined; parses and applies patches |
-| `run_tests` | Auto-detect and run project test suite | Runs `cargo test` / `npm test` / `pytest` |
-| `run_lint` | Auto-detect and run project linter/type checker | Runs `cargo clippy` / `tsc` / `eslint` / `python -m compileall` |
+| `run_tests` | Auto-detect and run project test suite | Runs `cargo test` / `npm test` / `pytest`; skips rlimits (large linker outputs, long builds) and the seccomp network block for npm projects |
+| `run_lint` | Auto-detect and run project linter/type checker | Runs `cargo clippy` / `tsc` / `eslint` / `python -m compileall`; skips rlimits |
 | `ask_user` | Ask the user a question | Pauses agent; user response fed back as tool result |
 | `web_search` | Search the web via DuckDuckGo (or a self-hosted SearXNG instance if configured) | Read-only; no API key needed; 10 results per page |
 | `web_fetch` | Fetch a URL and return readable text | Read-only; only http/https; strips HTML; 20s timeout |
@@ -113,7 +113,7 @@ The `include` glob supports `*` and `?` against the file name only (not the full
 }
 ```
 
-Runs the command with `cwd` forced to the workspace. Allowlisted commands with no shell metacharacters run via **direct exec** (`Command::new(bin).args(...)`); everything else runs via `sh -c <command>`. Output format: `exit=<code>\n<stdout><stderr>`. Output capped at 12 000 chars (truncated with `...[truncated]`). Confined subprocesses additionally run under OS-level sandboxing (Landlock, seccomp, rlimits, or Windows Job Objects — see [security.md](security.md)).
+Runs the command with `cwd` forced to the workspace. Allowlisted commands with no shell metacharacters run via **direct exec** (`Command::new(bin).args(...)`); everything else runs via `sh -c <command>`. Output format: `exit=<code>\n<stdout><stderr>`. Output capped at 12 000 chars (truncated with `...[truncated]`). Confined subprocesses additionally run under OS-level sandboxing (Landlock, seccomp, rlimits, or Windows Job Objects — see [security.md](security.md)). Commands matching the verification-gate predicate (`cargo test`, `cargo clippy`, `cargo fmt --check`, `npm test`, `pytest`, `tsc`, `eslint`, …) skip both the seccomp network block and rlimits, since sanctioned test/lint/format commands legitimately need network sockets and large linker outputs.
 
 ### `search_code`
 

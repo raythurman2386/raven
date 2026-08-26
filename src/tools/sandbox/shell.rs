@@ -49,7 +49,8 @@ impl Sandbox {
 
         // Sanctioned test runners (vitest/jest/mocha/npm test/cargo test/pytest/
         // tsc/eslint/...) open AF_INET sockets for coverage/worker IPC, which the
-        // seccomp network block SIGSYS-kills. `run_tests` already exempts npm
+        // seccomp network block SIGSYS-kills, and write large linker outputs
+        // that RLIMIT_FSIZE would SIGXFSZ-kill. `run_tests` already exempts npm
         // projects; mirror that here so a sanctioned test command run through the
         // shell is not killed. The predicate is the same one the enforced-verify
         // gate uses to credit shell-based verification, so the exemption is
@@ -60,6 +61,7 @@ impl Sandbox {
             &self.workspace,
             timeout_secs,
             &self.extra_rw,
+            skip_network_block,
             skip_network_block,
         )
     }
