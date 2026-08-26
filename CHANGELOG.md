@@ -4,6 +4,37 @@ All notable changes to Raven are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.7] - 2026-08-25
+
+### Added
+
+- **`raven self update`** — an in-binary update path that downloads a release,
+  verifies its Ed25519 signature (authenticity) and SHA-256 checksum
+  (integrity) in-process, then atomically replaces the running binary while
+  keeping a `.old` backup. `--version` pins a specific release;
+  `--rollback` restores the previous binary. Honors `RAVEN_RELEASE_BASE_URL`
+  (default GitHub releases) and supports `file://`/local paths for offline
+  testing. Verification is fail-closed: a missing or invalid checksum or
+  signature refuses the update.
+- **Signed release packaging** — `scripts/package-release.sh` extracts the
+  release layout (raw binaries + `.tar.gz`/`.zip` archives + `checksums.txt`)
+  out of the CI workflow, and optionally signs `checksums.txt` via
+  `scripts/sign-release.sh` when a secret key is passed.
+
+### Changed
+
+- **Release workflow hardening** — `release.yml` now calls
+  `scripts/package-release.sh` instead of inline bash, and all GitHub Actions
+  are pinned to commit SHAs (not tags/branches) as a supply-chain hardening
+  measure. Release signing stays offline: CI builds and drafts the release;
+  the maintainer signs `checksums.txt` locally and uploads
+  `checksums.txt.sig` (the secret key never enters CI).
+
+### Dependencies
+
+- Added `ring` 0.17 and `base64` 0.22 (both already in the dependency tree)
+  for in-process Ed25519 signature verification and SHA-256 checksums.
+
 ## [0.5.6] - 2026-08-25
 
 ### Changed
@@ -233,7 +264,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Bumped `anydoc` 0.1.8 → 0.1.9.
 
-[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.5.6...HEAD
+[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.5.7...HEAD
+[0.5.7]: https://github.com/raythurman2386/raven/compare/v0.5.6...v0.5.7
 [0.5.6]: https://github.com/raythurman2386/raven/compare/v0.5.5...v0.5.6
 [0.5.5]: https://github.com/raythurman2386/raven/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/raythurman2386/raven/compare/v0.5.3...v0.5.4

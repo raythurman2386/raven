@@ -1,6 +1,7 @@
 param(
     [string]$Version = "",
     [string]$To = "$env:USERPROFILE\.cargo\bin",
+    [string]$Url = "",
     [switch]$Force = $false,
     [switch]$Help = $false
 )
@@ -9,6 +10,20 @@ $ErrorActionPreference = "Stop"
 
 $REPO = "raythurman2386/raven"
 $BINARY = "raven"
+
+# Base URL for release artifacts. Overridable so the installer can be tested
+# against a local mirror without hitting GitHub.
+$DefaultReleaseBaseUrl = "https://github.com/$REPO/releases/download"
+$ReleaseBaseUrl = if ($Url) { $Url } elseif ($env:RAVEN_RELEASE_BASE_URL) { $env:RAVEN_RELEASE_BASE_URL } else { $DefaultReleaseBaseUrl }
+
+# Pinned Ed25519 public key (PEM) used to verify the release signature. This is
+# the root of trust: it must match the key used by scripts/sign-release.sh.
+# A release whose checksums.txt.sig does not verify against this key is refused.
+$SigningPublicKey = @"
+-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEABaaVYKB0dLAHTkp2ui3sE0c1LhFNyHv10acZTeHXCEo=
+-----END PUBLIC KEY-----
+"@
 
 if ($Help) {
     Write-Host @"
@@ -19,8 +34,12 @@ Install raven from a prebuilt GitHub Release binary.
 Options:
   -Version VERSION  Install a specific version (default: latest)
   -To DIR           Install to DIR (default: `$env:USERPROFILE\.cargo\bin)
+  -Url URL          Base URL for release artifacts (default: GitHub releases)
   -Force            Overwrite existing binary without prompting
   -Help             Show this help message
+
+Environment:
+  RAVEN_RELEASE_BASE_URL  Override the release artifact base URL (same as -Url)
 
 Examples:
   irm https://raw.githubusercontent.com/$REPO/master/install.ps1 | iex
@@ -75,8 +94,9 @@ try {
     $versionNoV = $versionTag -replace "^v", ""
     $artifact = "${BINARY}-${versionNoV}-${triple}.exe"
 
-    $downloadUrl = "https://github.com/$REPO/releases/download/${versionTag}/${artifact}"
-    $checksumUrl = "https://github.com/$REPO/releases/download/${versionTag}/checksums.txt"
+    $downloadUrl = "$ReleaseBaseUrl/${versionTag}/${artifact}"
+    $checksumUrl = "$ReleaseBaseUrl/${versionTag}/checksums.txt"
+    $signatureUrl = "$ReleaseBaseUrl/${versionTag}/checksums.txt.sig"
 
     Write-Host "==> Platform:  $triple"
     Write-Host "==> Version:   $versionTag"
@@ -137,6 +157,31 @@ try {
             throw "Checksum mismatch!`n  expected: $expected`n  actual:   $actual"
         }
         Write-Host "==> Checksum OK"
+
+        # Fail closed on authenticity: the checksums.txt signature is required
+        # and must verify against the pinned Ed25519 public key. This proves the
+        # checksums (and therefore the binary) were produced by the raven
+        # maintainers, not tampered with in transit or on the release host.
+        try {
+            $signaturePath = Join-Path $tmpDir "checksums.txt.sig"
+            Invoke-WebRequest -Uri $signatureUrl -OutFile $signaturePath -ErrorAction Stop
+        } catch {
+            throw "Failed to download checksums.txt.sig from $signatureUrl`nRefusing to install without a release signature."
+        }
+
+        $openssl = Get-Command openssl -ErrorAction SilentlyContinue
+        if (-not $openssl) {
+            throw "openssl is required to verify the release signature. Install OpenSSL and retry."
+        }
+
+        $pubkeyPath = Join-Path $tmpDir "raven-signing-key.pub"
+        Set-Content -Path $pubkeyPath -Value $SigningPublicKey
+
+        & openssl pkeyutl -verify -rawin -in $checksumPath -sigfile $signaturePath -pubin -inkey $pubkeyPath 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Release signature verification FAILED for checksums.txt`nRefusing to install: the release could not be authenticated."
+        }
+        Write-Host "==> Signature OK"
 
         if (-not (Test-Path $To)) {
             New-Item -ItemType Directory -Path $To -Force | Out-Null

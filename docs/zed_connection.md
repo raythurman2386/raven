@@ -19,7 +19,7 @@ from the editor — plan mode, verification gates, workspace isolation,
 
 - **Zed 1.14+** (external agents require a recent Zed)
 - **Raven** installed and on your `PATH` (see the root [README](../README.md#install));
-  verify with `raven --version` → should print `raven 0.5.6` or newer.
+  verify with `raven --version` → should print `raven 0.5.7` or newer.
 - A reachable model endpoint for Raven (local Ollama, Ollama Cloud, or
   OpenRouter — whatever your `~/.raven/config.toml` already uses).
 

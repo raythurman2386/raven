@@ -166,6 +166,28 @@ struct Cli {
     /// Speak Agent Client Protocol v1 on stdin/stdout (editor attachment).
     #[arg(long)]
     acp: bool,
+
+    /// Manage raven itself (update / rollback).
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+/// Top-level subcommands (currently only `self`).
+#[derive(clap::Subcommand, Debug)]
+enum Command {
+    /// Manage raven itself (update / rollback).
+    #[command(name = "self")]
+    SelfCmd {
+        #[command(subcommand)]
+        cmd: SelfSubcommand,
+    },
+}
+
+/// Subcommands under `raven self`.
+#[derive(clap::Subcommand, Debug)]
+enum SelfSubcommand {
+    /// Update raven to the latest (or a pinned) release.
+    Update(raven::update::UpdateArgs),
 }
 
 #[tokio::main]
@@ -194,6 +216,14 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
+
+    // `raven self update` / `raven self update --rollback` are handled before
+    // any agent setup: they replace the running binary and exit.
+    if let Some(Command::SelfCmd { cmd }) = &cli.command {
+        match cmd {
+            SelfSubcommand::Update(args) => return raven::update::run(args.clone()).await,
+        }
+    }
 
     let workspace = cli
         .workspace

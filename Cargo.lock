@@ -2584,10 +2584,11 @@ dependencies = [
 
 [[package]]
 name = "raven"
-version = "0.5.6"
+version = "0.5.7"
 dependencies = [
  "anydoc",
  "anyhow",
+ "base64",
  "clap",
  "criterion",
  "crossterm",
@@ -2600,6 +2601,7 @@ dependencies = [
  "ratatui",
  "regex",
  "reqwest",
+ "ring",
  "rustix",
  "seccompiler",
  "serde",

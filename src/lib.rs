@@ -18,4 +18,5 @@ pub mod state;
 pub mod tokenizer;
 pub mod tools;
 pub mod tui;
+pub mod update;
 pub mod web;

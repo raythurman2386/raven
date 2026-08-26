@@ -34,16 +34,16 @@ jobs:
           # registry only warns on a missing OS family, it does not block.
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
         with:
           toolchain: "1.97"
 
       - name: Install cross
         if: matrix.use-cross
-        uses: taiki-e/install-action@cross
+        uses: taiki-e/install-action@7bfb4d96970755941ebb30b301a178916e404934 # cross
 
       - name: Build (native)
         if: ${{ !matrix.use-cross }}
@@ -69,7 +69,7 @@ jobs:
           echo "bin_name=${BIN_NAME}" >> $GITHUB_OUTPUT
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ steps.artifact.outputs.bin_name }}
           path: ${{ steps.artifact.outputs.bin_name }}
@@ -81,53 +81,26 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: artifacts
           merge-multiple: true
 
-      - name: Generate checksums
-        # Compute SHA-256 over every built binary so the installers can verify
-        # integrity. Written into the artifacts dir so it's uploaded alongside
-        # the binaries and the installers find it as checksums.txt.
+      - name: Package release
+        # Compute SHA-256 over every built binary (integrity), build per-binary
+        # .tar.gz/.zip archives, and append archive checksums. The maintainer
+        # signs checksums.txt offline with scripts/sign-release.sh and uploads
+        # checksums.txt.sig (authenticity) — the secret key never enters CI.
         working-directory: artifacts
         shell: bash
         run: |
-          sha256sum * > checksums.txt
-          cat checksums.txt
-
-      - name: Create archives
-        # Build .tar.gz (unix) / .zip (windows) archives for the ACP registry's
-        # `binary` distribution. Each archive contains a stable `raven` /
-        # `raven.exe` so the registry's `cmd` stays version-independent. The raw
-        # binaries are kept alongside (the installers download those directly).
-        # Archive checksums are appended to checksums.txt so agent.json can pin
-        # them.
-        working-directory: artifacts
-        shell: bash
-        run: |
-          for f in raven-*; do
-            [[ "$f" == "checksums.txt" ]] && continue
-            mkdir -p stage
-            if [[ "$f" == *.exe ]]; then
-              cp "$f" stage/raven.exe
-              (cd stage && zip -q "../${f}.zip" raven.exe)
-            else
-              cp "$f" stage/raven
-              (cd stage && tar -czf "../${f}.tar.gz" raven)
-            fi
-            rm -rf stage
-          done
-          sha256sum raven-*.tar.gz >> checksums.txt 2>/dev/null || true
-          sha256sum raven-*.zip >> checksums.txt 2>/dev/null || true
-          echo "--- checksums.txt (raw + archives) ---"
-          cat checksums.txt
+          bash ../scripts/package-release.sh .
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@c12583777ecdfd3be55c69cf75464299dc01057e # v3
         with:
           files: artifacts/*
           generate_release_notes: true

@@ -60,6 +60,18 @@ fn version_reports_package_version() {
 }
 
 #[test]
+fn self_update_help_lists_flags() {
+    let (out, _, status) = run(&["self", "update", "--help"]);
+    assert!(status.success(), "self update --help should exit 0");
+    for flag in ["--version", "--rollback"] {
+        assert!(
+            out.contains(flag),
+            "self update --help should mention `{flag}`, got: {out}"
+        );
+    }
+}
+
+#[test]
 fn headless_without_task_errors() {
     // With no task and --headless, the CLI must exit non-zero with a clear message.
     let (out, err, status) = run(&["--headless"]);

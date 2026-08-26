@@ -4,9 +4,20 @@ set -euo pipefail
 REPO="raythurman2386/raven"
 BINARY="raven"
 DEFAULT_INSTALL_DIR="$HOME/.cargo/bin"
+# Base URL for release artifacts. Overridable so the installer can be tested
+# against a local mirror (e.g. `python3 -m http.server`) without hitting GitHub.
+DEFAULT_RELEASE_BASE_URL="https://github.com/$REPO/releases/download"
+RELEASE_BASE_URL="${RAVEN_RELEASE_BASE_URL:-$DEFAULT_RELEASE_BASE_URL}"
 VERSION=""
 INSTALL_DIR=""
 FORCE=false
+
+# Pinned Ed25519 public key (PEM) used to verify the release signature. This is
+# the root of trust: it must match the key used by scripts/sign-release.sh.
+# A release whose checksums.txt.sig does not verify against this key is refused.
+SIGNING_PUBLIC_KEY='-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEABaaVYKB0dLAHTkp2ui3sE0c1LhFNyHv10acZTeHXCEo=
+-----END PUBLIC KEY-----'
 
 usage() {
     cat <<EOF
@@ -17,8 +28,12 @@ Install raven from a prebuilt GitHub Release binary.
 Options:
   --version VERSION  Install a specific version (default: latest)
   --to DIR           Install to DIR (default: \$HOME/.cargo/bin)
+  --url URL          Base URL for release artifacts (default: GitHub releases)
   --force            Overwrite existing binary without prompting
   -h, --help         Show this help message
+
+Environment:
+  RAVEN_RELEASE_BASE_URL  Override the release artifact base URL (same as --url)
 
 Examples:
   curl -fsSL https://raw.githubusercontent.com/$REPO/master/install.sh | sh
@@ -36,6 +51,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --to)
             INSTALL_DIR="$2"
+            shift 2
+            ;;
+        --url)
+            RELEASE_BASE_URL="$2"
             shift 2
             ;;
         --force)
@@ -101,6 +120,23 @@ get_latest_version() {
     echo "$tag"
 }
 
+# fetch SRC DEST
+#
+# Download SRC to DEST. When SRC is a local path (absolute, relative, or a
+# file:// URL), copy it directly instead of using curl. This lets the installer
+# run against a local mirror / offline directory, and makes it testable without
+# network access.
+fetch() {
+    local src="$1" dst="$2"
+    if [[ "$src" == file://* ]]; then
+        cp "${src#file://}" "$dst"
+    elif [[ "$src" == /* || "$src" == ./* || "$src" == ../* ]]; then
+        cp "$src" "$dst"
+    else
+        curl -fsSL --retry 3 --retry-delay 2 -o "$dst" "$src"
+    fi
+}
+
 main() {
     local triple version_tag download_url checksum_url tmp_dir
 
@@ -122,8 +158,9 @@ main() {
         artifact="${artifact}.exe"
     fi
 
-    download_url="https://github.com/$REPO/releases/download/${version_tag}/${artifact}"
-    checksum_url="https://github.com/$REPO/releases/download/${version_tag}/checksums.txt"
+    download_url="${RELEASE_BASE_URL}/${version_tag}/${artifact}"
+    checksum_url="${RELEASE_BASE_URL}/${version_tag}/checksums.txt"
+    signature_url="${RELEASE_BASE_URL}/${version_tag}/checksums.txt.sig"
 
     echo "==> Platform:  $triple"
     echo "==> Version:   $version_tag"
@@ -143,7 +180,7 @@ main() {
     trap 'rm -rf "${tmp_dir:-}"' EXIT
 
     echo "==> Downloading $download_url ..."
-    if ! curl -fsSL --retry 3 --retry-delay 2 -o "$tmp_dir/$artifact" "$download_url"; then
+    if ! fetch "$download_url" "$tmp_dir/$artifact"; then
         echo "Error: failed to download $download_url" >&2
         echo "Check that the release exists and the artifact name is correct." >&2
         exit 1
@@ -152,11 +189,39 @@ main() {
     # Fail closed on integrity: the checksum file and matching entry are
     # required. If they're missing, refuse to install rather than silently
     # shipping an unverified binary.
-    if ! curl -fsSL --retry 3 --retry-delay 2 -o "$tmp_dir/checksums.txt" "$checksum_url" 2>/dev/null; then
+    if ! fetch "$checksum_url" "$tmp_dir/checksums.txt" 2>/dev/null; then
         echo "Error: failed to download checksums.txt from $checksum_url" >&2
         echo "Refusing to install without a checksum. Verify the release is complete." >&2
         exit 1
     fi
+
+    # Fail closed on authenticity: the checksums.txt signature is required and
+    # must verify against the pinned Ed25519 public key. This proves the
+    # checksums (and therefore the binary) were produced by the raven
+    # maintainers, not tampered with in transit or on the release host.
+    if ! fetch "$signature_url" "$tmp_dir/checksums.txt.sig" 2>/dev/null; then
+        echo "Error: failed to download checksums.txt.sig from $signature_url" >&2
+        echo "Refusing to install without a release signature." >&2
+        exit 1
+    fi
+
+    if ! command -v openssl &>/dev/null; then
+        echo "Error: openssl is required to verify the release signature" >&2
+        exit 1
+    fi
+
+    local pubkey_file
+    pubkey_file="$tmp_dir/raven-signing-key.pub"
+    printf '%s\n' "$SIGNING_PUBLIC_KEY" > "$pubkey_file"
+
+    if ! openssl pkeyutl -verify -rawin -in "$tmp_dir/checksums.txt" \
+        -sigfile "$tmp_dir/checksums.txt.sig" \
+        -pubin -inkey "$pubkey_file" >/dev/null 2>&1; then
+        echo "Error: release signature verification FAILED for checksums.txt" >&2
+        echo "Refusing to install: the release could not be authenticated." >&2
+        exit 1
+    fi
+    echo "==> Signature OK"
 
     local expected
     # Anchor to the exact artifact name (end of line) so the raw-binary entry
