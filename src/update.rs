@@ -10,6 +10,15 @@
 //!
 //! Both checks fail closed: a missing or invalid checksum/signature refuses the
 //! update rather than silently installing an unverified binary.
+//!
+//! # Windows
+//!
+//! A running `.exe` cannot be overwritten or deleted, but it *can* be renamed
+//! (the Windows loader opens the image with `FILE_SHARE_DELETE`). The update
+//! path therefore renames the running binary aside to `.old` and moves the new
+//! binary into place — the standard "rename dance" used by single-file
+//! updaters. The running process keeps executing the old (now-renamed) image
+//! until it exits; the next launch uses the new binary.
 
 use anyhow::{bail, Context, Result};
 use base64::Engine as _;
@@ -106,15 +115,14 @@ async fn update(pinned_version: Option<&str>) -> Result<()> {
     let target = std::env::current_exe().context("failed to resolve current executable")?;
     let parent = target.parent().unwrap_or_else(|| Path::new("."));
     let mut tmp = tempfile::NamedTempFile::new_in(parent).context("failed to create temp file")?;
-    // Write through the already-open handle: on Windows the temp file is opened
-    // with no sharing, so a second `std::fs::write` to the same path would fail.
     tmp.as_file_mut()
         .write_all(&binary)
         .context("failed to write downloaded binary")?;
     make_executable(tmp.path());
-    // Close the handle before renaming (a running `.exe` can't be replaced, and
-    // an open handle blocks the rename on Windows). `into_temp_path` keeps the
-    // path alive and deletes it on drop if the rename below fails.
+    // Close the handle and keep the path, then move the file into place.
+    // `NamedTempFile` does not use FILE_FLAG_DELETE_ON_CLOSE, so closing the
+    // handle does not delete the file; the TempPath only deletes it on drop if
+    // the rename below fails.
     let tmp_path = tmp.into_temp_path();
     atomic_replace(&tmp_path, &target)?;
 

@@ -20,6 +20,37 @@ fn raven_bin() -> &'static str {
     env!("CARGO_BIN_EXE_raven")
 }
 
+/// The platform's executable suffix (`.exe` on Windows, empty elsewhere).
+const EXE_SUFFIX: &str = std::env::consts::EXE_SUFFIX;
+
+/// The raven binary filename on this platform (`raven` / `raven.exe`).
+fn raven_name() -> String {
+    format!("raven{EXE_SUFFIX}")
+}
+
+/// The `.old` backup filename for the raven binary on this platform.
+fn raven_backup_name() -> String {
+    format!("raven{EXE_SUFFIX}.old")
+}
+
+/// Copy the compiled raven binary to `dst`, ready to be executed.
+///
+/// Reads the source into memory and writes it out explicitly rather than using
+/// `std::fs::copy`, whose `copy_file_range` fast path can leave the destination
+/// in a state where an immediate `execve` fails with `ETXTBSY` on Linux. The
+/// executable bit is set explicitly (a plain write creates a 0644 file).
+fn copy_binary(dst: &Path) {
+    let bytes = std::fs::read(raven_bin()).unwrap();
+    std::fs::write(dst, bytes).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(dst).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(dst, perms).unwrap();
+    }
+}
+
 /// Build a SubjectPublicKeyInfo PEM for a raw 32-byte Ed25519 public key.
 fn spki_pem(public_key: &[u8]) -> String {
     const PREFIX: &[u8] = &[
@@ -98,7 +129,12 @@ impl ReleaseServer {
 /// Returns the public key PEM (to pass via `RAVEN_SIGNING_PUBLIC_KEY`) and the
 /// artifact name.
 fn build_release(dir: &Path, version: &str, triple: &str, binary: &[u8]) -> (String, String) {
-    let artifact = format!("raven-{version}-{triple}");
+    // Match the binary's artifact naming: Windows triples get a `.exe` suffix.
+    let artifact = if triple.contains("windows") {
+        format!("raven-{version}-{triple}.exe")
+    } else {
+        format!("raven-{version}-{triple}")
+    };
     std::fs::create_dir_all(dir.join(format!("v{version}"))).unwrap();
     std::fs::write(dir.join(format!("v{version}/{artifact}")), binary).unwrap();
 
@@ -151,8 +187,8 @@ fn self_update_replaces_and_rolls_back() {
     // Copy the real binary to a temp location so we can observe replacement.
     let bin_dir = dir.path().join("bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
-    let target = bin_dir.join("raven");
-    std::fs::copy(raven_bin(), &target).unwrap();
+    let target = bin_dir.join(raven_name());
+    copy_binary(&target);
 
     let out = Command::new(&target)
         .args(["self", "update", "--version", "0.5.1"])
@@ -177,7 +213,7 @@ fn self_update_replaces_and_rolls_back() {
         "binary should be replaced with the downloaded artifact"
     );
     // A `.old` backup of the original binary exists.
-    let backup = bin_dir.join("raven.old");
+    let backup = bin_dir.join(raven_backup_name());
     assert!(backup.exists(), "a .old backup should be kept");
     assert_eq!(
         std::fs::read(&backup).unwrap(),
@@ -191,10 +227,10 @@ fn self_update_replaces_and_rolls_back() {
 #[test]
 fn rollback_restores_backup() {
     let dir = tempfile::tempdir().unwrap();
-    let target = dir.path().join("raven");
-    std::fs::copy(raven_bin(), &target).unwrap();
+    let target = dir.path().join(raven_name());
+    copy_binary(&target);
     // A fake "previous" binary stands in for the .old backup.
-    let backup = dir.path().join("raven.old");
+    let backup = dir.path().join(raven_backup_name());
     std::fs::write(&backup, b"previous binary").unwrap();
 
     let out = Command::new(&target)
@@ -238,8 +274,8 @@ fn self_update_fails_closed_on_bad_signature() {
 
     let bin_dir = dir.path().join("bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
-    let target = bin_dir.join("raven");
-    std::fs::copy(raven_bin(), &target).unwrap();
+    let target = bin_dir.join(raven_name());
+    copy_binary(&target);
 
     let out = Command::new(&target)
         .args(["self", "update", "--version", "0.5.1"])
@@ -269,8 +305,8 @@ fn self_update_fails_closed_on_bad_signature() {
 #[test]
 fn rollback_without_backup_fails() {
     let dir = tempfile::tempdir().unwrap();
-    let target = dir.path().join("raven");
-    std::fs::copy(raven_bin(), &target).unwrap();
+    let target = dir.path().join(raven_name());
+    copy_binary(&target);
 
     let out = Command::new(&target)
         .args(["self", "update", "--rollback"])
