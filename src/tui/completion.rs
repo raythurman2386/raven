@@ -43,6 +43,23 @@ impl Completion {
         self.selected = (self.selected + self.candidates.len() - 1) % self.candidates.len();
         self.selected
     }
+
+    /// Whether the replace span in `input` holds exactly `candidate`.
+    ///
+    /// Used by the TUI to detect that a previous Tab fill (or a fully typed
+    /// value) already put a complete candidate in the box, so Enter can
+    /// submit instead of filling again.
+    pub fn span_holds_candidate(&self, input: &str, candidate: &str) -> bool {
+        input.get(self.replace_start..self.replace_end) == Some(candidate)
+    }
+
+    /// Whether the replace span in `input` holds the highlighted candidate.
+    pub fn span_holds_selected(&self, input: &str) -> bool {
+        match self.candidates.get(self.selected) {
+            Some(c) => self.span_holds_candidate(input, c),
+            None => false,
+        }
+    }
 }
 
 /// Compute completion candidates for the given input.
@@ -227,5 +244,56 @@ mod tests {
         assert_eq!(c.next(), 1);
         assert_eq!(c.next(), 0);
         assert_eq!(c.prev(), 1);
+    }
+
+    #[test]
+    fn span_holds_candidate_detects_fill() {
+        let c = candidates_for("/theme no", &theme_args).unwrap();
+        // Span holds "no" (the partial), not any candidate yet.
+        assert!(!c.span_holds_selected("/theme no"));
+        assert!(!c.span_holds_candidate("/theme no", "nord"));
+        // After a Tab fill the span holds exactly the candidate. The TUI
+        // widens replace_end to the inserted candidate after apply(); mimic
+        // that here.
+        let (filled, _) = apply("/theme no", &c, "nord");
+        assert_eq!(filled, "/theme nord");
+        let mut filled_comp = c.clone();
+        filled_comp.replace_end = filled_comp.replace_start + "nord".len();
+        assert!(filled_comp.span_holds_candidate(&filled, "nord"));
+        assert!(filled_comp.span_holds_selected(&filled));
+        // A different candidate is not in the span.
+        assert!(!filled_comp.span_holds_candidate(&filled, "ravenwood"));
+    }
+
+    #[test]
+    fn span_holds_selected_tracks_highlight() {
+        // "/theme " (trailing space, no partial arg) is command-name
+        // completion: the span is the whole "/theme" token and already holds
+        // the only candidate, so Enter submits the fully-typed command.
+        let c = candidates_for("/theme ", &theme_args).unwrap();
+        assert_eq!(c.candidates, vec!["/theme".to_string()]);
+        assert!(c.span_holds_selected("/theme "));
+
+        // With two candidates, cycling the highlight away from the filled
+        // value makes span_holds_selected false again.
+        let mut c2 = Completion {
+            candidates: vec!["nord".into(), "dracula".into()],
+            selected: 0,
+            replace_start: 7,
+            replace_end: 11,
+        };
+        assert!(c2.span_holds_selected("/theme nord"));
+        c2.next();
+        assert!(!c2.span_holds_selected("/theme nord"));
+    }
+
+    #[test]
+    fn span_holds_candidate_partial_token_is_false() {
+        // "/the" is a partial command token: the span holds "/the", not the
+        // candidate "/theme", so Enter fills rather than submits.
+        let c = candidates_for("/the", &no_args).unwrap();
+        assert_eq!(c.candidates, vec!["/theme".to_string()]);
+        assert!(!c.span_holds_selected("/the"));
+        assert!(!c.span_holds_candidate("/the", "/theme"));
     }
 }

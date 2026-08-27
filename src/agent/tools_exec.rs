@@ -228,7 +228,8 @@ impl Agent {
                     .unwrap_or("")
                     .to_string();
                 let sub_settings = self.settings.clone();
-                let result = super::parallel::delegate_task(sub_settings, description).await;
+                let result =
+                    super::parallel::delegate_task(sub_settings, description, tx.clone()).await;
                 let result = match result {
                     Ok(out) => {
                         let capped: String = out.chars().take(2000).collect();
@@ -417,7 +418,11 @@ impl Agent {
         // project's linter (off the blocking pool) and stash the feedback
         // so the *next* request gets it as an ephemeral reminder — the
         // model can then self-correct before the user sees the damage.
-        if *edited && !self.plan_only {
+        // Once per turn: the linter compiles the whole project (tens of
+        // seconds on Rust), so re-running it every editing iteration can
+        // dominate the turn budget. A stale result is better than a turn
+        // that spends its entire budget linting.
+        if *edited && !self.plan_only && self.lint_ran.is_none() {
             let sandbox = self.sandbox.clone();
             let lint = tokio::task::spawn_blocking(move || sandbox.run_lint())
                 .await
@@ -428,6 +433,7 @@ impl Agent {
             // (non-zero exit or error text), not on a clean pass.
             let has_problems =
                 parse_exit_code(&lint).is_some_and(|c| c != 0) || lint.contains("Error");
+            self.lint_ran = Some(has_problems);
             if has_problems {
                 self.pending_lint = Some(format!(
                     "Lint found problems after your edits — fix them:\n{lint}"

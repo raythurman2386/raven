@@ -63,6 +63,10 @@ pub async fn drain_events_logged(
                 eprintln!("[iter {}]", n);
                 let _ = std::io::Write::flush(&mut std::io::stderr());
             }
+            AgentEvent::Subagent { iter } => {
+                eprintln!("[sub-agent iter {}]", iter);
+                let _ = std::io::Write::flush(&mut std::io::stderr());
+            }
             AgentEvent::Compacted {
                 before_tokens,
                 after_tokens,

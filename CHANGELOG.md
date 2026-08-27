@@ -6,13 +6,63 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.13] - 2026-08-27
+
 ### Fixed
 
-- **Update integration tests no longer flake on `ETXTBSY`** — spawning the
-  freshly copied test binary could fail with `ExecutableFileBusy` on loaded
-  CI runners when another process briefly held a write reference to the
-  file. The test spawn helpers now retry with backoff, re-applying env
-  overrides on every attempt so retries still hit the local test server.
+- **Config-file keys after a `[table]` header were silently ignored** —
+  `max_iterations`, `mode`, and `compact_threshold` written below
+  `[providers.ollama]` in `~/.raven/config.toml` parsed as provider-table
+  entries and never reached `Settings`, so turns ran with the compiled-in
+  default of 60 iterations regardless of the configured budget. The parser
+  is unchanged (TOML semantics); document the ordering rule and fix the
+  shipped config. Long implementation turns no longer stop at "maximum
+  number of tool-calling iterations" when the user configured a higher cap.
+- **Sandboxed cargo could not resolve dependencies** — `pin_build_tool_dirs`
+  points `CARGO_HOME` at `.raven/cargo-home`, which starts empty, so the
+  first sandboxed `cargo test`/`clippy` failed resolution (empty index) or
+  spent minutes re-fetching. The pinned home now links the host's
+  `registry/index` and `registry/cache` (Unix symlink, Windows junction) so
+  cargo resolves and extracts deps offline; `registry/src` extraction stays
+  a real workspace directory so Landlock write roots are unchanged.
+- **Auto-lint reflection ran after every editing iteration** — each pass is
+  a full `cargo clippy --all-targets` compile (tens of seconds on Rust
+  workspaces), so a 40-iteration editing turn spent most of its budget
+  linting. The linter now runs at most once per turn and the result is
+  reused; a stale-but-present lint note beats burning the iteration cap.
+- **Long turns were invisible on disk** — session `messages.jsonl` is only
+  written at turn end, so a 30-minute turn (slow local/cloud model, many
+  iterations) left nothing to inspect while it ran and looked hung.
+  `debug-events.jsonl` now records each iteration (and sub-agent iteration)
+  as it happens, restoring a live timeline for post-mortems.
+
+### Added
+
+- **Iteration budget in the TUI status bar** — the status line now shows
+  `thinking… (iter 37/120)` while a turn runs, so a turn approaching its
+  iteration cap is visible instead of a surprise wrap-up message.
+  `/loop N` keeps the displayed budget in sync.
+- **Sub-agent progress is no longer silent** — `delegate_task` sub-agents
+  previously swallowed all events, so the parent TUI sat without feedback
+  while the sub-agent made many model calls. A new
+  `AgentEvent::Subagent { iter }` surfaces sub-agent iterations in the TUI
+  status, headless runner, and ACP mapping (no-op payload).
+- **Windows junction support for the pinned cargo home** — registry links
+  use NTFS junctions via `windows-sys` (`FSCTL_SET_REPARSE_POINT`), which
+  need no developer mode or elevation, keeping the seeding fix
+  Windows-native. Cross-checked: `cargo check --target
+  x86_64-pc-windows-gnu --all-targets` clean.
+
+### Changed
+
+- **Tab/Enter completion behavior in the TUI** — Tab fills the highlighted
+  candidate (and cycles on repeat); Enter fills the candidate, but submits
+  when the input already holds a complete candidate, so `/n` + Enter no
+  longer auto-fires `/new` while `/model q` + Tab + Enter still runs in two
+  presses.
+- **README refresh** — line-count claim updated, "How I use it" section
+  documents daily-driver workflow (ACP + Zed, model choices), and the
+  install section notes the signed-manifest checksum verification.
 
 ## [0.5.12] - 2026-08-27
 

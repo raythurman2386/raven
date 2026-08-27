@@ -49,6 +49,10 @@ pub enum AgentEvent {
     ToolEnd { name: String, preview: String },
     /// A new agent iteration is starting (1-based).
     Iteration(usize),
+    /// A `delegate_task` sub-agent reported progress (its iteration number
+    /// within its own capped turn). Surfaced so invisible sub-agent work
+    /// is no longer silent in the TUI.
+    Subagent { iter: usize },
     /// Context was compacted; carries before/after token estimates and a
     /// short "what was compacted" note (goal / todos / paths / last verify).
     Compacted {

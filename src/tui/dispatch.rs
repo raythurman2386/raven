@@ -251,6 +251,7 @@ pub(super) async fn dispatch_slash_command(
                 match n.parse::<usize>() {
                     Ok(v) if v >= 1 => {
                         settings.max_iterations = v;
+                        state.iterations_max = v;
                         state.push_system(format!("max iterations → {v} (applies to new turns)"));
                         state.log_dirty = true;
                     }

@@ -45,7 +45,11 @@ pub struct SubAgentReport {
 /// the same sandbox confinement. Nesting is disabled (`allow_delegate = false`)
 /// so the child cannot spawn another delegate or overwrite parent goal/todos.
 /// Tool events are consumed silently; only `TextDelta` output is accumulated.
-pub async fn delegate_task(mut settings: Settings, task: String) -> Result<String> {
+pub async fn delegate_task(
+    mut settings: Settings,
+    task: String,
+    parent_tx: mpsc::Sender<AgentEvent>,
+) -> Result<String> {
     #[cfg(test)]
     if let Some(out) = DELEGATE_STUB.with(|c| c.borrow_mut().take()) {
         let _ = (settings, task);
@@ -64,6 +68,12 @@ pub async fn delegate_task(mut settings: Settings, task: String) -> Result<Strin
         while let Some(ev) = rx.recv().await {
             match ev {
                 AgentEvent::TextDelta(t) => out.push_str(&t),
+                AgentEvent::Iteration(n) => {
+                    // Bubble sub-agent iterations up so the parent TUI shows
+                    // progress instead of silently waiting (the sub-agent's
+                    // other events stay suppressed to keep the log clean).
+                    let _ = parent_tx.send(AgentEvent::Subagent { iter: n }).await;
+                }
                 AgentEvent::Done | AgentEvent::Error(_) => break,
                 _ => {}
             }

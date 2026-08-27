@@ -511,6 +511,7 @@ fn dummy_state() -> TuiState {
         cursor: 0,
         completion: None,
         status: String::new(),
+        iterations_max: 60,
         plan_pending: false,
         plan_preview: Vec::new(),
         active_plan: None,

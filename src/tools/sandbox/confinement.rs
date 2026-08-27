@@ -365,6 +365,7 @@ pub(crate) fn pin_build_tool_dirs(cmd: &mut Command, workspace: &Path) {
     for dir in [&cargo_home, &tmp_dir, &npm_cache, &target_dir] {
         let _ = std::fs::create_dir_all(dir);
     }
+    seed_cargo_home(&cargo_home);
 
     cmd.env("CARGO_HOME", &cargo_home);
     cmd.env("CARGO_TARGET_DIR", &target_dir);
@@ -379,6 +380,137 @@ pub(crate) fn pin_build_tool_dirs(cmd: &mut Command, workspace: &Path) {
     }
     cmd.env_remove("RUSTC_WRAPPER");
     cmd.env_remove("CARGO_INCREMENTAL");
+}
+
+/// Make the host cargo registry readable from the pinned `CARGO_HOME` via
+/// symlink, so sandboxed cargo can resolve dependencies without re-downloading
+/// the index/cache (the pinned home starts empty and most sandboxed commands
+/// cannot reach the network).
+///
+/// `registry/index` and `registry/cache` are symlinked to the host's copies
+/// (read access is granted through the read-only HOME root). `registry/src` —
+/// where cargo *extracts* sources — stays a real directory inside the pinned
+/// home so builds write only inside the Landlock write roots. Idempotent:
+/// existing entries are left alone.
+fn seed_cargo_home(cargo_home: &Path) {
+    let Some(host_home) = std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cargo")))
+    else {
+        return;
+    };
+    if host_home == *cargo_home {
+        return;
+    }
+    for sub in ["registry/index", "registry/cache"] {
+        let dst = cargo_home.join(sub);
+        let src = host_home.join(sub);
+        if dst.exists() || dst.is_symlink() || !src.exists() {
+            continue;
+        }
+        if let Some(parent) = dst.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        #[cfg(unix)]
+        {
+            let _ = std::os::unix::fs::symlink(&src, &dst);
+        }
+        #[cfg(windows)]
+        {
+            let _ = create_dir_junction(&src, &dst);
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = std::fs::copy(&src, &dst);
+        }
+    }
+}
+
+/// Create an NTFS directory junction (`dst` → `src`) on Windows.
+///
+/// Junctions need no elevated privileges unlike directory symlinks, and
+/// cargo treats them like real directories for its registry lookups.
+#[cfg(windows)]
+fn create_dir_junction(src: &Path, dst: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    // `mount point` tag: target is a volume-absolute path, no name surrogate
+    // resolution against reparse points needed for our use.
+    const IO_REPARSE_TAG_MOUNT_POINT: u32 = 0xA000_0003;
+
+    // The junction target must be absolute with \\?\ prefix semantics; the
+    // canonical absolute path works for both drive-letter and UNC sources.
+    let target = src.canonicalize().unwrap_or_else(|_| src.to_path_buf());
+    let mut target_w: Vec<u16> = target.as_os_str().encode_wide().collect();
+
+    // A junction's substitute name must not end with a backslash.
+    while target_w.last() == Some(&0x5C_u16) {
+        target_w.pop();
+    }
+
+    // Reparse data buffer layout (WIN32_REPARSE_DATA_BUFFER for mount points):
+    // tag(4) + data_len(2) + reserved(2) + substitute_offset(2) +
+    // substitute_len(2) + print_offset(2) + print_len(2), then the strings.
+    let header_len = 4 + 2 + 2 + 2 + 2 + 2 + 2;
+    let substitute_bytes: Vec<u8> = target_w.iter().flat_map(|w| w.to_le_bytes()).collect();
+    let mut buf = vec![0u8; header_len + substitute_bytes.len() + 2];
+    buf[0..4].copy_from_slice(&IO_REPARSE_TAG_MOUNT_POINT.to_le_bytes());
+    let data_len = (substitute_bytes.len() + 4 + 2) as u16;
+    buf[4..6].copy_from_slice(&data_len.to_le_bytes());
+    let substitute_offset = header_len as u16;
+    buf[8..10].copy_from_slice(&substitute_offset.to_le_bytes());
+    let substitute_len = substitute_bytes.len() as u16;
+    buf[10..12].copy_from_slice(&substitute_len.to_le_bytes());
+    // Print name: same as substitute (harmless; explorer shows it as a link).
+    buf[12..14].copy_from_slice(&substitute_offset.to_le_bytes());
+    buf[14..16].copy_from_slice(&substitute_len.to_le_bytes());
+    buf[header_len..header_len + substitute_bytes.len()].copy_from_slice(&substitute_bytes);
+
+    std::fs::create_dir(dst)?;
+    let dst_w: Vec<u16> = dst.as_os_str().encode_wide().chain(Some(0)).collect();
+
+    // DEVICE_TYPE for FSCTL_SET_REPARSE_POINT; the constant lives behind a
+    // feature flag we don't enable, so spell the value (0x9000048).
+    const FSCTL_SET_REPARSE_POINT: u32 = 0x900A8;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const OPEN_EXISTING: u32 = 3;
+    const INVALID_HANDLE_VALUE: isize = -1;
+
+    let handle = unsafe {
+        windows_sys::Win32::Storage::FileSystem::CreateFileW(
+            dst_w.as_ptr(),
+            (0x4000_0000u32 | 0x2000_0000u32 | 0x0080_0000u32) as u32, // GENERIC_WRITE | GENERIC_READ | WRITE_DAC
+            0,
+            std::ptr::null_mut(),
+            OPEN_EXISTING,
+            FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle as isize == INVALID_HANDLE_VALUE {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut bytes_returned: u32 = 0;
+    let set_ok = unsafe {
+        windows_sys::Win32::System::IO::DeviceIoControl(
+            handle,
+            FSCTL_SET_REPARSE_POINT,
+            buf.as_ptr() as *const _,
+            buf.len() as u32,
+            std::ptr::null_mut(),
+            0,
+            &mut bytes_returned,
+            std::ptr::null_mut(),
+        )
+    };
+    unsafe {
+        windows_sys::Win32::Foundation::CloseHandle(handle);
+    }
+    if set_ok == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 /// A running subprocess plus its OS-level confinement guard.

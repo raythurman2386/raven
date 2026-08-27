@@ -271,6 +271,10 @@ pub struct Agent {
     /// Set to true when a file-editing tool (write_file/search_replace/apply_patch)
     /// runs, signalling that the repo map in the system message may be stale.
     pub(crate) repo_map_stale: bool,
+    /// Whether the turn-level auto-lint pass already ran (`Some(ran)`) or is
+    /// still available (`None`). The linter compiles the project, so it runs
+    /// at most once per turn to avoid eating the iteration budget.
+    pub(crate) lint_ran: Option<bool>,
     /// Tracks consecutive identical failing tool calls to detect degenerate
     /// loops where the model retries the same failing call without adapting.
     pub(crate) consecutive_failure_key: Option<(String, String)>,
@@ -337,6 +341,7 @@ impl Agent {
             verified: false,
             verify_attempts: 0,
             repo_map_stale: false,
+            lint_ran: None,
             consecutive_failure_key: None,
             consecutive_failure_count: 0,
             pending_repeated_failure: None,
@@ -453,6 +458,7 @@ impl Agent {
         self.verified = false;
         self.verify_attempts = 0;
         self.blank_attempts = 0;
+        self.lint_ran = None;
         let mut edited_any = false;
 
         // Always refresh the system message so persisted goal/todos and

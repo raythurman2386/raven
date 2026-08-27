@@ -256,6 +256,9 @@ struct TuiState {
     /// Active slash-command autocomplete, if any.
     completion: Option<Completion>,
     status: String,
+    /// Configured per-turn iteration budget, shown next to the live
+    /// iteration count so the user can see the turn approaching its cap.
+    iterations_max: usize,
     plan_pending: bool,
     plan_preview: Vec<String>,
     active_plan: Option<crate::plan::Plan>,
@@ -335,6 +338,7 @@ impl TuiState {
             cursor: 0,
             completion: None,
             status: "ready".to_string(),
+            iterations_max: settings.max_iterations,
             plan_pending: false,
             plan_preview: Vec::new(),
             active_plan: None,
@@ -772,19 +776,26 @@ pub async fn run_tui(
                             KeyCode::Tab => {
                                 if !state.running || state.pending_question.is_some() {
                                     if let Some(comp) = state.completion.as_mut() {
-                                        if comp.candidates.len() == 1 {
-                                            // Single candidate: accept it immediately.
-                                            let cand = comp.candidates[0].clone();
-                                            let (new_input, new_cursor) =
-                                                apply_completion(&state.input, comp, &cand);
-                                            state.input = new_input;
-                                            state.cursor = new_cursor;
-                                            state.input_dirty = true;
-                                            state.completion = None;
-                                        } else {
+                                        // Fill the input with the highlighted
+                                        // candidate. If the span already holds it
+                                        // (a previous Tab fill), advance the
+                                        // highlight first so Tab cycles.
+                                        if comp.span_holds_selected(&state.input) {
                                             comp.next();
-                                            state.input_dirty = true;
                                         }
+                                        let cand = match comp.candidates.get(comp.selected) {
+                                            Some(c) => c.clone(),
+                                            None => continue,
+                                        };
+                                        let (new_input, new_cursor) =
+                                            apply_completion(&state.input, comp, &cand);
+                                        state.input = new_input;
+                                        state.cursor = new_cursor;
+                                        // Widen the span to exactly the inserted
+                                        // candidate so the next Tab swaps it out
+                                        // instead of duplicating text.
+                                        comp.replace_end = comp.replace_start + cand.len();
+                                        state.input_dirty = true;
                                     }
                                 }
                             }
@@ -814,18 +825,33 @@ pub async fn run_tui(
                                 state.completion = candidates_for(&state.input, &arg_candidates);
                             }
                             KeyCode::Enter => {
-                                // Enter accepts the highlighted completion when the
-                                // popup is open (so `/th` + Enter → `/theme`).
+                                // Smart submit: when the completion popup is
+                                // open, Enter fills the highlighted candidate —
+                                // unless the replace span already holds a
+                                // complete candidate (Tab-filled or fully
+                                // typed), in which case Enter submits. This
+                                // keeps `/n` + Enter from auto-firing `/new`
+                                // while `/model q` + Tab + Enter runs in two
+                                // presses.
                                 if let Some(comp) = state.completion.take() {
-                                    if let Some(candidate) = comp.candidates.get(comp.selected) {
-                                        state.input.replace_range(
-                                            comp.replace_start..comp.replace_end,
-                                            candidate,
-                                        );
-                                        state.cursor = state.input.len();
-                                        state.input_dirty = true;
+                                    let holds_candidate = comp
+                                        .candidates
+                                        .iter()
+                                        .any(|c| comp.span_holds_candidate(&state.input, c));
+                                    if !holds_candidate {
+                                        if let Some(candidate) = comp.candidates.get(comp.selected)
+                                        {
+                                            state.input.replace_range(
+                                                comp.replace_start..comp.replace_end,
+                                                candidate,
+                                            );
+                                            state.cursor = state.input.len();
+                                            state.input_dirty = true;
+                                        }
+                                        continue;
                                     }
-                                    continue;
+                                    // Span already holds a complete candidate:
+                                    // fall through and submit the input.
                                 }
                                 if state.input.trim().is_empty() {
                                     continue;
@@ -997,7 +1023,20 @@ pub async fn run_tui(
                     state.log_dirty = true;
                 }
                 AgentEvent::Iteration(n) => {
-                    state.status = format!("thinking… (iter {n})");
+                    state.status = format!("thinking… (iter {n}/{})", state.iterations_max);
+                    // Keep the debug-events timeline live during long turns;
+                    // messages only persist at turn end, so without this a
+                    // 30-minute turn looks completely silent on disk.
+                    let _ = store.log_event(
+                        &session,
+                        "iteration",
+                        &format!("iter {n}/{}", state.iterations_max),
+                    );
+                }
+                AgentEvent::Subagent { iter } => {
+                    state.status = format!("delegated sub-task running… (sub-iter {iter})");
+                    let _ =
+                        store.log_event(&session, "subagent", &format!("sub-agent iter {iter}"));
                 }
                 AgentEvent::Compacted {
                     before_tokens,

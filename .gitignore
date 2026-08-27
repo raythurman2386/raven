@@ -38,3 +38,4 @@ Thumbs.db
 evals/out/
 evals/__pycache__/
 .tmp/
+.raven/MEMORY.md/

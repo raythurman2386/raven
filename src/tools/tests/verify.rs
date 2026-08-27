@@ -235,3 +235,30 @@ fn run_tests_npm_project_skips_seccomp_network_block() {
         "npm run_tests must let the child bind an AF_INET socket, got: {out}"
     );
 }
+
+#[test]
+fn seed_symlinks_host_registry_into_pinned_cargo_home() {
+    let host_registry = std::env::var("CARGO_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| dirs::home_dir().unwrap_or_default().join(".cargo"))
+        .join("registry");
+    if !host_registry.join("index").exists() {
+        // No host registry to seed from (fresh CI container): the pinned
+        // home stays empty and cargo falls back to the network. Nothing to
+        // assert beyond the directory being created.
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let pinned = tmp.path().join(".raven").join("cargo-home");
+    let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
+    // Touch the sandbox so pin_build_tool_dirs runs (any shell command does).
+    let _ = sb.run_shell("exit 0", 30).expect("run_shell");
+    // Assert on disk, not via shell output, so the check is platform-neutral
+    // (cmd.exe has no `ls`).
+    let registry = pinned.join("registry");
+    assert!(registry.is_dir(), "pinned registry dir must exist");
+    assert!(
+        registry.join("index").exists() && registry.join("cache").exists(),
+        "host registry should be reachable from the pinned home: {registry:?}"
+    );
+}

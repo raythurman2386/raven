@@ -14,12 +14,20 @@ I wanted a coding agent I could actually understand and trust. The big harnesses
 
 - **Local first** — runs against Ollama on your machine by default; dial in OpenRouter when a task needs a bigger model. Only LLM requests leave your network.
 - **No telemetry** — ever. No usage tracking, no phone-home, no cloud sync. All session state stays on disk, locally.
-- **Auditable** — about 21K lines of Rust. You can read the whole harness. No proprietary plugins, no external service dependencies.
+- **Auditable** — about 23K lines of Rust excluding tests (~31K with tests). You can read the whole harness. No proprietary plugins, no external service dependencies.
 - **Small footprint** — a single binary that runs comfortably on a Raspberry Pi. No daemon, no background indexing.
 - **No personality layer** — no "soul file". It keeps a plain `.raven/MEMORY.md` with exactly what you tell it to remember.
 - **Production-grade safety** — workspace confinement (Landlock + seccomp on Linux), shell command filters, git-worktree isolation, and a verify-before-done gate.
 
 It's built for focused, supervised work — not an autonomous loop trying to complete entire projects unsupervised. I review everything it produces.
+
+## How I use it
+
+Daily driver is the TUI, usually attached to Zed over ACP (`raven --acp`) so model switching happens in the editor's picker. In a terminal: `raven -p "…"` for plan-mode tasks, `--mode agent` for quick edits, `--yolo` for throwaway work.
+
+- **Sessions** — every turn lands in `.raven/sessions/` as JSONL. `--resume` continues the latest, `--list-sessions` browses, `/export` bundles a session as Markdown/JSON.
+- **Models** — `glm-5.3-flash:cloud` for day-to-day work, `x-ai/grok-4.5` on OpenRouter when a task needs frontier reasoning, `qwen3.8:latest` offline. `/model` + Tab completes; `/provider` switches endpoints.
+- **Hermes lineage** — `read_file` document extraction mirrors Hermes Agent's `read_extract.py` (same `anydoc` core), and loop-control fallbacks mirror Hermes's max-iteration recovery. Ideas borrowed from good harnesses; the code is all here.
 
 ---
 
@@ -37,7 +45,7 @@ curl -fsSL https://raw.githubusercontent.com/raythurman2386/raven/master/install
 irm https://raw.githubusercontent.com/raythurman2386/raven/master/install.ps1 | iex
 ```
 
-The script detects your platform, downloads the latest prebuilt binary from GitHub Releases, verifies the SHA-256 checksum, and installs to `~/.cargo/bin`. Build from source with `cargo build --release` or `cargo install --path .`.
+The script detects your platform, downloads the latest prebuilt binary from GitHub Releases, verifies the SHA-256 checksum against a manifest signed with a pinned Ed25519 key (a bad signature refuses the install), and installs to `~/.cargo/bin`. Build from source with `cargo build --release` or `cargo install --path .`.
 
 **Requirements:** Rust 1.88+ (MSRV) and a model endpoint — local Ollama, [Ollama Cloud](https://ollama.ai/cloud), [OpenRouter](https://openrouter.ai), or any OpenAI-compatible `/v1` API.
 
@@ -208,6 +216,7 @@ raven --mode agent -p "Refactor this function"
 - **`/steer <message>`** — redirect the running agent (restarts the turn with your direction appended)
 - **`/cleanup <days> [--yes]`** — prune sessions older than N days (dry-run unless `--yes`; never deletes the current session)
 - **`^C`** — stop the current task (session auto-saves)
+- **Tab** — complete the current slash command or its argument; press again to cycle candidates. **Enter** submits when the box already holds a complete candidate (Tab-filled or fully typed), otherwise it fills the highlighted one
 - **Up/Down** — recall previous prompts (keep pressing Up to walk back through history; Down returns toward the live input; typing resets). When you are not recalling (typed text at the live position), Up/Down scroll the transcript instead
 - **Wheel / PgUp / PgDn** — scroll the transcript (wheel never walks prompt history). Home jumps to the top when the input is empty; End returns to the live tail
 - **Mouse drag** — select text in the transcript to copy it to your clipboard
@@ -215,7 +224,7 @@ raven --mode agent -p "Refactor this function"
 
 ### For large codebases
 
-Raven injects a repo symbol map for files >50KB. The map helps the agent navigate structure without reading entire files:
+Raven injects a repo symbol map for larger workspaces (15+ source files or 80+ symbols; per-file cap 256KB). The map helps the agent navigate structure without reading entire files:
 ```bash
 raven --context-window 131072 -p "Find all database queries and optimize them"
 ```
@@ -330,17 +339,6 @@ Everything else stays local. Sessions are stored as plain JSONL under `.raven/se
 
 ---
 
-## Testing
-
-```bash
-cargo test                # offline unit + integration tests
-cargo clippy              # zero warnings
-```
-
-The live eval suite runs real agent tasks against a live model endpoint and grades results — see [`evals/README.md`](evals/README.md).
-
----
-
 ## Project layout
 
 ```
@@ -349,7 +347,7 @@ src/
   lib.rs            # Library re-exports for benchmarks/integration tests
   agent/            # Core agent loop (core, tools_exec, stream, parallel)
   commands/         # Slash-command registry + parser (/retry, /loop, /steer, /cleanup, ...)
-  tools/            # Tool implementations (25 total) + sandbox/
+  tools/            # Tool implementations (24 total) + sandbox/
   tui/              # ratatui TUI (render, markdown, completion)
   config/           # Layered config.toml loading, provider presets
   context.rs        # Context-window management and compaction
