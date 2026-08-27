@@ -241,6 +241,12 @@ Skills are reusable instruction files — `SKILL.md` with YAML frontmatter
 .raven/skills/commit/SKILL.md
 ```
 
+Raven also loads Agent Plugins v1.0.0 packages (skills-only): a directory with
+a `plugin.json` manifest and a `skills/` folder, placed under
+`.raven/plugins/` (project) or `~/.raven/plugins/` (global). Each plugin's
+skills are discovered from its `skills/` location and surfaced through the
+same tools.
+
 The agent can discover them with `skill_search` (match by name or
 description) and load one into context with `skill_load`, which returns the
 body wrapped in a `<skill>` envelope. Both are read-only and available during

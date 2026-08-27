@@ -93,7 +93,7 @@ switch providers and models from the editor's model selector. See
 | OS-level subprocess confinement (Landlock, seccomp, rlimits; Windows Job Object) | Container/VM isolation |
 | Git worktree isolation (isolated branches per task) | Cloud sync of sessions |
 | Structured plan mode (parse → approve → revise → execute) | Native IDE integration beyond ACP |
-| Skills (`SKILL.md` discovery + `skill_search`/`skill_load`) | Plugins / marketplace auth |
+| Skills (`SKILL.md` discovery + `skill_search`/`skill_load`) | Plugin marketplace / auth |
 | Repo symbol map (`<repo_map>` for large workspaces) | Managed workflow orchestration |
 | Parallel tool execution within a single model turn | Telemetry / usage tracking |
 | Context-window inference + automatic compaction | |
@@ -357,6 +357,7 @@ src/
   plan.rs           # Structured plan mode
   memory.rs         # Cross-session `.raven/MEMORY.md`
   skills.rs         # SKILL.md discovery
+  plugins.rs        # Agent Plugins v1.0.0 (skills-only) discovery
   repomap/          # Repo symbol map for large codebases
   web.rs            # web_search / web_fetch
 evals/              # Agent evaluation suite

@@ -48,6 +48,7 @@ src/
 ├── commands.rs   # Slash-command registry and parsing
 ├── plan.rs       # Structured plan data model, parsing, step advancement
 ├── skills.rs     # SKILL.md discovery + skill_search/skill_load
+├── plugins.rs    # Agent Plugins v1.0.0 (skills-only) discovery + validation
 ├── session.rs    # JSONL session persistence, resume, list
 ├── memory.rs     # Project memory (MEMORY.md) loading, update, search
 ├── state.rs      # Persistent agent state (.raven/state/todos.json + goal.json)
@@ -226,7 +227,7 @@ Compaction lives in [`src/context.rs`](../src/context.rs).
 ## Running tests
 
 ```bash
-cargo test                    # 675 tests, all offline
+cargo test                    # 680 tests, all offline
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```

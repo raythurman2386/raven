@@ -47,7 +47,7 @@ fmt, and `cargo check --target x86_64-pc-windows-gnu`.
 
 - **Document extraction** — `read_file` converts `.docx`, `.pdf`, `.xlsx`, `.odt`, `.epub`, `.pptx`, `.csv`, `.rtf`, `.ods`, `.odp`, `.doc`, `.xls`, `.ppt` and more to Markdown (via the `anydoc` engine).
 - **Web search + fetch** — keyless DuckDuckGo by default; optional self-hosted SearXNG backend with automatic DDG fallback.
-- **Skills** — `SKILL.md` discovery over `.raven/skills/` + `~/.raven/skills/`, `skill_search`/`skill_load`.
+- **Skills** — `SKILL.md` discovery over `.raven/skills/` + `~/.raven/skills/` plus Agent Plugins v1.0.0 packages (skills-only) from `.raven/plugins/` + `~/.raven/plugins/`, `skill_search`/`skill_load`.
 - **Repo symbol map** — `<repo_map>` injected for large workspaces (≥15 files / ≥80 symbols), cached per workspace, off the hot path.
 - **Memory** — `.raven/MEMORY.md` injected (first 25KB) + `memory_search` keyword recall.
 - **Git** — inspect-only `git_status` / `git_diff` / `git_log`; worktree isolation for sub-agents with patch-apply back to the parent working tree (no harness commits).

@@ -10,6 +10,7 @@ pub mod context;
 pub mod error;
 pub mod memory;
 pub mod plan;
+pub mod plugins;
 pub mod repomap;
 pub mod runner;
 pub mod session;

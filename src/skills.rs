@@ -18,7 +18,7 @@ use std::time::SystemTime;
 /// Max chars of a skill body injected into context (keep it bounded).
 const MAX_SKILL_BODY_CHARS: usize = 8000;
 /// Max chars of a description surfaced in search results.
-const MAX_DESC_CHARS: usize = 500;
+pub(crate) const MAX_DESC_CHARS: usize = 500;
 
 /// A discovered skill.
 #[derive(Debug, Clone)]
@@ -32,7 +32,7 @@ pub struct Skill {
 ///
 /// Returns the body (everything after the closing `---`) and the parsed
 /// name/description. Handles quoted and unquoted scalar values.
-fn parse_skill_file(content: &str) -> (String, String, String) {
+pub(crate) fn parse_skill_file(content: &str) -> (String, String, String) {
     let content = content.trim_start();
     let (front, body) = if let Some(rest) = content.strip_prefix("---") {
         match rest.find("\n---") {
@@ -153,6 +153,7 @@ fn skill_fingerprint(workspace: &Path) -> Vec<(PathBuf, Option<SystemTime>)> {
             files.push((p, m));
         }
     }
+    files.extend(crate::plugins::fingerprint(workspace));
     files.sort();
     files
 }
@@ -178,6 +179,9 @@ pub fn discover(workspace: &Path) -> Vec<Skill> {
     let mut paths = find_skill_md(workspace);
     if let Some(home) = dirs::home_dir() {
         paths.extend(find_skill_md(&home));
+    }
+    for plugin in crate::plugins::discover_plugins(workspace) {
+        paths.extend(plugin.skills);
     }
 
     for path in paths {
