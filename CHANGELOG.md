@@ -4,6 +4,19 @@ All notable changes to Raven are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.9] - 2026-08-26
+
+### Added
+
+- **Agent Plugins v1.0.0 (skills-only)** — Raven now loads conformant plugin
+  packages from `~/.raven/plugins/` and `.raven/plugins/`. Each plugin's
+  `plugin.json` manifest is validated against the closed Agent Plugins schema
+  (canonical `$schema`, name constraints, metadata types), and its skills are
+  discovered from the fixed `skills/` location and surfaced through the
+  existing `skill_search` / `skill_load` tools. Path containment is enforced
+  so plugin files cannot resolve outside the plugin root. MCP servers and
+  client extensions are ignored per the spec's incremental-adoption rules.
+
 ## [0.5.8] - 2026-08-26
 
 ### Fixed
@@ -279,7 +292,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Bumped `anydoc` 0.1.8 → 0.1.9.
 
-[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.5.8...HEAD
+[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.5.9...HEAD
+[0.5.9]: https://github.com/raythurman2386/raven/compare/v0.5.8...v0.5.9
 [0.5.8]: https://github.com/raythurman2386/raven/compare/v0.5.7...v0.5.8
 [0.5.7]: https://github.com/raythurman2386/raven/compare/v0.5.6...v0.5.7
 [0.5.6]: https://github.com/raythurman2386/raven/compare/v0.5.5...v0.5.6
