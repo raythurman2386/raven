@@ -157,6 +157,7 @@ async fn spawn_mock_status(
             let reason = match status {
                 503 => "Service Unavailable",
                 429 => "Too Many Requests",
+                400 => "Bad Request",
                 _ => "OK",
             };
             (status, reason, body)
@@ -1385,4 +1386,169 @@ async fn same_file_edits_in_one_turn_are_not_lost() {
     // The turn ended with the final text answer.
     let last = agent.messages.last().unwrap();
     assert_eq!(last.content.as_deref(), Some("done"));
+}
+
+#[tokio::test]
+async fn stream_options_400_falls_back_and_retries() {
+    // A strict provider that rejects `stream_options.include_usage` with a
+    // 400 must not fail the turn: the field is stripped, the request is
+    // retried immediately without it, and usage calibration is disabled for
+    // this provider (estimator runs uncalibrated — graceful fallback).
+    let tmp = tempfile::tempdir().unwrap();
+    let reject =
+        r#"{"error":{"message":"Unknown field: stream_options","type":"invalid_request_error"}}"#;
+    let ok_round = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"fallback ok\"}}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let (base, _h) = spawn_mock_status(vec![(400, reject), (200, ok_round)]).await;
+    let mut agent = Agent::new(settings_for(tmp.path(), &base)).unwrap();
+    assert!(agent.usage_supported, "starts optimistic");
+    let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+    agent.run("hello", tx).await.unwrap();
+    let mut events = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        events.push(ev);
+    }
+    // The retried (field-less) request succeeded and the turn finished clean.
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, AgentEvent::TextDelta(s) if s == "fallback ok")));
+    assert!(events.iter().any(|e| matches!(e, AgentEvent::Done)));
+    assert!(!events.iter().any(|e| matches!(e, AgentEvent::Error(_))));
+    // The incompatibility was recorded, so later requests skip the field.
+    assert!(!agent.usage_supported);
+    // Survives Agent rebuild (TUI/ACP rebuild every turn).
+    let agent2 = Agent::new(settings_for(tmp.path(), &base)).unwrap();
+    assert!(
+        !agent2.usage_supported,
+        "usage_supported=false must persist across Agent::new for the same base URL"
+    );
+}
+
+#[tokio::test]
+async fn stream_options_400_after_transient_does_not_exhaust_retries() {
+    // Two 503s then a stream_options 400 must still succeed: the 400 strip
+    // path must not consume a transient-retry slot.
+    let tmp = tempfile::tempdir().unwrap();
+    let reject =
+        r#"{"error":{"message":"Unknown field: stream_options","type":"invalid_request_error"}}"#;
+    let unavailable = r#"{"error":{"message":"busy"}}"#;
+    let ok_round = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"recovered\"}}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let (base, _h) = spawn_mock_status(vec![
+        (503, unavailable),
+        (503, unavailable),
+        (400, reject),
+        (200, ok_round),
+    ])
+    .await;
+    let mut agent = Agent::new(settings_for(tmp.path(), &base)).unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+    agent.run("hello", tx).await.unwrap();
+    let mut events = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        events.push(ev);
+    }
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, AgentEvent::TextDelta(s) if s == "recovered")));
+    assert!(events.iter().any(|e| matches!(e, AgentEvent::Done)));
+    assert!(!events.iter().any(|e| matches!(e, AgentEvent::Error(_))));
+}
+
+#[tokio::test]
+async fn usage_chunk_feeds_calibration() {
+    // A provider that reports usage on the final empty-choices chunk feeds
+    // one calibration sample per request; the clamp path then uses the
+    // corrected estimate.
+    let tmp = tempfile::tempdir().unwrap();
+    let round = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"measured\"}}]}\n\n",
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":321,\"completion_tokens\":5,\"total_tokens\":326}}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let (base, _h) = spawn_mock(vec![round]).await;
+    let mut agent = Agent::new(settings_for(tmp.path(), &base)).unwrap();
+    assert_eq!(agent.calibration.samples(), 0);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+    agent.run("measure me", tx).await.unwrap();
+    while let Ok(_ev) = rx.try_recv() {}
+    // Exactly one sample was observed from the streamed usage chunk.
+    assert_eq!(agent.calibration.samples(), 1);
+    assert!(agent.calibration.offset().is_some());
+    // correct() rounds the raw f64 offset; offset() returns the pre-rounded
+    // i64. At a clamp boundary (x.5) the two can differ by one — allow that.
+    let off = agent.calibration.offset().unwrap();
+    let corrected = agent.calibration.correct(1000) as i64;
+    assert!(
+        (corrected - (1000i64 + off)).abs() <= 1,
+        "correct(1000)={} should match 1000+offset({off}) within rounding",
+        agent.calibration.correct(1000)
+    );
+}
+
+#[tokio::test]
+async fn no_usage_reported_leaves_calibration_inert() {
+    // Providers that never send usage keep the calibration inert: zero
+    // samples, passthrough estimates — the graceful fallback.
+    let tmp = tempfile::tempdir().unwrap();
+    let round = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"plain\"}}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let (base, _h) = spawn_mock(vec![round]).await;
+    let mut agent = Agent::new(settings_for(tmp.path(), &base)).unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+    agent.run("hello", tx).await.unwrap();
+    while let Ok(_ev) = rx.try_recv() {}
+    assert_eq!(agent.calibration.samples(), 0);
+    assert_eq!(agent.calibration.offset(), None);
+    assert_eq!(agent.calibration.correct(555), 555);
+}
+
+#[tokio::test]
+async fn streaming_request_includes_usage_and_feeds_calibration_offline() {
+    // Offline (completion_source) end-to-end: the outgoing streaming body
+    // must request `stream_options.include_usage`, and the usage chunk in the
+    // scripted response must feed exactly one calibration sample — no real
+    // sockets required.
+    let tmp = tempfile::tempdir().unwrap();
+    let seen_body = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let capture = seen_body.clone();
+    let mut agent = Agent::new(settings_for(tmp.path(), "http://127.0.0.1:1"))
+        .unwrap()
+        .with_completion_source(Box::new(move |body: &serde_json::Value| {
+            *capture.lock().unwrap() = body.to_string();
+            concat!(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"measured\"}}]}\n\n",
+                "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":321,\"completion_tokens\":5,\"total_tokens\":326}}\n\n",
+                "data: [DONE]\n\n",
+            )
+            .to_string()
+        }));
+    assert_eq!(agent.calibration.samples(), 0);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+    agent.run("measure me", tx).await.unwrap();
+    while let Ok(_ev) = rx.try_recv() {}
+
+    // Request side: include_usage was requested on the streaming body.
+    let sent = seen_body.lock().unwrap().clone();
+    assert!(
+        sent.contains("include_usage"),
+        "streaming request should set include_usage: {sent}"
+    );
+    // Response side: the usage chunk fed exactly one calibration sample.
+    assert_eq!(agent.calibration.samples(), 1);
+    let off = agent.calibration.offset().expect("offset after one sample");
+    // correct() rounds the raw f64 offset; offset() returns the pre-rounded
+    // i64. At a clamp boundary (x.5) the two can differ by one — allow that.
+    let corrected = agent.calibration.correct(1000) as i64;
+    assert!(
+        (corrected - (1000i64 + off)).abs() <= 1,
+        "correct(1000)={} should match 1000+offset({off}) within rounding",
+        agent.calibration.correct(1000)
+    );
 }

@@ -18,6 +18,7 @@ use tokio::sync::mpsc;
 
 use super::core::Agent;
 use super::types::AgentEvent;
+use crate::tokenizer::TokenUsage;
 
 /// Parsed completion payload shared by stream and non-stream paths.
 #[derive(Debug, Default)]
@@ -28,6 +29,11 @@ pub(crate) struct ParsedCompletion {
     pub finish_reason: Option<String>,
     /// Provider-level error message extracted from the body (if any).
     pub error: Option<String>,
+    /// Real token usage reported by the provider, when the response carries a
+    /// `usage` object (non-streaming responses, or the final streaming chunk
+    /// when `stream_options.include_usage` was requested). `None` when the
+    /// provider omitted it — callers fall back to the estimator.
+    pub usage: Option<TokenUsage>,
 }
 
 /// Feed raw bytes into an SSE line buffer, parsing complete lines as `\n`
@@ -154,6 +160,7 @@ pub(crate) struct StreamAccumulator {
     tool_acc: BTreeMap<u32, (String, String, String)>,
     finish_reason: Option<String>,
     error: Option<String>,
+    usage: Option<TokenUsage>,
 }
 
 impl StreamAccumulator {
@@ -173,6 +180,13 @@ impl StreamAccumulator {
         if let Some(err) = extract_api_error(&v) {
             self.error = Some(err);
             return;
+        }
+        // Usage arrives on a final chunk with an EMPTY `choices` array (the
+        // OpenAI `stream_options.include_usage` contract), so it must be
+        // parsed before the `choices` early-return below — otherwise the
+        // calibration sample is silently dropped.
+        if let Some(u) = TokenUsage::from_json(&v) {
+            self.usage = Some(u);
         }
         let Some(choices) = v.get("choices").and_then(|c| c.as_array()) else {
             return;
@@ -228,6 +242,7 @@ impl StreamAccumulator {
             tool_acc: self.tool_acc,
             finish_reason: self.finish_reason,
             error: self.error,
+            usage: self.usage,
         }
     }
 }
@@ -265,11 +280,21 @@ pub(crate) async fn process_non_stream_json(
         };
     }
 
+    // Usage is read before the `choices` early-returns so a response that
+    // carries `usage` but an unusual/empty `choices` still yields its sample.
+    let usage = TokenUsage::from_json(v);
+
     let Some(choices) = v.get("choices").and_then(|c| c.as_array()) else {
-        return ParsedCompletion::default();
+        return ParsedCompletion {
+            usage,
+            ..Default::default()
+        };
     };
     let Some(choice) = choices.first() else {
-        return ParsedCompletion::default();
+        return ParsedCompletion {
+            usage,
+            ..Default::default()
+        };
     };
 
     if let Some(fr) = choice.get("finish_reason").and_then(|f| f.as_str()) {
@@ -318,6 +343,7 @@ pub(crate) async fn process_non_stream_json(
         tool_acc,
         finish_reason,
         error,
+        usage,
     }
 }
 
@@ -501,5 +527,64 @@ data: [DONE]
         assert_eq!(args_to_string(&json!({"a": 1})), r#"{"a":1}"#);
         assert_eq!(args_to_string(&Value::Null), "");
         assert_eq!(args_to_string(&json!("{\"a\":1}")), r#"{"a":1}"#);
+    }
+
+    // ── usage parsing ───────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn sse_usage_chunk_with_empty_choices_is_parsed() {
+        // The OpenAI `stream_options.include_usage` contract: the final chunk
+        // carries `usage` and an EMPTY `choices` array. The accumulator must
+        // capture the usage before its `choices` early-return.
+        let (tx, _rx) = mpsc::channel(8);
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n",
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":321,\"completion_tokens\":9,\"total_tokens\":330}}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let parsed = process_stream_text(body, &tx).await;
+        assert_eq!(parsed.content, "hi");
+        let u = parsed.usage.expect("usage chunk must be captured");
+        assert_eq!(u.prompt_tokens, 321);
+        assert_eq!(u.completion_tokens, 9);
+        assert_eq!(u.total_tokens, 330);
+    }
+
+    #[tokio::test]
+    async fn sse_usage_absent_leaves_none() {
+        let (tx, _rx) = mpsc::channel(8);
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let parsed = process_stream_text(body, &tx).await;
+        assert!(parsed.usage.is_none(), "no usage → None (fallback path)");
+    }
+
+    #[tokio::test]
+    async fn non_stream_usage_is_parsed() {
+        let (tx, _rx) = mpsc::channel(8);
+        let v = json!({
+            "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 500, "completion_tokens": 10, "total_tokens": 510}
+        });
+        let parsed = process_non_stream_json(&v, &tx).await;
+        let u = parsed.usage.expect("non-streaming usage should parse");
+        assert_eq!(u.prompt_tokens, 500);
+        assert_eq!(u.total_tokens, 510);
+    }
+
+    #[tokio::test]
+    async fn non_stream_without_choices_still_yields_usage() {
+        // Degenerate response: usage present, choices missing entirely. The
+        // usage must survive the early-return.
+        let (tx, _rx) = mpsc::channel(8);
+        let v = json!({
+            "usage": {"prompt_tokens": 77, "completion_tokens": 3, "total_tokens": 80}
+        });
+        let parsed = process_non_stream_json(&v, &tx).await;
+        assert!(parsed.content.is_empty());
+        let u = parsed.usage.expect("usage must survive missing choices");
+        assert_eq!(u.prompt_tokens, 77);
     }
 }

@@ -482,10 +482,12 @@ impl Agent {
                 s
             }
             Err(e) => {
+                // Deterministic failures already reach the model/transcript;
+                // keep them at debug under default RUST_LOG=warn.
                 if e.is_transient() {
                     tracing::warn!("Transient tool error (retryable): {e}");
                 } else {
-                    tracing::error!("Tool error: {e}");
+                    tracing::debug!("Tool error: {e}");
                 }
                 let retry_hint = if e.is_transient() {
                     " This may be transient; a single retry is reasonable."

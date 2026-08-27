@@ -58,7 +58,7 @@ fn bench(c: &mut Criterion) {
         b.iter_batched(
             || msgs.clone(),
             |mut m| {
-                rt.block_on(compact_if_needed_llm(&mut m, 8192, 0.1, |_| {
+                rt.block_on(compact_if_needed_llm(&mut m, 8192, 0.1, None, |_| {
                     Box::pin(async { None })
                 }))
             },
@@ -71,7 +71,7 @@ fn bench(c: &mut Criterion) {
         b.iter_batched(
             || msgs.clone(),
             |mut m| {
-                rt.block_on(compact_if_needed_llm(&mut m, 8192, 0.1, |_| {
+                rt.block_on(compact_if_needed_llm(&mut m, 8192, 0.1, None, |_| {
                     Box::pin(async { None })
                 }))
             },
@@ -84,7 +84,7 @@ fn bench(c: &mut Criterion) {
         b.iter_batched(
             || msgs.clone(),
             |mut m| {
-                rt.block_on(compact_if_needed_llm(&mut m, 128_000, 0.75, |_| {
+                rt.block_on(compact_if_needed_llm(&mut m, 128_000, 0.75, None, |_| {
                     Box::pin(async { None })
                 }))
             },

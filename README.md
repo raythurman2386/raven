@@ -112,6 +112,7 @@ switch providers and models from the editor's model selector. See
 | [docs/configuration.md](docs/configuration.md) | Users | Config, env vars, providers, API keys, AGENTS.md |
 | [docs/example.config.toml](docs/example.config.toml) | Users | Fully-commented reference config |
 | [docs/zed_connection.md](docs/zed_connection.md) | Users | Connect Raven to Zed via ACP |
+| [docs/omarchy.md](docs/omarchy.md) | Users (Omarchy Linux) | Default agent + Agents bar panel integration |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Users | Common failure modes (Windows, streams, sandbox, ACP) |
 | [docs/tools.md](docs/tools.md) | Users + Contributors | Tool contracts, parameters, sandbox rules |
 | [docs/security.md](docs/security.md) | Security reviewers | Threat model, defense layers, platform caveats |

@@ -141,3 +141,28 @@ If the editor shows nothing, run `raven --acp` in a terminal and type a JSON-RPC
   `RAVEN_API_KEY` (universal) or the provider-scoped var
   (`OPENROUTER_API_KEY` / `OLLAMA_API_KEY`), or `api_key`/`api_key_env` in
   `[providers.<name>]` in `config.toml`. See `docs/configuration.md`.
+
+---
+
+## Omarchy Agents panel / default agent
+
+On Omarchy Linux, Raven is wired in with local wrappers and a cloned
+`omarchy.agents` plugin (not stock). Setup, Raven-only providers, bar
+placement, and collector quirks are documented in
+[`docs/omarchy.md`](omarchy.md).
+
+---
+
+## TUI: tool errors flash over the input bar
+
+Sandbox denials (e.g. `Path outside workspace`) and other tool failures are
+returned to the model as normal tool results and also show in the transcript
+tool block. They should **not** paint into the `❯` input box.
+
+If you still see a one-frame flash of `Tool error: …` over the chat bar on an
+older build, that was tracing writing to the shared TTY while the cursor sat
+in the input field. Current Raven appends tracing to `~/.raven/raven.log`
+whenever **stdout is a TTY** (interactive TUI and terminal-attached headless
+alike). When stdout is piped (CI, `raven … | …`), tracing still goes to
+stderr. `RUST_LOG` only sets verbosity (e.g. `warn`, `raven=debug`); it does
+not change the log path.

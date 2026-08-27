@@ -4,6 +4,37 @@ All notable changes to Raven are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.5.12] - 2026-08-27
+
+### Added
+
+- **Usage-based token calibration** — streaming requests ask for
+  `stream_options.include_usage`; real `prompt_tokens` from the provider
+  feed an additive EMA that corrects compaction and `max_tokens` clamping.
+  Providers that omit usage, or reject `stream_options` with HTTP 400, fall
+  back to the uncalibrated estimator (incompatibility cached process-wide
+  per base URL so TUI/ACP turns do not re-probe every prompt).
+- **Omarchy integration guide** — `docs/omarchy.md` covers wiring Raven as
+  the default agent and Agents bar usage collector on Omarchy Linux.
+- **Brand mark** — `assets/rvn.svg` monochrome Raven mark (`currentColor`).
+
+### Fixed
+
+- **Tool errors no longer flash over the TUI input bar** — sandbox denials
+  such as `Path outside workspace` were logged with `tracing` to stderr on
+  the same TTY as the alternate screen, so the line painted at the cursor
+  (inside the `❯` chat box) and vanished on the next redraw. When stdout is
+  a TTY, tracing appends to `~/.raven/raven.log`; deterministic tool
+  failures are `debug` rather than `error` (they already surface in the
+  transcript tool block and as the tool result).
+- **`stream_options` 400 fallback no longer burns a retry slot** — stripping
+  the field after a strict-provider rejection retries immediately without
+  consuming the transient-attempt budget.
+- **Toolless summary responses no longer skew calibration** — max-iter
+  `finish_with_summary` does not observe usage into the tools-schema EMA.
+
 ## [0.5.11] - 2026-08-27
 
 ### Fixed

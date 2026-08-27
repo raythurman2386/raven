@@ -13,7 +13,20 @@
 //! - Tool-call / tool-result pairs are never split.
 
 use crate::agent::ChatMessage;
+use crate::tokenizer::UsageCalibration;
 pub use crate::tokenizer::{history_tokens, message_tokens};
+
+/// History token estimate with optional usage calibration applied.
+///
+/// Compaction compares its before/after counts against the same soft limit the
+/// agent's clamp path uses, so both must apply the same correction. With no
+/// calibration (provider never reported usage) this is the raw estimator.
+fn calibrated_tokens(messages: &[ChatMessage], calib: Option<&UsageCalibration>) -> usize {
+    match calib {
+        None => history_tokens(messages),
+        Some(c) => c.correct(history_tokens(messages)),
+    }
+}
 
 /// Infer a model's context window from its name (fallback when API is unreachable).
 ///
@@ -245,13 +258,14 @@ fn prepare_compaction(
     messages: &mut [ChatMessage],
     context_window: usize,
     compact_threshold: f32,
+    calib: Option<&UsageCalibration>,
 ) -> CompactionOutcome {
     // Reserve for model output.
     let output_reserve = (context_window / 8).max(1024);
     let soft_limit =
         ((context_window.saturating_sub(output_reserve)) as f32 * compact_threshold) as usize;
 
-    let before = history_tokens(messages);
+    let before = calibrated_tokens(messages, calib);
     if before <= soft_limit {
         return CompactionOutcome::None;
     }
@@ -260,7 +274,7 @@ fn prepare_compaction(
     // for tool messages older than the last 3 turns. This is cheaper than
     // full compaction and may bring us under the limit without summarizing.
     prune_tool_results(messages, 3);
-    let after_prune = history_tokens(messages);
+    let after_prune = calibrated_tokens(messages, calib);
     if after_prune <= soft_limit {
         return CompactionOutcome::PrunedOnly(before, after_prune);
     }
@@ -472,6 +486,7 @@ fn assemble_compaction(
     messages: &mut Vec<ChatMessage>,
     plan: CompactionPlan,
     llm_summary: Option<String>,
+    calib: Option<&UsageCalibration>,
 ) -> CompactionReport {
     let facts = extract_facts(messages.first(), &plan.middle);
     let facts_block = format_facts(&facts);
@@ -518,7 +533,7 @@ fn assemble_compaction(
     compacted.push(summary_assistant);
     compacted.extend(tail);
 
-    let after = history_tokens(&compacted);
+    let after = calibrated_tokens(&compacted, calib);
     // Compaction must never grow the history. For degenerate histories — many
     // tiny, near-identical messages where the extractive summary's per-line
     // prefixes and newlines cost more than the verbatim middle they replace —
@@ -551,11 +566,12 @@ pub async fn compact_if_needed_llm(
     messages: &mut Vec<ChatMessage>,
     context_window: usize,
     compact_threshold: f32,
+    calib: Option<&UsageCalibration>,
     summarizer: impl FnOnce(
         Vec<ChatMessage>,
     ) -> futures_util::future::BoxFuture<'static, Option<String>>,
 ) -> Option<CompactionReport> {
-    match prepare_compaction(messages, context_window, compact_threshold) {
+    match prepare_compaction(messages, context_window, compact_threshold, calib) {
         CompactionOutcome::None => None,
         // Soft-pruning alone sufficed — no LLM round-trip needed.
         CompactionOutcome::PrunedOnly(before, after) => Some(CompactionReport {
@@ -567,7 +583,7 @@ pub async fn compact_if_needed_llm(
             // Clone the middle so the extractive fallback still has it if the
             // LLM summarizer returns `None`.
             let summary = summarizer(plan.middle.clone()).await;
-            Some(assemble_compaction(messages, plan, summary))
+            Some(assemble_compaction(messages, plan, summary, calib))
         }
     }
 }
@@ -799,7 +815,7 @@ mod tests {
         context_window: usize,
         threshold: f32,
     ) -> Option<(usize, usize)> {
-        compact_if_needed_llm(msgs, context_window, threshold, |_middle| {
+        compact_if_needed_llm(msgs, context_window, threshold, None, |_middle| {
             Box::pin(async { None })
         })
         .await
@@ -1048,7 +1064,7 @@ mod tests {
             msgs.push(msg("user", &format!("message number {i}")));
             msgs.push(msg("assistant", &format!("response to message {i}")));
         }
-        let report = compact_if_needed_llm(&mut msgs, 8192, 0.1, |_middle| {
+        let report = compact_if_needed_llm(&mut msgs, 8192, 0.1, None, |_middle| {
             Box::pin(async { Some("LLM distilled: 200 turns of task work.".to_string()) })
         })
         .await
@@ -1082,7 +1098,7 @@ mod tests {
                 &format!("Added scoped permissions for user {i} in the auth middleware. Updated the route guards to enforce them."),
             ));
         }
-        let report = compact_if_needed_llm(&mut msgs, 8192, 0.1, |_middle| {
+        let report = compact_if_needed_llm(&mut msgs, 8192, 0.1, None, |_middle| {
             Box::pin(async { None }) // summarizer failed → extractive fallback
         })
         .await
@@ -1214,10 +1230,11 @@ mod tests {
                 "--- run_tests (cargo) exit=0 ---\nok",
             ));
         }
-        let report =
-            compact_if_needed_llm(&mut msgs, 8192, 0.1, |_middle| Box::pin(async { None }))
-                .await
-                .unwrap();
+        let report = compact_if_needed_llm(&mut msgs, 8192, 0.1, None, |_middle| {
+            Box::pin(async { None })
+        })
+        .await
+        .unwrap();
         assert!(
             report.note.contains("paths") || report.note.contains("last verify"),
             "note should surface what was kept: {}",

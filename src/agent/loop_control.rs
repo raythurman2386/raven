@@ -115,7 +115,9 @@ impl Agent {
         });
 
         // Clamp max_tokens so the summary request fits the context window.
-        let prompt_est = history_tokens(&self.messages);
+        // The estimate is calibrated (when usage samples exist) so the clamp
+        // tracks the loaded model's real tokenizer, not cl100k.
+        let prompt_est = self.calibration.correct(history_tokens(&self.messages));
         let margin = 64usize;
         let clamped_max = super::core::clamp_max_tokens(
             self.settings.max_tokens,
@@ -126,20 +128,23 @@ impl Agent {
 
         // Toolless request: no `tools`/`tool_choice`, so the model can only
         // produce a final text answer (no tool calls to burn more iterations).
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": self.settings.model,
             "messages": &self.messages,
             "temperature": self.settings.temperature_json(),
             "max_tokens": clamped_max,
             "stream": !self.settings.no_stream,
         });
+        if !self.settings.no_stream && self.usage_supported {
+            body["stream_options"] = serde_json::json!({"include_usage": true});
+        }
 
         let url = format!(
             "{}/chat/completions",
             self.settings.base_url().trim_end_matches('/')
         );
 
-        let resp = match self.send_with_retry(&url, &body, tx).await {
+        let resp = match self.send_with_retry(&url, &mut body, tx).await {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!("summary request failed after budget exhaustion: {e}");
@@ -149,6 +154,8 @@ impl Agent {
 
         // Any tool calls parsed here are ignored — with no tools advertised the
         // model cannot legitimately emit one; we only keep the text content.
+        // Do not observe usage here: this request has no tools schema, so its
+        // prompt_tokens would skew the EMA used for tool-bearing clamps.
         let parsed = if self.settings.no_stream {
             self.process_non_stream(resp, tx).await
         } else {

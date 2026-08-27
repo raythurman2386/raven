@@ -67,6 +67,8 @@
 
 use std::sync::OnceLock;
 
+use serde_json::Value;
+
 /// GPT-4-style pre-tokenization regex.
 ///
 /// Splits text into:
@@ -159,6 +161,123 @@ pub fn message_tokens(msg: &crate::agent::ChatMessage) -> usize {
 /// Total token count across a message history.
 pub fn history_tokens(messages: &[crate::agent::ChatMessage]) -> usize {
     messages.iter().map(message_tokens).sum()
+}
+
+/// Real token usage reported by the provider for one request.
+///
+/// OpenAI-compatible endpoints return this in the `usage` field of a
+/// non-streaming response, or in the final streaming chunk (an empty-`choices`
+/// chunk sent when the request sets `stream_options: {"include_usage": true}`).
+/// Ollama, llama.cpp-server, and vLLM all emit these fields on their
+/// OpenAI-compatible endpoints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TokenUsage {
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub total_tokens: u64,
+}
+
+impl TokenUsage {
+    /// Extract usage from a response (or streaming chunk) JSON value.
+    ///
+    /// Returns `None` when the payload carries no usable `usage` object —
+    /// older Ollama builds, strict proxies, or a chunk that is pure content —
+    /// so callers fall back to the estimator. A `usage` with a missing or
+    /// zero `prompt_tokens` is treated as absent: every real prompt costs at
+    /// least one token, so zero means the field is a placeholder.
+    pub fn from_json(v: &Value) -> Option<Self> {
+        let u = v.get("usage")?;
+        let prompt_tokens = u.get("prompt_tokens")?.as_u64()?;
+        if prompt_tokens == 0 {
+            return None;
+        }
+        Some(Self {
+            prompt_tokens,
+            completion_tokens: u
+                .get("completion_tokens")
+                .and_then(|c| c.as_u64())
+                .unwrap_or(0),
+            total_tokens: u
+                .get("total_tokens")
+                .and_then(|t| t.as_u64())
+                .unwrap_or(prompt_tokens),
+        })
+    }
+}
+
+/// Running correction of the estimator against real provider usage.
+///
+/// Each response that reports `usage.prompt_tokens` yields one sample:
+/// `offset = real − estimated` for the same prompt. Samples are clamped to a
+/// sanity band around the estimate (see [`UsageCalibration::observe`]) and
+/// folded into an exponential moving average. [`UsageCalibration::correct`]
+/// then adds that offset to any raw estimate, so compaction triggering and
+/// `max_tokens` clamping track the tokenizer of the model actually loaded
+/// (Llama, Mistral, Qwen, …) instead of the cl100k_base calibration the
+/// estimator was tuned against.
+///
+/// The correction is deliberately **additive**, not multiplicative: the
+/// dominant, persistent error is a constant the estimator never sees (the
+/// serialized tools schema and per-message role framing), which an additive
+/// offset absorbs exactly. A ratio would also be unstable when the estimator
+/// is near zero.
+///
+/// With no samples the calibration is inert and every estimate passes through
+/// unchanged — the graceful fallback for providers that omit `usage`.
+#[derive(Debug, Default, Clone)]
+pub struct UsageCalibration {
+    offset_ema: Option<f64>,
+    samples: u32,
+}
+
+impl UsageCalibration {
+    /// EMA smoothing factor. 0.3 ≈ a ~3-sample memory: responsive enough to
+    /// track a mid-session model switch, stable enough to shrug off one
+    /// outlier sample.
+    const ALPHA: f64 = 0.3;
+
+    /// Record one `(estimated, real)` sample pair.
+    ///
+    /// `estimated` must be the estimator's count for the same prompt the
+    /// provider measured (including any request-only reminders). The raw
+    /// offset is clamped to `[-0.5 × estimated, +2 × estimated]` before
+    /// averaging so a bogus or mismatched usage report cannot dominate the
+    /// EMA. Samples with a zero side are ignored (nothing to learn from).
+    pub fn observe(&mut self, estimated: usize, real: usize) {
+        if estimated == 0 || real == 0 {
+            return;
+        }
+        let est = estimated as f64;
+        let raw = real as f64 - est;
+        let clamped = raw.clamp(-0.5 * est, 2.0 * est);
+        self.offset_ema = Some(match self.offset_ema {
+            None => clamped,
+            Some(prev) => prev + Self::ALPHA * (clamped - prev),
+        });
+        self.samples += 1;
+    }
+
+    /// Apply the calibration to an estimate.
+    ///
+    /// Uncalibrated (no samples yet) the estimate passes through unchanged.
+    /// The result is floored at 1 so a strongly negative offset can never
+    /// produce a zero or negative token count.
+    pub fn correct(&self, estimated: usize) -> usize {
+        match self.offset_ema {
+            None => estimated,
+            Some(off) => ((estimated as f64 + off).round() as usize).max(1),
+        }
+    }
+
+    /// Current additive offset in tokens, if any samples have been observed.
+    pub fn offset(&self) -> Option<i64> {
+        self.offset_ema.map(|o| o.round() as i64)
+    }
+
+    /// Number of samples folded into the calibration so far.
+    pub fn samples(&self) -> u32 {
+        self.samples
+    }
 }
 
 #[cfg(test)]
@@ -578,5 +697,106 @@ fn do_thing(x: i32) -> i32 {
         // The estimator counts the XML text as-is. A real tokenizer with
         // special-token injection would produce a slightly higher count.
         assert!(estimated >= 15);
+    }
+
+    // ── TokenUsage parsing ──────────────────────────────────────────────
+
+    #[test]
+    fn token_usage_from_json_parses_all_fields() {
+        let v = serde_json::json!({
+            "usage": {"prompt_tokens": 1234, "completion_tokens": 56, "total_tokens": 1290}
+        });
+        let u = TokenUsage::from_json(&v).expect("usage should parse");
+        assert_eq!(u.prompt_tokens, 1234);
+        assert_eq!(u.completion_tokens, 56);
+        assert_eq!(u.total_tokens, 1290);
+    }
+
+    #[test]
+    fn token_usage_missing_fields_fall_back() {
+        // total_tokens missing → defaults to prompt_tokens.
+        let v = serde_json::json!({"usage": {"prompt_tokens": 42}});
+        let u = TokenUsage::from_json(&v).expect("usage should parse");
+        assert_eq!(u.prompt_tokens, 42);
+        assert_eq!(u.completion_tokens, 0);
+        assert_eq!(u.total_tokens, 42);
+    }
+
+    #[test]
+    fn token_usage_absent_or_zero_is_none() {
+        // No usage object at all (older Ollama, plain content chunks).
+        assert!(TokenUsage::from_json(&serde_json::json!({"choices": []})).is_none());
+        // usage present but empty.
+        assert!(TokenUsage::from_json(&serde_json::json!({"usage": {}})).is_none());
+        // Zero prompt_tokens is a placeholder, not a measurement.
+        assert!(TokenUsage::from_json(&serde_json::json!({
+            "usage": {"prompt_tokens": 0, "completion_tokens": 5, "total_tokens": 5}
+        }))
+        .is_none());
+    }
+
+    // ── UsageCalibration math ───────────────────────────────────────────
+
+    #[test]
+    fn calibration_is_inert_without_samples() {
+        let calib = UsageCalibration::default();
+        assert_eq!(calib.offset(), None);
+        assert_eq!(calib.samples(), 0);
+        // Passthrough: uncalibrated estimates are returned unchanged.
+        assert_eq!(calib.correct(777), 777);
+        assert_eq!(calib.correct(0), 0);
+    }
+
+    #[test]
+    fn calibration_single_sample_shifts_by_offset() {
+        let mut cal = UsageCalibration::default();
+        cal.observe(1000, 1200);
+        assert_eq!(cal.samples(), 1);
+        assert_eq!(cal.offset(), Some(200));
+        assert_eq!(cal.correct(1000), 1200);
+        // The offset is additive and applies to other estimates too.
+        assert_eq!(cal.correct(2000), 2200);
+    }
+
+    #[test]
+    fn calibration_ema_smooths_multiple_samples() {
+        let mut cal = UsageCalibration::default();
+        cal.observe(1000, 1200); // offset 200 → EMA 200
+        cal.observe(1000, 1400); // raw 400 → EMA 200 + 0.3*(400-200) = 260
+        assert_eq!(cal.samples(), 2);
+        assert_eq!(cal.offset(), Some(260));
+        assert_eq!(cal.correct(1000), 1260);
+    }
+
+    #[test]
+    fn calibration_clamps_outlier_samples() {
+        let mut high = UsageCalibration::default();
+        high.observe(100, 1000); // raw +900 clamped to +200 (2× est)
+        assert_eq!(high.offset(), Some(200));
+
+        let mut low = UsageCalibration::default();
+        low.observe(1000, 100); // raw −900 clamped to −500 (−0.5× est)
+        assert_eq!(low.offset(), Some(-500));
+    }
+
+    #[test]
+    fn correction_never_drops_below_one() {
+        let mut cal = UsageCalibration::default();
+        // Push the offset strongly negative.
+        for _ in 0..10 {
+            cal.observe(1000, 500); // offset −500 (at the clamp edge)
+        }
+        // A tiny estimate must not correct to zero or below.
+        assert_eq!(cal.correct(0), 1);
+        assert_eq!(cal.correct(1), 1);
+    }
+
+    #[test]
+    fn calibration_ignores_zero_sided_samples() {
+        let mut cal = UsageCalibration::default();
+        cal.observe(0, 500);
+        cal.observe(500, 0);
+        assert_eq!(cal.samples(), 0);
+        assert_eq!(cal.offset(), None);
     }
 }

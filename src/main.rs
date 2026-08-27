@@ -35,7 +35,9 @@
 
 use anyhow::Result;
 use clap::Parser;
+use std::io::IsTerminal;
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use raven::agent::{run_parallel, Agent, ChatMessage};
 use raven::config::{
@@ -190,6 +192,47 @@ enum SelfSubcommand {
     Update(raven::update::UpdateArgs),
 }
 
+/// Initialize tracing: default filter `warn` when `RUST_LOG` is unset.
+///
+/// When stdout is a TTY, append to `~/.raven/raven.log` — stderr shares that
+/// TTY with the TUI alternate screen, so a log line would paint at the cursor
+/// (the input bar). When stdout is piped, write to stderr instead.
+fn init_tracing() {
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
+
+    let use_file = std::io::stdout().is_terminal();
+    if use_file {
+        if let Some(home) = dirs::home_dir() {
+            let dir = home.join(".raven");
+            if std::fs::create_dir_all(&dir).is_ok() {
+                let path = dir.join("raven.log");
+                if let Ok(file) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&path)
+                {
+                    tracing_subscriber::fmt()
+                        .with_env_filter(filter)
+                        .with_writer(Mutex::new(file))
+                        .with_ansi(false)
+                        .with_target(false)
+                        .compact()
+                        .init();
+                    return;
+                }
+            }
+        }
+    }
+
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .with_target(false)
+        .compact()
+        .init();
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Load repo/CWD `.env` before clap reads RAVEN_* defaults so cloud keys
@@ -199,21 +242,7 @@ async fn main() -> Result<()> {
         load_dotenv_from(&cwd);
     }
 
-    // Default to `warn` when RUST_LOG is unset. EnvFilter::from_default_env()
-    // yields an EMPTY filter (suppressing even WARN/ERROR) when the var is
-    // missing, which silently dropped config-parse and session warnings.
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
-    // Write to stderr, NOT stdout. The TUI owns stdout (raw mode + alternate
-    // screen); a tracing line written to stdout mid-session corrupts the
-    // display and overlaps the input bar (e.g. a `WARN Transient tool error`
-    // from a failed tool call). stderr stays out of the alternate screen.
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_writer(std::io::stderr)
-        .with_target(false)
-        .compact()
-        .init();
+    init_tracing();
 
     let cli = Cli::parse();
 

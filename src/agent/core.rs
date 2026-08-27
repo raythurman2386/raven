@@ -9,7 +9,7 @@
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use tokio::sync::mpsc;
 
 use crate::config::{load_agents_md, Mode, Settings};
@@ -17,6 +17,7 @@ use crate::context::{compact_if_needed_llm, history_tokens};
 use crate::error::{cap_http_body, AgentError};
 use crate::memory;
 use crate::plan::Plan;
+use crate::tokenizer::{count_tokens, UsageCalibration, MSG_OVERHEAD};
 use crate::tools::{tool_definitions, Sandbox};
 
 use super::loop_control::{compute_reminders, summarize_request};
@@ -32,6 +33,28 @@ enum IterationOutcome {
 
 static TOOL_DEFS: OnceLock<serde_json::Value> = OnceLock::new();
 static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+/// Process-wide: whether `stream_options.include_usage` is tolerated per
+/// provider base URL. TUI/ACP rebuild `Agent` every turn, so this must live
+/// outside the struct or every prompt re-probes with a 400.
+static USAGE_COMPAT: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
+
+fn usage_compat_map() -> &'static Mutex<HashMap<String, bool>> {
+    USAGE_COMPAT.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn load_usage_supported(base_url: &str) -> bool {
+    usage_compat_map()
+        .lock()
+        .ok()
+        .and_then(|g| g.get(base_url).copied())
+        .unwrap_or(true)
+}
+
+fn store_usage_supported(base_url: &str, supported: bool) {
+    if let Ok(mut g) = usage_compat_map().lock() {
+        g.insert(base_url.to_string(), supported);
+    }
+}
 
 /// Shared HTTP client so each TUI send does not re-init TLS.
 fn shared_http_client() -> Result<reqwest::Client> {
@@ -272,6 +295,15 @@ pub struct Agent {
     /// soft limit (context refilled immediately). After a cap, auto-compaction
     /// is paused to avoid thrashing (Claude Code's thrashing protection).
     pub(crate) compact_thrash_count: u32,
+    /// Running correction of the token estimator against real provider usage.
+    /// Updated whenever a response reports `usage`; inert (passthrough) until
+    /// the first sample arrives, so providers without usage support are
+    /// unaffected.
+    pub(crate) calibration: UsageCalibration,
+    /// Whether the provider tolerates `stream_options.include_usage`.
+    /// Seeded from a process-wide cache keyed by base URL (TUI rebuilds
+    /// `Agent` every turn); flipped off on a 400 that blames `stream_options`.
+    pub(crate) usage_supported: bool,
     /// Test-only completion source. When set, `run()` bypasses HTTP entirely
     /// and pulls each completion body from this closure instead, so the agent
     /// loop can be driven offline with scripted responses. The closure
@@ -293,6 +325,7 @@ impl Agent {
             settings.sandbox_extra_rw.clone(),
         );
         let messages = vec![build_system_message(&settings)];
+        let usage_supported = load_usage_supported(settings.base_url());
         Ok(Self {
             settings,
             sandbox,
@@ -312,6 +345,8 @@ impl Agent {
             plan: None,
             current_step: 0,
             compact_thrash_count: 0,
+            calibration: UsageCalibration::default(),
+            usage_supported,
             #[cfg(test)]
             completion_source: None,
             client: shared_http_client()?,
@@ -503,6 +538,7 @@ impl Agent {
                 &mut self.messages,
                 self.settings.context_window,
                 self.settings.compact_threshold,
+                Some(&self.calibration),
                 move |middle| {
                     Box::pin(summarize_request(
                         client.clone(),
@@ -532,7 +568,22 @@ impl Agent {
             }
         }
 
-        let prompt_est = history_tokens(&self.messages);
+        // Estimate the prompt the provider will actually see (history plus
+        // request-only reminders), then apply the usage calibration once real
+        // samples exist. Uncalibrated this is the raw estimator, so providers
+        // that never report usage behave exactly as before.
+        let reminder_tokens: usize = reminders
+            .iter()
+            .map(|r| {
+                count_tokens(&format!("<raven_reminder>\n{r}\n</raven_reminder>")) + MSG_OVERHEAD
+            })
+            .sum();
+        // Raw estimate for this prompt (history + reminders). The calibration
+        // learns the gap between this and the provider's real count (tool
+        // schema + tokenizer differences), so samples are taken against the
+        // RAW estimate, while the clamp below uses the corrected figure.
+        let raw_est = history_tokens(&self.messages) + reminder_tokens;
+        let prompt_est = self.calibration.correct(raw_est);
         let margin = 64usize;
         let remaining = self
             .settings
@@ -544,7 +595,7 @@ impl Agent {
         // Ephemeral reminders go out as user nudges (not extra system
         // messages) so providers that only honor a single leading system
         // message still see them. They are request-only and never persisted.
-        let body = if reminders.is_empty() {
+        let mut body = if reminders.is_empty() {
             json!({
                 "model": self.settings.model,
                 "messages": request_messages_json(&self.messages),
@@ -575,6 +626,14 @@ impl Agent {
             })
         };
 
+        // Ask the provider for real token usage on streaming requests (the
+        // OpenAI `stream_options.include_usage` contract; non-streaming
+        // responses always carry `usage`). Skipped once a provider has
+        // rejected the field — see `send_with_retry`.
+        if !self.settings.no_stream && self.usage_supported {
+            body["stream_options"] = json!({"include_usage": true});
+        }
+
         let url = format!(
             "{}/chat/completions",
             self.settings.base_url().trim_end_matches('/')
@@ -598,7 +657,7 @@ impl Agent {
                 process_stream_text(&raw, tx).await
             }
         } else {
-            let resp = match self.send_with_retry(&url, &body, tx).await {
+            let resp = match self.send_with_retry(&url, &mut body, tx).await {
                 Ok(r) => r,
                 Err(e) => {
                     let _ = tx.send(AgentEvent::Error(e.to_string())).await;
@@ -613,7 +672,7 @@ impl Agent {
         };
         #[cfg(not(test))]
         let parsed: ParsedCompletion = {
-            let resp = match self.send_with_retry(&url, &body, tx).await {
+            let resp = match self.send_with_retry(&url, &mut body, tx).await {
                 Ok(r) => r,
                 Err(e) => {
                     let _ = tx.send(AgentEvent::Error(e.to_string())).await;
@@ -642,6 +701,22 @@ impl Agent {
             parsed.tool_acc.len(),
             parsed.finish_reason
         );
+
+        // Learn from real usage when the provider reported it: the sample is
+        // the gap between the raw estimate for THIS prompt and the provider's
+        // measured prompt_tokens. Without a usage report nothing is observed
+        // and the calibration stays inert (graceful fallback).
+        if let Some(u) = parsed.usage {
+            self.calibration.observe(raw_est, u.prompt_tokens as usize);
+            tracing::debug!(
+                "iter={} usage: prompt={} raw_est={} offset={:?} samples={}",
+                iter + 1,
+                u.prompt_tokens,
+                raw_est,
+                self.calibration.offset(),
+                self.calibration.samples()
+            );
+        }
 
         if let Some(err) = parsed.error {
             let msg = if parsed.finish_reason.as_deref() == Some("length") {
@@ -739,16 +814,22 @@ impl Agent {
 
     /// Build and send the request with auth headers, applying retry logic
     /// for transient failures (connection errors, 5xx, 429).
+    ///
+    /// Usage-request fallback: if the provider answers 400 and the error body
+    /// blames `stream_options`, the field is stripped, the incompatibility is
+    /// cached process-wide for this base URL, and the request is retried
+    /// without consuming a transient-retry slot.
     pub(crate) async fn send_with_retry(
-        &self,
+        &mut self,
         url: &str,
-        body: &Value,
+        body: &mut Value,
         tx: &mpsc::Sender<AgentEvent>,
     ) -> Result<reqwest::Response, AgentError> {
-        let max_retries = 3;
+        let max_retries = 3usize;
         let mut delay = std::time::Duration::from_secs(1);
+        let mut attempt = 0usize;
 
-        for attempt in 0..max_retries {
+        while attempt < max_retries {
             let mut req = self
                 .client
                 .post(url)
@@ -784,12 +865,35 @@ impl Agent {
                             body: cap_http_body(text),
                         });
                     }
+                    // 400 that blames `stream_options` = strip + disable +
+                    // retry immediately without burning a transient attempt.
+                    if status == 400 && body.get("stream_options").is_some() {
+                        let text = resp.text().await.unwrap_or_default();
+                        if text.contains("stream_options") {
+                            if let Some(obj) = body.as_object_mut() {
+                                obj.remove("stream_options");
+                            }
+                            self.usage_supported = false;
+                            store_usage_supported(self.settings.base_url(), false);
+                            tracing::info!(
+                                "provider rejected stream_options.include_usage (400); \
+                                 retrying without it — usage calibration disabled for this provider"
+                            );
+                            continue;
+                        }
+                        return Err(AgentError::HttpError {
+                            provider: self.settings.provider.name.clone(),
+                            status,
+                            body: cap_http_body(text),
+                        });
+                    }
                     // 5xx and 429 = transient — retry
                     if ((500..600).contains(&status) || status == 429) && attempt + 1 < max_retries
                     {
+                        attempt += 1;
                         let _ = tx
                             .send(AgentEvent::Retry {
-                                attempt: attempt + 1,
+                                attempt,
                                 delay_ms: delay.as_millis() as u64,
                             })
                             .await;
@@ -807,9 +911,10 @@ impl Agent {
                 }
                 Err(e) if e.is_connect() || e.is_timeout() => {
                     if attempt + 1 < max_retries {
+                        attempt += 1;
                         let _ = tx
                             .send(AgentEvent::Retry {
-                                attempt: attempt + 1,
+                                attempt,
                                 delay_ms: delay.as_millis() as u64,
                             })
                             .await;
