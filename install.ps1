@@ -61,8 +61,26 @@ function Detect-Platform {
 }
 
 function Get-LatestVersion {
-    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$REPO/releases/latest" -ErrorAction Stop
-    return $release.tag_name
+    # Follow the /releases/latest redirect instead of the API. The API endpoint
+    # is rate-limited to 60 req/hr per IP for unauthenticated clients, which
+    # breaks installs on shared/NAT'd networks; the redirect is not limited.
+    # HttpClient with AllowAutoRedirect=$false lets us read the Location header
+    # deterministically (Invoke-WebRequest throws on redirects).
+    $handler = [System.Net.Http.HttpClientHandler]::new()
+    $handler.AllowAutoRedirect = $false
+    $client = [System.Net.Http.HttpClient]::new($handler)
+    try {
+        $response = $client.GetAsync("https://github.com/$REPO/releases/latest").GetAwaiter().GetResult()
+        $location = $response.Headers.Location
+        if ($null -eq $location) {
+            throw "Could not determine latest version from GitHub"
+        }
+        $url = $location.ToString()
+        return $url.Substring($url.LastIndexOf('/') + 1)
+    } finally {
+        $client.Dispose()
+        $handler.Dispose()
+    }
 }
 
 function Add-ToPath {

@@ -269,9 +269,13 @@ fn normalize_version_tag(version: &str) -> String {
     }
 }
 
-/// Query the GitHub API for the latest release tag.
+/// Query GitHub for the latest release tag.
+///
+/// Follows the `/releases/latest` redirect instead of the API endpoint. The
+/// API is rate-limited to 60 req/hr per IP for unauthenticated clients, which
+/// breaks self-update on shared/NAT'd networks; the redirect is not limited.
 async fn latest_version_tag() -> Result<String> {
-    let url = "https://api.github.com/repos/raythurman2386/raven/releases/latest";
+    let url = "https://github.com/raythurman2386/raven/releases/latest";
     let resp = reqwest::Client::new()
         .get(url)
         .header("User-Agent", "raven-self-update")
@@ -281,10 +285,11 @@ async fn latest_version_tag() -> Result<String> {
     if !resp.status().is_success() {
         bail!("failed to determine latest version: {}", resp.status());
     }
-    let json: serde_json::Value = resp.json().await.context("invalid JSON from GitHub API")?;
-    let tag = json["tag_name"]
-        .as_str()
-        .context("missing tag_name in GitHub response")?;
+    let final_url = resp.url().as_str();
+    let tag = final_url
+        .rsplit('/')
+        .next()
+        .context("missing tag in redirect URL")?;
     Ok(tag.to_string())
 }
 

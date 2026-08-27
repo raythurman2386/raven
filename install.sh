@@ -110,11 +110,14 @@ detect_platform() {
 
 get_latest_version() {
     local tag
-    tag="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null \
-        | grep '"tag_name":' \
-        | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')"
+    # Follow the /releases/latest redirect instead of the API. The API endpoint
+    # is rate-limited to 60 req/hr per IP for unauthenticated clients, which
+    # breaks installs on shared/NAT'd networks; the redirect is not limited.
+    tag="$(curl -fsSL -o /dev/null -w '%{url_effective}' \
+        "https://github.com/$REPO/releases/latest" 2>/dev/null \
+        | sed -E 's#.*/tag/##')"
     if [[ -z "$tag" ]]; then
-        echo "Error: could not determine latest version from GitHub API" >&2
+        echo "Error: could not determine latest version from GitHub" >&2
         exit 1
     fi
     echo "$tag"
