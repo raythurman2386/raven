@@ -203,8 +203,10 @@ impl Agent {
 /// so the history stays a strict `[system, user, assistant, tool, ...]`
 /// alternation. Returns a list of reminder texts (empty on the common path).
 ///
-/// - After 3+ consecutive tool-only assistant turns (`iter >= 3`), push a
-///   "stop calling tools" reminder to break a tool-calling loop.
+/// - After 6+ consecutive tool-only assistant turns (`iter >= 6`), push a
+///   "stuck in a loop" reminder. The threshold is deliberately high so normal
+///   context-gathering (goal → list → grep → read) is never interrupted; only
+///   a genuine tool-calling loop triggers it.
 /// - At `iter == 5`, push a "reflect on progress" nudge.
 pub(crate) fn compute_reminders(
     messages: &[ChatMessage],
@@ -214,19 +216,19 @@ pub(crate) fn compute_reminders(
 ) -> Vec<String> {
     let mut reminders = Vec::new();
 
-    if iter >= 3 {
+    if iter >= 6 {
         let tool_only_count = messages
             .iter()
             .rev()
             .filter(|m| m.role == "assistant")
-            .take(3)
+            .take(6)
             .filter(|m| m.content.is_none() && m.tool_calls.is_some())
             .count();
-        if tool_only_count >= 3 {
+        if tool_only_count >= 6 {
             reminders.push(
-                "You have been calling tools repeatedly without producing text. \
-                 Stop calling tools now. Answer the user's question directly with text. \
-                 If you need information you already have it. Just respond."
+                "You have made several tool calls without producing text. \
+                 If you are stuck in a loop, try a different approach. \
+                 Otherwise, continue working toward the goal and apply your changes."
                     .into(),
             );
         }

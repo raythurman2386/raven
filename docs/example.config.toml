@@ -40,7 +40,7 @@
 
 # Maximum agent iterations per run before the loop stops.
 # Overridden by: --max-iterations? No — RAVEN_MAX_ITER / OG_MAX_ITER env.
-#max_iterations = 30
+#max_iterations = 60
 
 # Interaction mode. "plan" (default): propose → approve → execute.
 # "agent": full tools, no plan step. "chat": read-only Q&A.

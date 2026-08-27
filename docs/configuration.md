@@ -15,7 +15,7 @@ See the [root README quick start](../README.md#quick-start) for the full flag li
 | `OPENROUTER_API_KEY` | _(unset)_ | Bearer token for the `openrouter` provider |
 | `OLLAMA_API_KEY` | _(unset)_ | Bearer token for the `ollama` provider (Ollama Cloud / authenticated hosts) |
 | `OPENCODE_GO_API_KEY` | _(unset)_ | Bearer token for the `opencode-go` provider (OpenCode Go subscription) |
-| `RAVEN_MAX_ITER` / `OG_MAX_ITER` | `30` | Max agent iterations per run |
+| `RAVEN_MAX_ITER` / `OG_MAX_ITER` | `60` | Max agent iterations per run |
 | `RAVEN_CONTEXT_WINDOW` / `OG_CONTEXT_WINDOW` | _(inferred)_ | Override the model's context window size (tokens) |
 | `RAVEN_COMPACT_THRESHOLD` / `OG_COMPACT_THRESHOLD` | `0.75` | Fraction of usable context at which compaction triggers |
 | `RUST_LOG` | _(unset)_ | `tracing` filter (e.g. `debug`, `raven=trace`) |
@@ -35,7 +35,7 @@ raven -p "Explain this repo"
 raven -p "Explain this repo"
 
 # Allow more iterations for a big task
-export RAVEN_MAX_ITER=50
+export RAVEN_MAX_ITER=100
 raven -p "Refactor the whole codebase"
 
 # Debug logging
@@ -189,7 +189,7 @@ Layered TOML config, loaded from the workspace first (higher priority), then the
 | `[providers.<name>]` | _(built-in presets)_ | Named provider definitions: `base_url`, `api_key`, `default_model` |
 | `context_window` | inferred from model | Override the model's context window size (tokens) |
 | `compact_threshold` | `0.75` | Fraction of usable context at which compaction triggers |
-| `max_iterations` | `30` | Max agent iterations per run |
+| `max_iterations` | `60` | Max agent iterations per run |
 | `mode` | `plan` | Interaction mode: `plan`, `agent`, or `chat` |
 | `temperature` | `0.2` | Sampling temperature |
 | `no_stream` | `false` | Disable streaming (single request per turn) |
@@ -208,7 +208,7 @@ default_model = "qwen2.5-coder:14b"
 
 context_window = 131072
 compact_threshold = 0.75
-max_iterations = 30
+max_iterations = 60
 mode = "plan"
 temperature = 0.2
 no_stream = false

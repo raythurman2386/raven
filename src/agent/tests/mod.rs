@@ -230,30 +230,48 @@ fn no_reminders_early_and_clean() {
 }
 
 #[test]
-fn loop_breaker_fires_after_3_tool_only_turns() {
+fn loop_breaker_fires_after_6_tool_only_turns() {
+    let mut msgs = vec![plain("system")];
+    for _ in 0..6 {
+        msgs.push(tool_only());
+    }
+    let r = compute_reminders(&msgs, 6, None, &[]);
+    assert!(
+        r.iter().any(|t| t.contains("stuck in a loop")),
+        "loop breaker should fire, got {r:?}"
+    );
+}
+
+#[test]
+fn loop_breaker_does_not_fire_after_3_tool_only_turns() {
+    // Normal context-gathering (goal → list → grep → read) is 3-4 tool-only
+    // turns; it must not be interrupted by the loop breaker.
     let mut msgs = vec![plain("system")];
     for _ in 0..3 {
         msgs.push(tool_only());
     }
     let r = compute_reminders(&msgs, 3, None, &[]);
     assert!(
-        r.iter().any(|t| t.contains("Stop calling tools")),
-        "loop breaker should fire, got {r:?}"
+        !r.iter().any(|t| t.contains("stuck in a loop")),
+        "loop breaker should not fire at 3 turns, got {r:?}"
     );
 }
 
 #[test]
 fn loop_breaker_ignores_recent_text_output() {
-    // Only 2 tool-only turns; the third has content, so no loop breaker.
+    // Only 5 tool-only turns; the sixth has content, so no loop breaker.
     let msgs = vec![
         plain("system"),
         tool_only(),
         tool_only(),
+        tool_only(),
+        tool_only(),
+        tool_only(),
         plain("assistant"),
     ];
-    let r = compute_reminders(&msgs, 3, None, &[]);
+    let r = compute_reminders(&msgs, 6, None, &[]);
     assert!(
-        !r.iter().any(|t| t.contains("Stop calling tools")),
+        !r.iter().any(|t| t.contains("stuck in a loop")),
         "should not fire with text output, got {r:?}"
     );
 }

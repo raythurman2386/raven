@@ -326,13 +326,13 @@ pub fn load_global_dotenv() -> usize {
     }
 }
 
-/// Max agent iterations: `RAVEN_MAX_ITER` env var, else `OG_MAX_ITER`, else `30`.
+/// Max agent iterations: `RAVEN_MAX_ITER` env var, else `OG_MAX_ITER`, else `60`.
 pub fn default_max_iter() -> usize {
     std::env::var("RAVEN_MAX_ITER")
         .or_else(|_| std::env::var("OG_MAX_ITER"))
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(30)
+        .unwrap_or(60)
 }
 
 /// Context window override from `RAVEN_CONTEXT_WINDOW` or `OG_CONTEXT_WINDOW` (tokens).
