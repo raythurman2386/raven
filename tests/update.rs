@@ -51,6 +51,50 @@ fn copy_binary(dst: &Path) {
     }
 }
 
+/// Run `target` with `args`, configured by `configure`, retrying on `ETXTBSY`.
+///
+/// A freshly written executable can still carry a write reference held by
+/// another process (seen on loaded CI runners), making the immediate `execve`
+/// fail with `ExecutableFileBusy`. That condition is transient — the external
+/// reference clears on its own — so a bounded retry makes the spawn reliable.
+/// `configure` is re-applied on every attempt so env overrides survive retries.
+fn spawn_with_retry<F: Fn(&mut Command)>(
+    target: &Path,
+    args: &[&str],
+    configure: F,
+) -> std::process::Output {
+    #[cfg(unix)]
+    const ETXTBSY: i32 = libc::ETXTBSY;
+    #[cfg(not(unix))]
+    const ETXTBSY: i32 = -1;
+    let mut last: Option<std::io::Error> = None;
+    for attempt in 0..10 {
+        let mut cmd = Command::new(target);
+        cmd.args(args);
+        configure(&mut cmd);
+        match cmd.output() {
+            Ok(out) => return out,
+            Err(e) if e.raw_os_error() == Some(ETXTBSY) => {
+                last = Some(e);
+                std::thread::sleep(std::time::Duration::from_millis(50 * (attempt + 1)));
+            }
+            Err(e) => panic!("failed to spawn {}: {e}", target.display()),
+        }
+    }
+    panic!(
+        "{} still busy (ETXTBSY) after retries: {last:?}",
+        target.display()
+    );
+}
+
+/// Spawn `target` for a self-update test against the local release server.
+fn spawn_update(target: &Path, args: &[&str], base: &str, pubkey: &str) -> std::process::Output {
+    spawn_with_retry(target, args, |cmd| {
+        cmd.env("RAVEN_RELEASE_BASE_URL", base)
+            .env("RAVEN_SIGNING_PUBLIC_KEY", pubkey);
+    })
+}
+
 /// Build a SubjectPublicKeyInfo PEM for a raw 32-byte Ed25519 public key.
 fn spki_pem(public_key: &[u8]) -> String {
     const PREFIX: &[u8] = &[
@@ -190,12 +234,12 @@ fn self_update_replaces_and_rolls_back() {
     let target = bin_dir.join(raven_name());
     copy_binary(&target);
 
-    let out = Command::new(&target)
-        .args(["self", "update", "--version", "0.5.1"])
-        .env("RAVEN_RELEASE_BASE_URL", &base)
-        .env("RAVEN_SIGNING_PUBLIC_KEY", &pubkey)
-        .output()
-        .unwrap();
+    let out = spawn_update(
+        &target,
+        &["self", "update", "--version", "0.5.1"],
+        &base,
+        &pubkey,
+    );
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -233,10 +277,7 @@ fn rollback_restores_backup() {
     let backup = dir.path().join(raven_backup_name());
     std::fs::write(&backup, b"previous binary").unwrap();
 
-    let out = Command::new(&target)
-        .args(["self", "update", "--rollback"])
-        .output()
-        .unwrap();
+    let out = spawn_with_retry(&target, &["self", "update", "--rollback"], |_| {});
     assert!(
         out.status.success(),
         "rollback should succeed, stderr: {}",
@@ -277,12 +318,12 @@ fn self_update_fails_closed_on_bad_signature() {
     let target = bin_dir.join(raven_name());
     copy_binary(&target);
 
-    let out = Command::new(&target)
-        .args(["self", "update", "--version", "0.5.1"])
-        .env("RAVEN_RELEASE_BASE_URL", &base)
-        .env("RAVEN_SIGNING_PUBLIC_KEY", &pubkey)
-        .output()
-        .unwrap();
+    let out = spawn_update(
+        &target,
+        &["self", "update", "--version", "0.5.1"],
+        &base,
+        &pubkey,
+    );
 
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
@@ -308,10 +349,7 @@ fn rollback_without_backup_fails() {
     let target = dir.path().join(raven_name());
     copy_binary(&target);
 
-    let out = Command::new(&target)
-        .args(["self", "update", "--rollback"])
-        .output()
-        .unwrap();
+    let out = spawn_with_retry(&target, &["self", "update", "--rollback"], |_| {});
     assert!(!out.status.success(), "rollback with no backup must fail");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(

@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Update integration tests no longer flake on `ETXTBSY`** — spawning the
+  freshly copied test binary could fail with `ExecutableFileBusy` on loaded
+  CI runners when another process briefly held a write reference to the
+  file. The test spawn helpers now retry with backoff, re-applying env
+  overrides on every attempt so retries still hit the local test server.
+
 ## [0.5.12] - 2026-08-27
 
 ### Added
