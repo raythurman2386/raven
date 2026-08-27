@@ -4,6 +4,24 @@ All notable changes to Raven are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.11] - 2026-08-27
+
+### Fixed
+
+- **Loop-breaker interrupted normal context-gathering** — the "stop calling
+  tools" reminder fired after only 3 tool-only assistant turns, which is the
+  normal exploration pattern (goal → list → grep → read). Reasoning models
+  like `glm-5.3-flash:cloud` obeyed the instruction literally and abandoned
+  the task before applying edits, failing the multi-file refactor eval. The
+  threshold is now 6 consecutive tool-only turns, and the wording nudges
+  toward a different approach instead of telling the model to stop.
+
+### Changed
+
+- **Default max iterations** — raised from 30 to 60 per turn, giving
+  long-horizon and multi-file tasks more room before the loop budget is
+  exhausted.
+
 ## [0.5.10] - 2026-08-27
 
 ### Changed
