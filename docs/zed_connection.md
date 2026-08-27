@@ -19,7 +19,7 @@ from the editor — plan mode, verification gates, workspace isolation,
 
 - **Zed 1.14+** (external agents require a recent Zed)
 - **Raven** installed and on your `PATH` (see the root [README](../README.md#install));
-  verify with `raven --version` → should print `raven 0.5.9` or newer.
+  verify with `raven --version` → should print `raven 0.5.10` or newer.
 - A reachable model endpoint for Raven (local Ollama, Ollama Cloud, or
   OpenRouter — whatever your `~/.raven/config.toml` already uses).
 
@@ -144,7 +144,7 @@ chosen provider + model:
 - Each provider's list comes from its live `/models` endpoint when reachable,
   else its curated fallback list.
 - Selections are `provider/model` ids (e.g. `ollama/deepseek-v4-flash:cloud`,
-  `opencode-go/glm-5.2`). A value with a known provider prefix switches
+  `opencode-go/glm-5.3-flash`). A value with a known provider prefix switches
   providers; a plain model name stays on the current provider.
 - Both the modern `session/set_config_option` and the legacy `session/set_model`
   are supported, so older editors still work.

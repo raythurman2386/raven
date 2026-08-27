@@ -58,14 +58,14 @@ pub fn fallback_models(provider_name: &str) -> Vec<String> {
             "qwen3:14b".into(),
             "deepseek-v4-flash:cloud".into(),
             "deepseek-v4-pro:cloud".into(),
-            "glm-5.2:cloud".into(),
+            "glm-5.3-flash:cloud".into(),
         ],
         "openrouter" => vec!["x-ai/grok-4.5".into(), "x-ai/grok-4.6".into()],
         // OpenCode Go models, from the OpenAI-style /zen/go/v1/models list.
         "opencode-go" => vec![
             "deepseek-v4-flash".into(),
             "deepseek-v4-pro".into(),
-            "glm-5.2".into(),
+            "glm-5.3-flash".into(),
             "kimi-k3".into(),
             "mimo-v2.5".into(),
             "qwen3.8-max".into(),
@@ -428,7 +428,7 @@ mod tests3 {
     fn fallback_models_opencode_go() {
         let m = fallback_models("opencode-go");
         assert!(m.contains(&"deepseek-v4-flash".to_string()));
-        assert!(m.contains(&"glm-5.2".to_string()));
+        assert!(m.contains(&"glm-5.3-flash".to_string()));
         assert!(m.contains(&"qwen3.8-max".to_string()));
         assert!(m.contains(&"minimax-m3".to_string()));
     }

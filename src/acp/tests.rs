@@ -659,7 +659,7 @@ async fn set_model_updates_session_and_rejects_unknown_session() {
         req(
             3,
             "session/set_model",
-            json!({"sessionId": sid, "model": "glm-5.2:cloud"}),
+            json!({"sessionId": sid, "model": "glm-5.3-flash:cloud"}),
         ),
     )
     .await;
@@ -669,7 +669,7 @@ async fn set_model_updates_session_and_rejects_unknown_session() {
         req(
             4,
             "session/set_model",
-            json!({"sessionId": "missing", "model": "glm-5.2:cloud"}),
+            json!({"sessionId": "missing", "model": "glm-5.3-flash:cloud"}),
         ),
     )
     .await;
@@ -867,7 +867,7 @@ async fn set_model_with_provider_qualifier_switches_provider() {
         req(
             3,
             "session/set_model",
-            json!({"sessionId": sid, "model": "opencode-go/glm-5.2"}),
+            json!({"sessionId": sid, "model": "opencode-go/glm-5.3-flash"}),
         ),
     )
     .await;
@@ -882,5 +882,5 @@ async fn set_model_with_provider_qualifier_switches_provider() {
     let frames = frames_from(&buf);
     let opts = frames[3]["result"]["configOptions"].as_array().unwrap();
     let model = opts.iter().find(|o| o["id"] == "model").unwrap();
-    assert_eq!(model["currentValue"], "opencode-go/glm-5.2");
+    assert_eq!(model["currentValue"], "opencode-go/glm-5.3-flash");
 }

@@ -57,7 +57,7 @@ Two providers ship built in (no config needed):
 
 | Name | Base URL | Default model |
 |---|---|---|
-| `ollama` | `http://localhost:11434/v1` | `qwen3.8:latest` |
+| `ollama` | `http://localhost:11434/v1` | `glm-5.3-flash:cloud` |
 | `openrouter` | `https://openrouter.ai/api/v1` | `x-ai/grok-4.5` |
 | `opencode-go` | `https://opencode.ai/zen/go/v1` | `deepseek-v4-flash` |
 
@@ -113,11 +113,11 @@ OpenAI-compatible endpoint. It's a built-in preset, so no config is required:
 
 ```bash
 export OPENCODE_GO_API_KEY="your-go-key"
-raven --provider opencode-go -m glm-5.2 -p "..."
+raven --provider opencode-go -m glm-5.3-flash -p "..."
 ```
 
 Models come from the OpenAI-style `https://opencode.ai/zen/go/v1/models`
-list (e.g. `deepseek-v4-flash`, `deepseek-v4-pro`, `glm-5.2`, `kimi-k3`,
+list (e.g. `deepseek-v4-flash`, `deepseek-v4-pro`, `glm-5.3-flash`, `kimi-k3`,
 `mimo-v2.5`, `qwen3.8-max`, `minimax-m3`). Usage is dollar-bounded (about
 $12 / 5h, $30 / week, $60 / month) — raven surfaces those as normal HTTP
 429/402 errors. `/model` autocomplete lists all models returned by the

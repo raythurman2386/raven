@@ -99,8 +99,8 @@ fn infer_context_window_deepseek_cloud_variants() {
 
 #[test]
 fn infer_context_window_glm_cloud() {
-    assert_eq!(infer_context_window("glm-5.2:cloud"), 1_000_000);
-    assert_eq!(infer_context_window("glm-5.2:cloud"), 1_000_000);
+    assert_eq!(infer_context_window("glm-5.3-flash:cloud"), 1_000_000);
+    assert_eq!(infer_context_window("glm-5.3-flash:cloud"), 1_000_000);
     // Non-cloud glm falls back to 128k, not the 1M cloud special case.
     assert_eq!(infer_context_window("glm5:8b"), 128_000);
 }

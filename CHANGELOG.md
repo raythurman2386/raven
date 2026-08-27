@@ -4,6 +4,13 @@ All notable changes to Raven are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.10] - 2026-08-27
+
+### Changed
+
+- **Ollama default model** — `qwen3.8:latest` → `glm-5.3-flash:cloud`, and
+  all `glm-5.2` / `ox-alpha` references replaced with `glm-5.3-flash`.
+
 ## [0.5.9] - 2026-08-26
 
 ### Added
@@ -292,7 +299,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Bumped `anydoc` 0.1.8 → 0.1.9.
 
-[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.5.9...HEAD
+[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.5.10...HEAD
+[0.5.10]: https://github.com/raythurman2386/raven/compare/v0.5.9...v0.5.10
 [0.5.9]: https://github.com/raythurman2386/raven/compare/v0.5.8...v0.5.9
 [0.5.8]: https://github.com/raythurman2386/raven/compare/v0.5.7...v0.5.8
 [0.5.7]: https://github.com/raythurman2386/raven/compare/v0.5.6...v0.5.7

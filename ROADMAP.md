@@ -124,6 +124,6 @@ is already correct (one per turn, never per-iteration).
 ## Execution order & gating
 
 1. Do checklist items in order — each is independently committable and testable.
-2. After each item: `cargo test` + clippy + fmt + `cargo install --path . --force`, then a **live run** against `deepseek-v4-flash:cloud` / `glm-5.2:cloud`.
+2. After each item: `cargo test` + clippy + fmt + `cargo install --path . --force`, then a **live run** against `deepseek-v4-flash:cloud` / `glm-5.3-flash:cloud`.
 3. Update this ROADMAP.md with ✅ when an item ships.
 4. Keep the `rust-llm-agent-harness` skill in lockstep (patch after each item).

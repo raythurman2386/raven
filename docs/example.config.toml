@@ -93,7 +93,7 @@
 [providers.ollama]
 # Built-in default: http://localhost:11434/v1
 base_url = "http://localhost:11434/v1"
-default_model = "qwen3.8:latest"
+default_model = "glm-5.3-flash:cloud"
 # Point at Ollama Cloud or a remote authenticated host and set a key:
 # base_url = "https://ollama.com/v1"
 # api_key_env = "OLLAMA_API_KEY"   # or literal api_key = "..."
@@ -109,7 +109,7 @@ default_model = "x-ai/grok-4.5"
 # OpenCode Go subscription ($5 first month, then $10/mo) — OpenAI-compatible
 # models only. See https://opencode.ai/docs/go and
 # https://opencode.ai/zen/go/v1/models for the current model list.
-# e.g. deepseek-v4-flash, deepseek-v4-pro, glm-5.2, kimi-k3, mimo-v2.5,
+# e.g. deepseek-v4-flash, deepseek-v4-pro, glm-5.3-flash, kimi-k3, mimo-v2.5,
 # qwen3.8-max, minimax-m3
 base_url = "https://opencode.ai/zen/go/v1"
 default_model = "deepseek-v4-flash"

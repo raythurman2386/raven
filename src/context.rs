@@ -18,7 +18,7 @@ pub use crate::tokenizer::{history_tokens, message_tokens};
 /// Infer a model's context window from its name (fallback when API is unreachable).
 ///
 /// Heuristics:
-///   - glm:cloud, deepseek-v4:cloud (flash and pro)          → 1_000_000
+///   - glm-5.3-flash:cloud, deepseek-v4:cloud (flash and pro) → 1_000_000
 ///   - qwen3.5                                              → 262_144
 ///   - gemma4 / gemma3 / qwen2.5 / qwen3 / deepseek / llama3.1 / llama3.2 / codestral → 128_000
 ///   - llama3 / codellama / "32k" in name                   → 32_768
