@@ -340,8 +340,13 @@ fn run_shell_network_kill_explains_sigsys() {
             10,
         )
         .unwrap();
+    // Either shape is valid depending on where the kill lands: the direct
+    // child dies on SIGSYS ("killed by signal 31"), or a grandchild dies and
+    // the shell relays it as exit 159 with "Bad system call".
+    let direct = out.contains("killed by signal 31");
+    let relayed = out.contains("exit=159") && out.contains("Bad system call");
     assert!(
-        out.contains("killed by signal 31"),
+        direct || relayed,
         "outbound socket should be SIGSYS-killed, got: {out}"
     );
     assert!(

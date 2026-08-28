@@ -605,8 +605,29 @@ pub(crate) fn run_confined(
                 }
             }
             let mut out = format!("exit={}\n", status.code().unwrap_or(-1));
-            out.push_str(&String::from_utf8_lossy(&stdout));
-            out.push_str(&String::from_utf8_lossy(&stderr));
+            // Relayed SIGSYS: when the seccomp kill hits a grandchild (e.g.
+            // python3 under `sh -c`), the shell survives and exits 159 with
+            // "Bad system call" instead of the child being signal-reported.
+            // Give the model the same explanation as the direct kill, or it
+            // re-diagnoses the exit code as an environment bug.
+            let combined = format!(
+                "{}{}",
+                String::from_utf8_lossy(&stdout),
+                String::from_utf8_lossy(&stderr)
+            );
+            if status.code() == Some(159)
+                && (combined.contains("Bad system call") || combined.contains("bad system call"))
+            {
+                out.push_str(
+                    "This sandbox blocks network access (seccomp): the first \
+                     outbound TCP connection is killed with SIGSYS (shell code \
+                     159). The command will keep failing this way — do not \
+                     retry or re-diagnose. Work offline, or ask the user to \
+                     run network-dependent steps (package installs, downloads) \
+                     themselves.\n",
+                );
+            }
+            out.push_str(&combined);
             Ok(super::cap_output(out))
         }
         None => Ok("Error: command timed out".into()),
