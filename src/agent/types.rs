@@ -4,12 +4,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::plan::Plan;
+use crate::tokenizer::TokenUsage;
 
 /// A single chat message in the OpenAI conversation format.
 ///
 /// `content` is `None` for assistant messages that only carry tool calls.
 /// `tool_calls` is `None` unless this is an assistant message requesting tools.
 /// `tool_call_id` is `None` unless this is a `tool`-role result message.
+/// `usage` is `Some` only on assistant messages with a persisted token meter:
+/// the provider's real meter for the request that produced the message, or an
+/// aggregate folded onto a compaction summary. It is persisted to the session
+/// transcript but never sent to the provider (the wire path strips it; see
+/// `request_messages_json` in `agent::core`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,
@@ -19,6 +25,22 @@ pub struct ChatMessage {
     pub tool_calls: Option<Vec<ToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<TokenUsage>,
+}
+
+impl ChatMessage {
+    /// A message without tool calls or a usage meter, with every other
+    /// field set from the given role and content.
+    pub fn plain(role: &str, content: Option<String>) -> Self {
+        Self {
+            role: role.to_string(),
+            content,
+            tool_calls: None,
+            tool_call_id: None,
+            usage: None,
+        }
+    }
 }
 
 /// A tool call requested by the assistant (OpenAI function-calling format).

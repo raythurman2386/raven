@@ -176,12 +176,7 @@ pub async fn run_plan_flow(
                 Agent::with_messages(settings.clone(), first_messages.clone().unwrap_or_default())?
                     .plan_only();
 
-            let rev_msg = ChatMessage {
-                role: "user".into(),
-                content: Some(feedback_msg.clone()),
-                tool_calls: None,
-                tool_call_id: None,
-            };
+            let rev_msg = ChatMessage::plain("user", Some(feedback_msg.clone()));
             store.append_message(session, &rev_msg)?;
 
             let (rev_messages, rev_text) =
@@ -200,12 +195,7 @@ pub async fn run_plan_flow(
                     return Ok(());
                 }
                 Approval::Yes => {
-                    let exec_msg = ChatMessage {
-                        role: "user".into(),
-                        content: Some(plan::EXECUTE_PROMPT.into()),
-                        tool_calls: None,
-                        tool_call_id: None,
-                    };
+                    let exec_msg = ChatMessage::plain("user", Some(plan::EXECUTE_PROMPT.into()));
                     store.append_message(session, &exec_msg)?;
                     let exec_messages = rev_messages.unwrap_or_default();
                     let agent =
@@ -224,12 +214,7 @@ pub async fn run_plan_flow(
     }
 
     let exec_messages = first_messages.unwrap_or_default();
-    let exec_msg = ChatMessage {
-        role: "user".into(),
-        content: Some(plan::EXECUTE_PROMPT.into()),
-        tool_calls: None,
-        tool_call_id: None,
-    };
+    let exec_msg = ChatMessage::plain("user", Some(plan::EXECUTE_PROMPT.into()));
     store.append_message(session, &exec_msg)?;
 
     let agent = Agent::with_messages(settings.clone(), exec_messages)?.with_plan(plan);

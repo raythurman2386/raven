@@ -9,6 +9,7 @@ fn build_history(n: usize, tool_heavy: bool) -> Vec<ChatMessage> {
         content: Some("You are a coding agent.".into()),
         tool_calls: None,
         tool_call_id: None,
+        usage: None,
     });
     for i in 0..n {
         msgs.push(ChatMessage {
@@ -16,6 +17,7 @@ fn build_history(n: usize, tool_heavy: bool) -> Vec<ChatMessage> {
             content: Some(format!("Task number {i}: refactor the auth module.")),
             tool_calls: None,
             tool_call_id: None,
+            usage: None,
         });
         if tool_heavy {
             msgs.push(ChatMessage {
@@ -30,12 +32,14 @@ fn build_history(n: usize, tool_heavy: bool) -> Vec<ChatMessage> {
                     },
                 }]),
                 tool_call_id: None,
+                usage: None,
             });
             msgs.push(ChatMessage {
                 role: "tool".into(),
                 content: Some("x".repeat(6000)),
                 tool_calls: None,
                 tool_call_id: Some(format!("call_{i}")),
+                usage: None,
             });
         } else {
             msgs.push(ChatMessage {
@@ -43,6 +47,7 @@ fn build_history(n: usize, tool_heavy: bool) -> Vec<ChatMessage> {
                 content: Some(format!("I refactored module {i}.")),
                 tool_calls: None,
                 tool_call_id: None,
+                usage: None,
             });
         }
     }

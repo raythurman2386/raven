@@ -760,18 +760,13 @@ async fn retry_re_fires_last_turn_and_clears_failed_output() {
     // Simulate a completed turn whose last message is the user prompt, plus
     // a failed partial assistant reply that /retry must drop.
     state.last_turn = Some((Vec::new(), "do the thing".into(), false));
-    state.session_messages.push(ChatMessage {
-        role: "user".into(),
-        content: Some("do the thing".into()),
-        tool_calls: None,
-        tool_call_id: None,
-    });
-    state.session_messages.push(ChatMessage {
-        role: "assistant".into(),
-        content: Some("partial failed output".into()),
-        tool_calls: None,
-        tool_call_id: None,
-    });
+    state
+        .session_messages
+        .push(ChatMessage::plain("user", Some("do the thing".into())));
+    state.session_messages.push(ChatMessage::plain(
+        "assistant",
+        Some("partial failed output".into()),
+    ));
     state.assistant_text = "partial failed output".into();
 
     let pc = commands::parse("/retry").unwrap();

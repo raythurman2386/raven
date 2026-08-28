@@ -12,6 +12,7 @@ use crate::context::history_tokens;
 
 use super::core::Agent;
 use super::types::{AgentEvent, ChatMessage};
+use crate::tokenizer::TokenUsage;
 
 impl Agent {
     /// Handle the no-tool-calls branch of an iteration.
@@ -75,6 +76,7 @@ impl Agent {
                 Some(
                     "I received several empty replies and could not produce a final answer.".into(),
                 ),
+                None,
             )
             .await?;
             return Ok(false);
@@ -107,12 +109,8 @@ impl Agent {
         let summary_prompt = "You've reached the maximum number of tool-calling iterations \
             allowed for this turn. Provide a final response summarizing what you've found and \
             accomplished so far, without calling any more tools.";
-        self.messages.push(ChatMessage {
-            role: "user".into(),
-            content: Some(summary_prompt.to_string()),
-            tool_calls: None,
-            tool_call_id: None,
-        });
+        self.messages
+            .push(ChatMessage::plain("user", Some(summary_prompt.to_string())));
 
         // Clamp max_tokens so the summary request fits the context window.
         // The estimate is calibrated (when usage samples exist) so the clamp
@@ -130,7 +128,7 @@ impl Agent {
         // produce a final text answer (no tool calls to burn more iterations).
         let mut body = serde_json::json!({
             "model": self.settings.model,
-            "messages": &self.messages,
+            "messages": super::core::request_messages_json(&self.messages),
             "temperature": self.settings.temperature_json(),
             "max_tokens": clamped_max,
             "stream": !self.settings.no_stream,
@@ -148,14 +146,15 @@ impl Agent {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!("summary request failed after budget exhaustion: {e}");
-                return self.emit_summary(tx, None).await;
+                return self.emit_summary(tx, None, None).await;
             }
         };
 
         // Any tool calls parsed here are ignored — with no tools advertised the
         // model cannot legitimately emit one; we only keep the text content.
         // Do not observe usage here: this request has no tools schema, so its
-        // prompt_tokens would skew the EMA used for tool-bearing clamps.
+        // prompt_tokens would skew the EMA used for tool-bearing clamps. The
+        // meter is still persisted on the summary message below.
         let parsed = if self.settings.no_stream {
             self.process_non_stream(resp, tx).await
         } else {
@@ -163,23 +162,29 @@ impl Agent {
         };
         if let Some(err) = parsed.error {
             tracing::warn!("summary request returned provider error: {err}");
-            return self.emit_summary(tx, None).await;
+            return self.emit_summary(tx, None, None).await;
         }
         let content_buf = parsed.content;
 
-        self.emit_summary(tx, (!content_buf.is_empty()).then_some(content_buf))
-            .await
+        self.emit_summary(
+            tx,
+            (!content_buf.is_empty()).then_some(content_buf),
+            parsed.usage,
+        )
+        .await
     }
 
     /// Push a final summary assistant turn and emit `Done`.
     ///
     /// If `content` is `None` (empty/failed model output), a canned summary is
     /// streamed and persisted instead, so the turn always ends with a usable
-    /// assistant message.
+    /// assistant message. `usage` is the wrap-up request's own meter; the
+    /// message is fresh so attaching it cannot double-count.
     pub(crate) async fn emit_summary(
         &mut self,
         tx: &mpsc::Sender<AgentEvent>,
         content: Option<String>,
+        usage: Option<TokenUsage>,
     ) -> Result<()> {
         let had_content = content.is_some();
         let text = content.unwrap_or_else(|| {
@@ -198,6 +203,7 @@ impl Agent {
             content: Some(text),
             tool_calls: None,
             tool_call_id: None,
+            usage,
         });
         let _ = tx.send(AgentEvent::Done).await;
         Ok(())

@@ -237,6 +237,7 @@ fn build_system_message(settings: &Settings) -> ChatMessage {
         content: Some(system),
         tool_calls: None,
         tool_call_id: None,
+        usage: None,
     }
 }
 
@@ -419,12 +420,7 @@ impl Agent {
     fn take_pending_steer(&mut self) -> Vec<ChatMessage> {
         self.pending_steer
             .drain(..)
-            .map(|text| ChatMessage {
-                role: "user".into(),
-                content: Some(format!("[steer] {text}")),
-                tool_calls: None,
-                tool_call_id: None,
-            })
+            .map(|text| ChatMessage::plain("user", Some(format!("[steer] {text}"))))
             .collect()
     }
 
@@ -504,12 +500,8 @@ impl Agent {
     /// Returns `Ok(())` on normal completion or error event; the caller
     /// should drain `tx` to observe the outcome.
     pub async fn run(&mut self, user_text: &str, tx: mpsc::Sender<AgentEvent>) -> Result<()> {
-        self.messages.push(ChatMessage {
-            role: "user".into(),
-            content: Some(user_text.to_string()),
-            tool_calls: None,
-            tool_call_id: None,
-        });
+        self.messages
+            .push(ChatMessage::plain("user", Some(user_text.to_string())));
 
         // Turn-level state (persists across iterations within this turn).
         // `verified` is set when the model dispatches `run_tests`; the
@@ -703,12 +695,10 @@ impl Agent {
         } else {
             let mut request_messages: Vec<ChatMessage> = self.messages.clone();
             for text in &reminders {
-                request_messages.push(ChatMessage {
-                    role: "user".into(),
-                    content: Some(format!("<raven_reminder>\n{text}\n</raven_reminder>")),
-                    tool_calls: None,
-                    tool_call_id: None,
-                });
+                request_messages.push(ChatMessage::plain(
+                    "user",
+                    Some(format!("<raven_reminder>\n{text}\n</raven_reminder>")),
+                ));
             }
             json!({
                 "model": self.settings.model,
@@ -813,6 +803,9 @@ impl Agent {
             );
         }
 
+        // The meter is captured before `parsed` is consumed by the paths below.
+        let iter_usage = parsed.usage;
+
         if let Some(err) = parsed.error {
             let msg = if parsed.finish_reason.as_deref() == Some("length") {
                 format!("{err} (finish_reason=length; response may be truncated)")
@@ -834,6 +827,7 @@ impl Agent {
                     )),
                     tool_calls: None,
                     tool_call_id: None,
+                    usage: iter_usage,
                 });
                 let _ = tx.send(AgentEvent::Done).await;
                 return Ok(IterationOutcome::Finished);
@@ -875,6 +869,7 @@ impl Agent {
             },
             tool_calls: None,
             tool_call_id: None,
+            usage: iter_usage,
         };
 
         if tool_acc.is_empty() {
@@ -1063,18 +1058,20 @@ impl Agent {
 /// Assistant messages that only carry `tool_calls` omit `content` in our
 /// in-memory type (`None` + `skip_serializing_if`). Some OpenAI-compatible
 /// validators want an explicit `"content": null` instead — emit that here
-/// without changing the persisted `ChatMessage` shape.
-fn request_messages_json(messages: &[ChatMessage]) -> Value {
+/// without changing the persisted `ChatMessage` shape. The persisted `usage`
+/// meter is stripped so provider-bound bodies never echo local bookkeeping.
+pub(crate) fn request_messages_json(messages: &[ChatMessage]) -> Value {
     Value::Array(
         messages
             .iter()
             .map(|m| {
                 let mut v = serde_json::to_value(m).unwrap_or_else(|_| json!({}));
-                if m.tool_calls.is_some() {
-                    if let Some(obj) = v.as_object_mut() {
-                        if !obj.contains_key("content") {
-                            obj.insert("content".into(), Value::Null);
-                        }
+                if let Some(obj) = v.as_object_mut() {
+                    // Local bookkeeping: providers must never see a usage
+                    // field echoed back on replayed history.
+                    obj.remove("usage");
+                    if m.tool_calls.is_some() && !obj.contains_key("content") {
+                        obj.insert("content".into(), Value::Null);
                     }
                 }
                 v
@@ -1087,6 +1084,7 @@ fn request_messages_json(messages: &[ChatMessage]) -> Value {
 mod wire_format_tests {
     use super::super::types::{ChatMessage, FunctionCall, ToolCall};
     use super::request_messages_json;
+    use crate::tokenizer::TokenUsage;
     use serde_json::json;
 
     #[test]
@@ -1103,6 +1101,7 @@ mod wire_format_tests {
                 },
             }]),
             tool_call_id: None,
+            usage: None,
         }];
         let v = request_messages_json(&msgs);
         let obj = v.as_array().unwrap()[0].as_object().unwrap();
@@ -1117,8 +1116,28 @@ mod wire_format_tests {
             content: Some("hi".into()),
             tool_calls: None,
             tool_call_id: None,
+            usage: None,
         }];
         let v = request_messages_json(&msgs);
         assert_eq!(v.as_array().unwrap()[0]["content"], json!("hi"));
+    }
+
+    #[test]
+    fn request_messages_json_strips_usage_from_replayed_history() {
+        // Persisted transcripts carry the provider's token meter on assistant
+        // messages; the wire format must never echo it back.
+        let msgs = vec![ChatMessage {
+            role: "assistant".into(),
+            content: Some("hi".into()),
+            tool_calls: None,
+            tool_call_id: None,
+            usage: Some(TokenUsage {
+                prompt_tokens: 12,
+                completion_tokens: 3,
+                total_tokens: 15,
+            }),
+        }];
+        let v = request_messages_json(&msgs);
+        assert!(v.as_array().unwrap()[0].get("usage").is_none());
     }
 }

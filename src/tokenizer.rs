@@ -67,6 +67,7 @@
 
 use std::sync::OnceLock;
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// GPT-4-style pre-tokenization regex.
@@ -170,10 +171,18 @@ pub fn history_tokens(messages: &[crate::agent::ChatMessage]) -> usize {
 /// chunk sent when the request sets `stream_options: {"include_usage": true}`).
 /// Ollama, llama.cpp-server, and vLLM all emit these fields on their
 /// OpenAI-compatible endpoints.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Serialized onto persisted assistant messages (camelCase, matching the
+/// collector's record format) so external tools read the provider's real
+/// meters; deserialization also accepts the provider's snake_case keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TokenUsage {
+    #[serde(alias = "prompt_tokens")]
     pub prompt_tokens: u64,
+    #[serde(alias = "completion_tokens")]
     pub completion_tokens: u64,
+    #[serde(alias = "total_tokens")]
     pub total_tokens: u64,
 }
 

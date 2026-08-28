@@ -563,12 +563,14 @@ mod tests {
             content: Some("hello".into()),
             tool_calls: None,
             tool_call_id: None,
+            usage: None,
         };
         let msg2 = ChatMessage {
             role: "assistant".into(),
             content: Some("hi".into()),
             tool_calls: None,
             tool_call_id: None,
+            usage: None,
         };
 
         store.append_message(&session, &msg1).unwrap();
@@ -610,6 +612,7 @@ mod tests {
                     content: Some("old".into()),
                     tool_calls: None,
                     tool_call_id: None,
+                    usage: None,
                 },
             )
             .unwrap();
@@ -618,6 +621,7 @@ mod tests {
             content: Some("new".into()),
             tool_calls: None,
             tool_call_id: None,
+            usage: None,
         }];
         store.save_all_messages(&session, &replacement).unwrap();
         let loaded = store.load(&session.summary.id).unwrap();
@@ -699,6 +703,7 @@ mod tests {
                     content: Some("please fix it".into()),
                     tool_calls: None,
                     tool_call_id: None,
+                    usage: None,
                 },
             )
             .unwrap();

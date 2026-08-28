@@ -525,6 +525,7 @@ async fn load_replays_history() {
                 content: Some("hello history".into()),
                 tool_calls: None,
                 tool_call_id: None,
+                usage: None,
             },
         )
         .unwrap();
@@ -536,6 +537,7 @@ async fn load_replays_history() {
                 content: Some("hi back".into()),
                 tool_calls: None,
                 tool_call_id: None,
+                usage: None,
             },
         )
         .unwrap();

@@ -548,12 +548,9 @@ impl Agent {
                 preview,
             })
             .await;
-        self.messages.push(ChatMessage {
-            role: "tool".into(),
-            content: Some(result),
-            tool_calls: None,
-            tool_call_id: Some(id),
-        });
+        let mut tool_msg = ChatMessage::plain("tool", Some(result));
+        tool_msg.tool_call_id = Some(id);
+        self.messages.push(tool_msg);
     }
 }
 

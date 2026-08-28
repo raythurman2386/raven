@@ -523,12 +523,7 @@ async fn headless_run(
         store.create(&settings.model)?
     };
 
-    let user_msg = ChatMessage {
-        role: "user".into(),
-        content: Some(task.to_string()),
-        tool_calls: None,
-        tool_call_id: None,
-    };
+    let user_msg = ChatMessage::plain("user", Some(task.to_string()));
     store.append_message(&session, &user_msg)?;
 
     // Plan mode runs the plan-approval flow; Chat mode uses the read-only

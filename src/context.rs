@@ -13,8 +13,8 @@
 //! - Tool-call / tool-result pairs are never split.
 
 use crate::agent::ChatMessage;
-use crate::tokenizer::UsageCalibration;
 pub use crate::tokenizer::{history_tokens, message_tokens};
+use crate::tokenizer::{TokenUsage, UsageCalibration};
 
 /// History token estimate with optional usage calibration applied.
 ///
@@ -26,6 +26,30 @@ fn calibrated_tokens(messages: &[ChatMessage], calib: Option<&UsageCalibration>)
         None => history_tokens(messages),
         Some(c) => c.correct(history_tokens(messages)),
     }
+}
+
+/// Sum the persisted usage of all assistant messages in `messages`.
+///
+/// Used to carry token meters out of a compacted history section onto the
+/// replacement summary message, keeping persisted totals monotonic.
+pub fn fold_usage(messages: &[ChatMessage]) -> Option<TokenUsage> {
+    let mut prompt = 0u64;
+    let mut completion = 0u64;
+    let mut total = 0u64;
+    let mut found = false;
+    for msg in messages {
+        if let Some(u) = &msg.usage {
+            found = true;
+            prompt += u.prompt_tokens;
+            completion += u.completion_tokens;
+            total += u.total_tokens;
+        }
+    }
+    found.then_some(TokenUsage {
+        prompt_tokens: prompt,
+        completion_tokens: completion,
+        total_tokens: total,
+    })
 }
 
 /// Infer a model's context window from its name (fallback when API is unreachable).
@@ -506,22 +530,22 @@ fn assemble_compaction(
         content = content.chars().take(MAX_SUMMARY_CHARS).collect();
         content.push_str("...[summary truncated]");
     }
-    let summary_user = ChatMessage {
-        role: "user".into(),
-        content: Some(content),
-        tool_calls: None,
-        tool_call_id: None,
-    };
-    let summary_assistant = ChatMessage {
-        role: "assistant".into(),
-        content: Some(
+    let summary_user = ChatMessage::plain("user", Some(content));
+    let summary_assistant = ChatMessage::plain(
+        "assistant",
+        Some(
             "[Context compacted — prior conversation summarized above. \
              Continue from the recent messages below.]"
                 .into(),
         ),
-        tool_calls: None,
-        tool_call_id: None,
-    };
+    );
+
+    // Persisted usage on dropped assistant messages must move onto the
+    // summary, not vanish with them, or external token totals would shrink
+    // at every compaction.
+    let dropped_usage = fold_usage(&plan.middle);
+    let mut summary_assistant = summary_assistant;
+    summary_assistant.usage = dropped_usage;
 
     // Assemble new history
     let system = messages[0].clone();
@@ -705,7 +729,7 @@ fn prune_tool_results(messages: &mut [ChatMessage], keep_turns: usize) {
 mod tests {
     use super::*;
     use crate::agent::{ChatMessage, FunctionCall, ToolCall};
-    use crate::tokenizer::{count_tokens as estimate_tokens, MSG_OVERHEAD};
+    use crate::tokenizer::{count_tokens as estimate_tokens, TokenUsage, MSG_OVERHEAD};
 
     fn msg(role: &str, content: &str) -> ChatMessage {
         ChatMessage {
@@ -713,9 +737,9 @@ mod tests {
             content: Some(content.into()),
             tool_calls: None,
             tool_call_id: None,
+            usage: None,
         }
     }
-
     fn msg_with_tools(role: &str, content: &str, tool_calls: Vec<ToolCall>) -> ChatMessage {
         ChatMessage {
             role: role.into(),
@@ -726,6 +750,7 @@ mod tests {
             },
             tool_calls: Some(tool_calls),
             tool_call_id: None,
+            usage: None,
         }
     }
 
@@ -735,9 +760,9 @@ mod tests {
             content: Some(content.into()),
             tool_calls: None,
             tool_call_id: Some(id.into()),
+            usage: None,
         }
     }
-
     fn tool_call(id: &str, name: &str, args: &str) -> ToolCall {
         ToolCall {
             id: id.into(),
@@ -949,6 +974,40 @@ mod tests {
         assert_eq!(msgs[1].role, "user");
         assert_eq!(msgs[2].role, "assistant");
         assert!(msgs[1].content.as_deref().unwrap().contains("[Compacted"));
+    }
+
+    #[tokio::test]
+    async fn compaction_folds_dropped_usage_into_summary() {
+        // Token meters on compacted-away assistant messages must move onto
+        // the replacement summary, so persisted totals never shrink.
+        let mut msgs = vec![msg("system", "sys")];
+        for i in 0..120 {
+            msgs.push(msg(
+                "user",
+                &format!("Add unit tests for the payment handler and cover the edge case where balance is {i}."),
+            ));
+            let mut a = msg(
+                "assistant",
+                &format!("Wrote tests for the payment handler covering the zero-balance edge case for account {i}."),
+            );
+            a.usage = Some(TokenUsage {
+                prompt_tokens: 1_000,
+                completion_tokens: 50,
+                total_tokens: 1_050,
+            });
+            msgs.push(a);
+        }
+        let before = fold_usage(&msgs).unwrap();
+        assert_eq!(before.prompt_tokens, 120_000);
+
+        compact_extractive(&mut msgs, 8192, 0.1).await.unwrap();
+
+        let after = fold_usage(&msgs).unwrap();
+        assert_eq!(after.prompt_tokens, before.prompt_tokens);
+        assert_eq!(after.completion_tokens, before.completion_tokens);
+        assert_eq!(after.total_tokens, before.total_tokens);
+        // The carried meter rides the summary assistant message.
+        assert!(msgs[2].usage.is_some(), "summary carries folded usage");
     }
 
     #[tokio::test]

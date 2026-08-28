@@ -204,9 +204,9 @@ fn plain(role: &str) -> ChatMessage {
         content: Some("x".into()),
         tool_calls: None,
         tool_call_id: None,
+        usage: None,
     }
 }
-
 fn tool_only() -> ChatMessage {
     ChatMessage {
         role: "assistant".into(),
@@ -220,9 +220,9 @@ fn tool_only() -> ChatMessage {
             },
         }]),
         tool_call_id: None,
+        usage: None,
     }
 }
-
 #[test]
 fn no_reminders_early_and_clean() {
     let msgs = vec![plain("system"), plain("user"), plain("assistant")];
@@ -1339,6 +1339,61 @@ async fn budget_exhaustion_emits_summary_and_done_not_error() {
 }
 
 #[tokio::test]
+async fn budget_exhaustion_summary_keeps_meter_and_strips_wire_usage() {
+    // The wrap-up request is a real metered provider call: its meter must be
+    // persisted on the summary message, and its request body — which replays
+    // history that now carries usage — must NOT contain any usage field.
+    // Main iterations run offline via completion_source; the wrap-up request
+    // itself goes over HTTP, so the mock serves exactly the summary round.
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("a.rs"), "fn main() {}\n").unwrap();
+
+    let tool_round = concat!(
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"a.rs\\\"}\"}}]}}]}\n\n",
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":10,\"total_tokens\":110}}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let summary_round = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"Summarized progress so far.\"}}]}\n\n",
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":500,\"completion_tokens\":7,\"total_tokens\":507}}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let seen_body = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let capture = seen_body.clone();
+    let (base, _h) = spawn_mock(vec![summary_round]).await;
+    let mut s = settings_for(tmp.path(), &base);
+    s.max_iterations = 2;
+    let mut agent =
+        Agent::new(s)
+            .unwrap()
+            .with_completion_source(Box::new(move |body: &serde_json::Value| {
+                // Record every outgoing main-loop body for the wire assertions.
+                capture.lock().unwrap().push_str(&body.to_string());
+                capture.lock().unwrap().push('\n');
+                tool_round.to_string()
+            }));
+    let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+    agent.run("do the thing", tx).await.unwrap();
+    while let Ok(_ev) = rx.try_recv() {}
+
+    // Wire: no replayed message in ANY outgoing body carried a usage field.
+    let sent = seen_body.lock().unwrap().clone();
+    for (i, body) in sent.lines().enumerate() {
+        assert!(
+            !body.contains("\"usage\""),
+            "outgoing request {i} leaked usage: {body}"
+        );
+    }
+
+    // The summary assistant message carries the wrap-up request's own meter.
+    let last = agent.messages.last().expect("summary message");
+    assert_eq!(last.role, "assistant");
+    let u = last.usage.expect("wrap-up meter persisted on summary");
+    assert_eq!(u.prompt_tokens, 500);
+    assert_eq!(u.completion_tokens, 7);
+}
+
+#[tokio::test]
 async fn blank_response_stalls_then_recovers_not_done() {
     let tmp = tempfile::tempdir().unwrap();
     // Round 1-2: blank responses (only [DONE], no content delta).
@@ -1564,5 +1619,105 @@ async fn streaming_request_includes_usage_and_feeds_calibration_offline() {
         (corrected - (1000i64 + off)).abs() <= 1,
         "correct(1000)={} should match 1000+offset({off}) within rounding",
         agent.calibration.correct(1000)
+    );
+}
+
+#[tokio::test]
+async fn usage_chunk_is_persisted_on_assistant_message() {
+    // The provider's meter must ride out of the loop on the assistant
+    // message it belongs to, so session persistence records real usage.
+    // The wire replay path (request_messages_json) strips it again.
+    let tmp = tempfile::tempdir().unwrap();
+    let mut agent = Agent::new(settings_for(tmp.path(), "http://127.0.0.1:1"))
+        .unwrap()
+        .with_completion_source(Box::new(|_body: &serde_json::Value| {
+            concat!(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"measured reply\"}}]}\n\n",
+                "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":321,\"completion_tokens\":5,\"total_tokens\":326}}\n\n",
+                "data: [DONE]\n\n",
+            )
+            .to_string()
+        }));
+    let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+    agent.run("measure me", tx).await.unwrap();
+    while let Ok(_ev) = rx.try_recv() {}
+
+    let last = agent.messages.last().expect("assistant message persisted");
+    assert_eq!(last.role, "assistant");
+    let u = last
+        .usage
+        .expect("usage meter must be attached to the assistant message");
+    assert_eq!(u.prompt_tokens, 321);
+    assert_eq!(u.completion_tokens, 5);
+    assert_eq!(u.total_tokens, 326);
+}
+
+#[tokio::test]
+async fn no_usage_reported_leaves_assistant_usage_none() {
+    // Providers without meters persist exactly as before: usage stays None
+    // and no usage key appears in the serialized transcript line.
+    let tmp = tempfile::tempdir().unwrap();
+    let mut agent = Agent::new(settings_for(tmp.path(), "http://127.0.0.1:1"))
+        .unwrap()
+        .with_completion_source(Box::new(|_body: &serde_json::Value| {
+            concat!(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"plain reply\"}}]}\n\n",
+                "data: [DONE]\n\n",
+            )
+            .to_string()
+        }));
+    let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+    agent.run("hello", tx).await.unwrap();
+    while let Ok(_ev) = rx.try_recv() {}
+
+    let last = agent.messages.last().expect("assistant message");
+    assert!(last.usage.is_none(), "no meter → usage stays None");
+    let line = serde_json::to_string(last).unwrap();
+    assert!(
+        !line.contains("usage"),
+        "legacy transcripts unchanged: {line}"
+    );
+}
+
+#[tokio::test]
+async fn tool_call_iterations_persist_one_usage_per_iteration() {
+    // Each provider response is one metered request; a tool-calling turn
+    // must record the meter on the assistant message that requested the
+    // tools, not drop it. The mock serves its scripted list in order, so
+    // iteration 1 gets the tool call (usage 100) and iteration 2 — after the
+    // tool result — gets the plain reply (usage 200), proving meters stay
+    // attached per iteration instead of folding into one.
+    let tmp = tempfile::tempdir().unwrap();
+    let round_tools = concat!(
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"a.rs\\\"}\"}}]}}]}\n\n",
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":10,\"total_tokens\":110}}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let round_plain = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"done reading\"}}]}\n\n",
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":200,\"completion_tokens\":20,\"total_tokens\":220}}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let (base, _h) = spawn_mock(vec![round_tools, round_plain]).await;
+    let mut agent = Agent::new(settings_for(tmp.path(), &base)).unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+    // read_file on a real file so the tool succeeds and the turn continues.
+    std::fs::write(tmp.path().join("a.rs"), "fn main() {}\n").unwrap();
+    agent.run("read the file", tx).await.unwrap();
+    while let Ok(_ev) = rx.try_recv() {}
+
+    let metered: Vec<(String, u64)> = agent
+        .messages
+        .iter()
+        .filter(|m| m.role == "assistant")
+        .filter_map(|m| m.usage.map(|u| (m.role.clone(), u.prompt_tokens)))
+        .collect();
+    assert_eq!(
+        metered,
+        vec![
+            ("assistant".to_string(), 100),
+            ("assistant".to_string(), 200)
+        ],
+        "each iteration's meter lands on its own assistant message"
     );
 }

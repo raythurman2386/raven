@@ -2154,12 +2154,7 @@ fn start_task(
     }
     state.assistant_text.clear();
 
-    let user_msg = ChatMessage {
-        role: "user".into(),
-        content: Some(text.to_string()),
-        tool_calls: None,
-        tool_call_id: None,
-    };
+    let user_msg = ChatMessage::plain("user", Some(text.to_string()));
     let _ = store.append_message(session, &user_msg);
     // Keep the user line in TUI history so /stop does not wipe it, but
     // preload the agent without it — `Agent::run` appends `prompt` itself.
@@ -2214,12 +2209,7 @@ fn handle_plan_response(
         format!("Revise the plan based on this feedback:\n{text}")
     };
 
-    let user_msg = ChatMessage {
-        role: "user".into(),
-        content: Some(prompt.clone()),
-        tool_calls: None,
-        tool_call_id: None,
-    };
+    let user_msg = ChatMessage::plain("user", Some(prompt.clone()));
     let _ = store.append_message(session, &user_msg);
     let preload = state.session_messages.clone();
     state.session_messages.push(user_msg);
