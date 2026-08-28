@@ -4,8 +4,8 @@ Raven is not one of Omarchy's stock coding agents (`claude`, `codex`, `grok`,
 …). On [Omarchy](https://omarchy.org/) you wire it in **locally** so it can be:
 
 1. **Your default agent** — launched from the menu / keybinding (`omarchy-agent`)
-2. **A tab in the Agents bar panel** — session counts, estimated tokens by day
-   and model (`ret.agents`, cloned from `omarchy.agents`)
+2. **A tab in the Agents bar panel** — session counts, real provider token
+   meters by day and model (`ret.agents`, cloned from `omarchy.agents`)
 
 Stock Omarchy binaries live under `/usr/share/omarchy/` and are overwritten on
 update. Everything below stays in your home directory and survives
@@ -202,11 +202,12 @@ Session roots (in order):
 
 #### Token totals
 
-Raven does **not** yet persist provider token meters in `summary.json` /
-`messages.jsonl`. The collector **estimates** tokens as ≈ `ceil(len(text) / 4)`
-from message content so the day chart and model breakdown stay useful. Prompt
-and session counts are exact. When Raven starts writing real usage, update the
-collector to prefer those fields.
+Raven persists the provider's real token meter on each assistant message in
+`messages.jsonl` (`usage` with `promptTokens` / `completionTokens` /
+`totalTokens`). The collector prefers those meters and reports input and
+output separately; transcripts written by older Raven builds (or providers
+that never report usage) fall back to the ≈ `ceil(len(text) / 4)` estimate,
+counted as output. Prompt and session counts are exact.
 
 #### Manual refresh
 

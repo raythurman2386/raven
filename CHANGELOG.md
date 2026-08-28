@@ -4,6 +4,29 @@ All notable changes to Raven are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.15] - 2026-08-28
+
+### Added
+
+- **Provider token meters are now persisted** — every response's real
+  `usage` (from `stream_options.include_usage` chunks or non-streaming
+  bodies) rides on the assistant message it belongs to and lands in
+  `messages.jsonl` (`usage` with `promptTokens` / `completionTokens` /
+  `totalTokens`). One meter per iteration, including tool-call turns and
+  the max-iteration wrap-up request; compaction folds the meters of
+  dropped messages onto the summary so totals never shrink. The field is
+  stripped from outgoing requests, so replayed history never echoes it to
+  the provider, and transcripts from meterless providers are byte-identical
+  to before.
+
+### Changed
+
+- **Omarchy agents-panel collector prefers real meters** —
+  `omarchy-agent-usage-raven` reads the persisted `usage` and reports
+  input/output separately instead of counting everything as a char-per-4
+  output estimate. Transcripts without meters (older sessions) keep the
+  estimate as a fallback, so history stays visible.
+
 ## [0.5.14] - 2026-08-28
 
 ### Changed
@@ -443,7 +466,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Bumped `anydoc` 0.1.8 → 0.1.9.
 
-[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.5.14...HEAD
+[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.5.15...HEAD
+[0.5.15]: https://github.com/raythurman2386/raven/compare/v0.5.14...v0.5.15
 [0.5.14]: https://github.com/raythurman2386/raven/compare/v0.5.13...v0.5.14
 [0.5.10]: https://github.com/raythurman2386/raven/compare/v0.5.9...v0.5.10
 [0.5.9]: https://github.com/raythurman2386/raven/compare/v0.5.8...v0.5.9
