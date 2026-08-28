@@ -886,3 +886,227 @@ async fn set_model_with_provider_qualifier_switches_provider() {
     let model = opts.iter().find(|o| o["id"] == "model").unwrap();
     assert_eq!(model["currentValue"], "opencode-go/glm-5.3-flash");
 }
+
+// ── checkpoint persistence through the ACP prompt path ─────────────────────
+
+/// A minimal streaming-completion mock: serves the scripted SSE bodies in
+/// order, then a benign empty completion. Keep-alive aware (one connection,
+/// many requests) to match the agent's shared reqwest client.
+async fn spawn_completion_mock(bodies: Vec<&'static str>) -> (String, tokio::task::JoinHandle<()>) {
+    use std::net::TcpListener as StdTcpListener;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let std_listener = StdTcpListener::bind("127.0.0.1:0").expect("bind mock listener");
+    let addr = std_listener.local_addr().expect("local addr");
+    std_listener.set_nonblocking(true).expect("set_nonblocking");
+    let listener =
+        tokio::net::TcpListener::from_std(std_listener).expect("convert to tokio listener");
+
+    let handle = tokio::spawn(async move {
+        let mut next = 0usize;
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                break;
+            };
+            loop {
+                let mut buf = Vec::new();
+                let mut tmp = [0u8; 4096];
+                // Read until end of headers.
+                let n = loop {
+                    match stream.read(&mut tmp).await {
+                        Ok(0) => break 0,
+                        Ok(n) => {
+                            buf.extend_from_slice(&tmp[..n]);
+                            if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                                break buf.len();
+                            }
+                        }
+                        Err(_) => break 0,
+                    }
+                };
+                if n == 0 {
+                    break;
+                }
+                // Drain the request body (Content-Length) so keep-alive
+                // framing stays aligned for the next request.
+                let headers_end = buf
+                    .windows(4)
+                    .position(|w| w == b"\r\n\r\n")
+                    .expect("header terminator");
+                let content_length: usize = String::from_utf8_lossy(&buf[..headers_end])
+                    .lines()
+                    .find_map(|l| {
+                        let (k, v) = l.split_once(':')?;
+                        k.eq_ignore_ascii_case("content-length")
+                            .then(|| v.trim().parse().ok())
+                            .flatten()
+                    })
+                    .unwrap_or(0);
+                let body_start = headers_end + 4;
+                while buf.len() < body_start + content_length {
+                    match stream.read(&mut tmp).await {
+                        Ok(0) => break,
+                        Ok(n) => buf.extend_from_slice(&tmp[..n]),
+                        Err(_) => break,
+                    }
+                }
+                // GETs (provider model probes) get an empty JSON list; POSTs
+                // that are not completions (Ollama's /api/show context probe)
+                // get an empty result object. Only /chat/completions POSTs
+                // consume scripted bodies.
+                let is_completion = buf.starts_with(b"POST ")
+                    && buf
+                        .windows(22)
+                        .take(600)
+                        .any(|w| w == b"/chat/completions HTTP");
+                let body = if is_completion {
+                    bodies
+                        .get(next)
+                        .map(|b| (*b).to_string())
+                        .unwrap_or_else(|| "data: [DONE]\n\n".to_string())
+                } else {
+                    "[]".to_string()
+                };
+                if is_completion {
+                    next += 1;
+                }
+                let content_type = if is_completion {
+                    "text/event-stream"
+                } else {
+                    "application/json"
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\n\r\n{}",
+                    content_type,
+                    body.len(),
+                    body
+                );
+                if stream.write_all(response.as_bytes()).await.is_err() {
+                    break;
+                }
+            }
+        }
+    });
+
+    (format!("http://{addr}"), handle)
+}
+
+fn sse_tool_round(call_id: &str, path: &str) -> String {
+    let args = json!({"path": path}).to_string();
+    format!(
+        "data: {{\"choices\":[{{\"delta\":{{\"tool_calls\":[{{\"index\":0,\"id\":\"{call_id}\",\"type\":\"function\",\"function\":{{\"name\":\"read_file\",\"arguments\":{}}}}}]}}}}]}}\n\ndata: [DONE]\n\n",
+        serde_json::json!(args)
+    )
+}
+
+/// Non-streaming JSON body (used by the background title job's completion).
+fn json_title_reply() -> String {
+    json!({
+        "choices": [{"message": {"content": "Test Session Title"}}]
+    })
+    .to_string()
+}
+
+fn sse_text_round(text: &str) -> String {
+    format!(
+        "data: {{\"choices\":[{{\"delta\":{{\"content\":{}}}}}]}}\n\ndata: [DONE]\n\n",
+        serde_json::json!(text)
+    )
+}
+
+/// A multi-round turn must leave every tool round persisted in
+/// messages.jsonl via the ACP Checkpoint arm — a crash mid-turn keeps
+/// history. The persistence must also run off the runtime (spawn_blocking),
+/// which this exercises implicitly: the mock completes only if the event
+/// pump keeps draining while the write runs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn checkpoint_persists_each_tool_round_through_acp() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().canonicalize().unwrap();
+    std::fs::write(ws.join("a.rs"), "fn main() {}\n").unwrap();
+
+    // Request order: (1) the background title job's non-streaming completion,
+    // (2..3) the two tool rounds, (4) the final text round.
+    let tool_round_1 = sse_tool_round("call_1", "a.rs");
+    let tool_round_2 = sse_tool_round("call_2", "a.rs");
+    let final_round = sse_text_round("done reading");
+    let title_reply = json_title_reply();
+    let (base, _mock) = spawn_completion_mock(vec![
+        Box::leak(title_reply.into_boxed_str()),
+        Box::leak(tool_round_1.into_boxed_str()),
+        Box::leak(tool_round_2.into_boxed_str()),
+        Box::leak(final_round.into_boxed_str()),
+    ])
+    .await;
+
+    let mut s = settings(&ws);
+    s.provider.base_url = base;
+    let server = Arc::new(Mutex::new(AcpServer::new(s, ConfigFile::default())));
+    let buf = Arc::new(StdMutex::new(Vec::new()));
+    let writer: Arc<Mutex<dyn FrameWrite>> = Arc::new(Mutex::new(BufWriter { buf: buf.clone() }));
+
+    send(
+        &server,
+        &writer,
+        req(1, "initialize", json!({"protocolVersion": 1})),
+    )
+    .await;
+    send(
+        &server,
+        &writer,
+        req(
+            2,
+            "session/new",
+            json!({"cwd": ws.display().to_string(), "mcpServers": []}),
+        ),
+    )
+    .await;
+    let frames = frames_from(&buf);
+    let sid = frames[1]["result"]["sessionId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    send(
+        &server,
+        &writer,
+        req(
+            3,
+            "session/prompt",
+            json!({"sessionId": sid, "prompt": [{"type":"text","text":"read a.rs twice"}]}),
+        ),
+    )
+    .await;
+
+    // The prompt response arrives after both tool rounds + checkpoints.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let got = frames_from(&buf)
+            .iter()
+            .any(|f| f.get("id") == Some(&json!(3)) && f.get("result").is_some());
+        if got || std::time::Instant::now() > deadline {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    let store = crate::session::SessionStore::for_workspace(&ws).unwrap();
+    let persisted = store.load(&sid).unwrap();
+    let tool_results = persisted
+        .messages
+        .iter()
+        .filter(|m| m.role == "tool")
+        .count();
+    assert!(
+        tool_results >= 2,
+        "both tool rounds must be checkpointed mid-turn, got {tool_results}"
+    );
+    assert!(
+        persisted
+            .messages
+            .last()
+            .and_then(|m| m.content.as_deref())
+            .is_some_and(|c| c.contains("done reading")),
+        "final text must be persisted"
+    );
+}

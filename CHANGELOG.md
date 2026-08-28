@@ -6,6 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **ACP app-server could exit silently mid-turn** — the `Checkpoint` and
+  `SessionTitle` handlers rewrote `messages.jsonl` / `summary.json` with
+  blocking filesystem work inline on the async runtime, and a failed stdout
+  frame write killed the whole `raven --acp` process with no persisted trace
+  (surfaced downstream as "app-server exited before responding"). Persistence
+  now runs on the blocking pool and is serialized per session so concurrent
+  checkpoint snapshots can never land out of order and rewind the transcript;
+  exit reasons are logged, and an ACP regression test covers multi-round
+  checkpoint persistence through the server.
+
 ## [0.5.16] - 2026-08-28
 
 ### Fixed

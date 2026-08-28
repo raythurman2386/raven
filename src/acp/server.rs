@@ -59,6 +59,12 @@ struct LiveSession {
     store: SessionStore,
     persisted: Session,
     cancel: Option<tokio::task::AbortHandle>,
+    /// Serialized transcript persistence. Checkpoint snapshots carry the
+    /// FULL history, so writes must land in event order: a stale write
+    /// landing after a newer one would rewind messages.jsonl. The worker
+    /// also keeps the sync FS work off the runtime (an inline write stalls
+    /// the event pump mid-stream for large transcripts).
+    saver: Option<tokio::task::JoinHandle<()>>,
 }
 
 /// In-memory ACP agent state (sessions + pending client replies).
@@ -282,6 +288,7 @@ async fn on_session_new(srv: &mut AcpServer, id: &Value, params: &Value) -> Valu
             store,
             persisted,
             cancel: None,
+            saver: None,
         },
     );
     result_msg(
@@ -364,6 +371,7 @@ async fn on_session_load(
             store,
             persisted,
             cancel: None,
+            saver: None,
         },
     );
     result_msg(
@@ -431,6 +439,7 @@ async fn on_session_resume(srv: &mut AcpServer, id: &Value, params: &Value) -> V
             store,
             persisted,
             cancel: None,
+            saver: None,
         },
     );
     result_msg(
@@ -764,21 +773,57 @@ async fn run_prompt_inner(
                 break;
             }
             AgentEvent::Checkpoint(msgs) => {
+                // Persist off the runtime, in order: each Checkpoint snapshot
+                // carries the full history, so writes are chained through the
+                // session's saver task — an inline write would stall the event
+                // pump mid-stream, and un-ordered spawn_blocking writes could
+                // land a stale snapshot after a newer one (rewinding the
+                // transcript).
+                let (store, session, prev_saver, snapshot) = {
+                    let mut srv = server.lock().await;
+                    match srv.sessions.get_mut(&sid) {
+                        Some(sess) => {
+                            sess.messages = msgs.clone();
+                            (
+                                sess.store.clone(),
+                                sess.persisted.clone(),
+                                sess.saver.take(),
+                                msgs.clone(),
+                            )
+                        }
+                        None => continue,
+                    }
+                };
+                let saver = tokio::spawn(async move {
+                    let write = tokio::task::spawn_blocking(move || {
+                        store.save_all_messages(&session, &snapshot)
+                    });
+                    if let Some(prev) = prev_saver {
+                        let _ = prev.await;
+                    }
+                    let _ = write.await;
+                });
                 let mut srv = server.lock().await;
                 if let Some(sess) = srv.sessions.get_mut(&sid) {
-                    sess.messages = msgs.clone();
-                    let _ = sess.store.save_all_messages(&sess.persisted, &msgs);
+                    sess.saver = Some(saver);
                 }
             }
             AgentEvent::SessionTitle(generated) => {
-                let mut srv = server.lock().await;
-                if let Some(sess) = srv.sessions.get_mut(&sid) {
-                    if sess.persisted.summary.title.is_empty() {
-                        let _ = sess
-                            .store
-                            .update_summary(&mut sess.persisted, Some(generated));
+                // Same off-runtime treatment as Checkpoint: the summary write
+                // is sync FS under the server lock.
+                let (store, mut session) = {
+                    let mut srv = server.lock().await;
+                    match srv.sessions.get_mut(&sid) {
+                        Some(sess) if sess.persisted.summary.title.is_empty() => {
+                            (sess.store.clone(), sess.persisted.clone())
+                        }
+                        _ => continue,
                     }
-                }
+                };
+                let _ = tokio::task::spawn_blocking(move || {
+                    store.update_summary(&mut session, Some(generated))
+                })
+                .await;
             }
             other => {
                 let updates = map_event(&other, &mut tool_seq);
@@ -801,12 +846,32 @@ async fn run_prompt_inner(
     }
     match finished {
         Ok(Ok(messages)) => {
-            let mut srv = server.lock().await;
-            if let Some(sess) = srv.sessions.get_mut(&sid) {
-                sess.messages = messages.clone();
-                let _ = sess.store.save_all_messages(&sess.persisted, &messages);
-                let _ = sess.store.update_summary(&mut sess.persisted, Some(title));
+            let (store, session, prev_saver) = {
+                let mut srv = server.lock().await;
+                match srv.sessions.get_mut(&sid) {
+                    Some(sess) => {
+                        sess.messages = messages.clone();
+                        (
+                            sess.store.clone(),
+                            sess.persisted.clone(),
+                            sess.saver.take(),
+                        )
+                    }
+                    None => return Ok(stop),
+                }
+            };
+            // Chain after any in-flight checkpoint so the final full-history
+            // write can never be overtaken by a stale one, and finish before
+            // the prompt response is sent (the client may resume immediately).
+            let write = tokio::task::spawn_blocking(move || {
+                let mut session = session;
+                let _ = store.save_all_messages(&session, &messages);
+                store.update_summary(&mut session, Some(title))
+            });
+            if let Some(prev) = prev_saver {
+                let _ = prev.await;
             }
+            let _ = write.await;
             Ok(stop)
         }
         Ok(Err(_)) => Ok(if stop == StopReason::EndTurn {
@@ -851,26 +916,44 @@ where
         }
         match Incoming::parse_line(&line) {
             Ok(incoming) => {
-                dispatch(server.clone(), incoming, writer.clone()).await?;
+                if let Err(e) = dispatch(server.clone(), incoming, writer.clone()).await {
+                    // A stdout write failure (EPIPE after the client died)
+                    // ends the process; without this the exit is a silent
+                    // clean-return that no harness can diagnose.
+                    tracing::error!("ACP dispatch failed; exiting: {e:#}");
+                    return Err(e);
+                }
             }
             Err(e) => {
-                writer
-                    .lock()
-                    .await
-                    .write_frame(&error_msg(None, error_code::PARSE, &e))?;
+                let result =
+                    writer
+                        .lock()
+                        .await
+                        .write_frame(&error_msg(None, error_code::PARSE, &e));
+                if let Err(write_err) = result {
+                    tracing::error!("ACP stdout write failed; exiting: {write_err:#}");
+                    return Err(write_err);
+                }
             }
         }
     }
+    tracing::info!("ACP stdin closed; exiting");
     Ok(())
 }
 
 /// Run `raven --acp` on real stdin/stdout.
 pub async fn run_stdio(settings: Settings, cfg: crate::config::ConfigFile) -> Result<()> {
+    tracing::info!("ACP serving (raven {})", env!("CARGO_PKG_VERSION"));
     let server = AcpServer::new(settings, cfg);
-    serve_io(
+    let result = serve_io(
         server,
         std::io::BufReader::new(std::io::stdin()),
         std::io::stdout(),
     )
-    .await
+    .await;
+    match &result {
+        Ok(()) => tracing::info!("ACP exited: stdin EOF"),
+        Err(e) => tracing::error!("ACP exited with error: {e:#}"),
+    }
+    result
 }
