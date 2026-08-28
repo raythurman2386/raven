@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.16] - 2026-08-28
+
 ### Fixed
 
 - **Mid-turn work was lost on interrupt or crash** — `messages.jsonl` was only
@@ -490,7 +492,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Bumped `anydoc` 0.1.8 → 0.1.9.
 
-[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.5.15...HEAD
+[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.5.16...HEAD
+[0.5.16]: https://github.com/raythurman2386/raven/compare/v0.5.15...v0.5.16
 [0.5.15]: https://github.com/raythurman2386/raven/compare/v0.5.14...v0.5.15
 [0.5.14]: https://github.com/raythurman2386/raven/compare/v0.5.13...v0.5.14
 [0.5.10]: https://github.com/raythurman2386/raven/compare/v0.5.9...v0.5.10
