@@ -4,7 +4,39 @@ All notable changes to Raven are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.14] - 2026-08-28
+
+### Changed
+
+- **Steering no longer aborts the running turn** — typing while a turn runs
+  is now allowed, and pressing Enter queues the message as a mid-turn
+  direction that lands at the next iteration boundary as a `[steer]` user
+  message (`AgentEvent::Steered` fires so consumers can render the moment it
+  reached the model). `/steer` queues into the running turn the same way and
+  keeps its re-fire semantics when idle. A direction typed in the turn's
+  final moments is replayed as a fresh turn at `Done` so it is never dropped.
+  Previously the TUI locked text input while running, `/steer` killed the
+  turn (losing all in-flight tool work), and the agent restarted from the
+  original prompt.
+- **Per-iteration "Re-anchor" reminder removed** — the goal/todo anchor
+  reminder now fires once at iteration 4 and then every 8th iteration
+  (12, 20, …) instead of on every iteration past 4, and the one-shot
+  iteration-5 "reflect" nudge is gone. Small models were parroting the
+  injected reminder ("Re-anchoring: …") into every narration and restating
+  the task list each turn instead of working.
+- **System prompt narration rules** — the output section now asks for
+  minimal narration (no "Let me inspect…" play-by-play), no restating of
+  `<raven_reminder>` messages, and direct resumption when asked to continue.
+
+### Fixed
+
+- **SIGSYS-killed commands now explain themselves** — the sandbox's seccomp
+  network block kills the first outbound TCP connection with SIGSYS (shell
+  exit code 159). The tool result now says this is a deterministic sandbox
+  policy, not an environment bug, and tells the model not to retry or
+  re-diagnose. Previously a package install died silently and the model
+  burned many iterations testing proxy env vars, forcing IPv4, and swapping
+  `pnpm` for `curl` before asking the user for "high quality logs".
 
 ## [0.5.13] - 2026-08-27
 
@@ -35,6 +67,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   iterations) left nothing to inspect while it ran and looked hung.
   `debug-events.jsonl` now records each iteration (and sub-agent iteration)
   as it happens, restoring a live timeline for post-mortems.
+- **Update integration tests no longer flake on `ETXTBSY`** — spawning the
+  freshly copied test binary could fail with `ExecutableFileBusy` on loaded
+  CI runners when another process briefly held a write reference to the
+  file. The test spawn helpers now retry with backoff, re-applying env
+  overrides on every attempt so retries still hit the local test server.
 
 ### Added
 
@@ -406,7 +443,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Bumped `anydoc` 0.1.8 → 0.1.9.
 
-[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.5.10...HEAD
+[Unreleased]: https://github.com/raythurman2386/raven/compare/v0.5.14...HEAD
+[0.5.14]: https://github.com/raythurman2386/raven/compare/v0.5.13...v0.5.14
 [0.5.10]: https://github.com/raythurman2386/raven/compare/v0.5.9...v0.5.10
 [0.5.9]: https://github.com/raythurman2386/raven/compare/v0.5.8...v0.5.9
 [0.5.8]: https://github.com/raythurman2386/raven/compare/v0.5.7...v0.5.8

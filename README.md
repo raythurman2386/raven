@@ -213,7 +213,7 @@ raven --mode agent -p "Refactor this function"
 - **`/clear`** — start a fresh turn (keeps session history)
 - **`/retry`** — re-run the last user prompt after a failed turn
 - **`/loop [N]`** — show or set the max iteration budget for new turns
-- **`/steer <message>`** — redirect the running agent (restarts the turn with your direction appended)
+- **`/steer <message>`** — redirect the running agent (queued into the turn; re-fires the last turn when idle)
 - **`/cleanup <days> [--yes]`** — prune sessions older than N days (dry-run unless `--yes`; never deletes the current session)
 - **`^C`** — stop the current task (session auto-saves)
 - **Tab** — complete the current slash command or its argument; press again to cycle candidates. **Enter** submits when the box already holds a complete candidate (Tab-filled or fully typed), otherwise it fills the highlighted one
