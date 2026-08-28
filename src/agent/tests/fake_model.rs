@@ -529,3 +529,77 @@ async fn mixed_read_write_tool_results_preserve_call_order() {
         "write should have applied"
     );
 }
+
+#[tokio::test]
+async fn title_prompt_is_toolless_and_does_not_pollute_history() {
+    let tmp = tempfile::tempdir().unwrap();
+    let seen: std::sync::Arc<std::sync::Mutex<Vec<Value>>> = Default::default();
+    let seen_src = seen.clone();
+    let mut agent = Agent::new(settings_for(tmp.path()))
+        .unwrap()
+        .with_completion_source(Box::new(move |req: &Value| {
+            seen_src.lock().unwrap().push(req.clone());
+            sse_text("Optimizing Editor for Large Files")
+        }));
+    let before = agent.messages.len();
+    let (tx, mut rx) = mpsc::channel(64);
+    let prompt = "Reply with ONLY a concise 3-5 word title in Title Case \
+         (no quotes, no punctuation) for a coding session that begins \
+         with this request:\n\ncan we inspect this project";
+    agent.run(prompt, tx).await.unwrap();
+    let events = drain(&mut rx).await;
+
+    assert_eq!(
+        agent.messages.len(),
+        before,
+        "title turn must not append user/assistant messages"
+    );
+    assert!(events.iter().any(|e| matches!(
+        e,
+        AgentEvent::SessionTitle(t) if t == "Optimizing Editor for Large Files"
+    )));
+    assert!(events.iter().any(|e| matches!(e, AgentEvent::Done)));
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Checkpoint(_))),
+        "title turn must not checkpoint a fake conversation"
+    );
+
+    let reqs = seen.lock().unwrap();
+    assert_eq!(reqs.len(), 1, "exactly one title completion");
+    assert!(
+        reqs[0].get("tools").is_none(),
+        "title request must not advertise tools"
+    );
+    assert_eq!(reqs[0]["max_tokens"], 24);
+    let msgs = reqs[0]["messages"].as_array().expect("messages");
+    assert_eq!(msgs.len(), 2);
+    assert_eq!(msgs[1]["content"], "can we inspect this project");
+}
+
+#[tokio::test]
+async fn tool_round_emits_checkpoint_with_tool_result() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("a.rs"), "fn main() {}\n").unwrap();
+    let mut agent = Agent::new(settings_for(tmp.path()))
+        .unwrap()
+        .with_completion_source(scripted(vec![
+            sse_tool_call("call_1", "read_file", r#"{"path":"a.rs"}"#),
+            sse_text("Done reading."),
+        ]));
+    let (tx, mut rx) = mpsc::channel(64);
+    agent.run("read a.rs", tx).await.unwrap();
+    let events = drain(&mut rx).await;
+
+    let checkpoint = events.iter().find_map(|e| match e {
+        AgentEvent::Checkpoint(msgs) => Some(msgs),
+        _ => None,
+    });
+    let msgs = checkpoint.expect("tool round must emit Checkpoint");
+    assert!(
+        msgs.iter()
+            .any(|m| m.role == "tool" && m.content.as_deref().unwrap_or("").contains("fn main")),
+        "checkpoint must include the tool result so a crash mid-turn keeps history"
+    );
+}

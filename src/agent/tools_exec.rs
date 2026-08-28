@@ -441,6 +441,7 @@ impl Agent {
             }
         }
 
+        let _ = tx.send(AgentEvent::Checkpoint(self.messages.clone())).await;
         Ok(())
     }
 

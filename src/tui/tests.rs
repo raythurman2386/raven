@@ -534,6 +534,7 @@ fn dummy_state() -> TuiState {
         event_rx: None,
         steer_tx: None,
         pending_late_steer: None,
+        title_handle: None,
         selection: None,
         last_click: None,
         copy_status: None,

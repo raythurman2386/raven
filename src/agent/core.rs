@@ -138,7 +138,7 @@ const SYSTEM_BASE: &str = r#"You are an efficient coding agent. You help with so
 - If you're stuck or a tool returns an error, explain what happened in one or two sentences and adjust course. Never restate or paraphrase <raven_reminder> messages back to the user — they are internal steering, not conversation.
 - When asked to continue mid-task, resume work directly instead of restating the goal, plan, or progress.
 - After reading a file you have its contents for the requested line range. read_file only returns up to 400 lines by default; if the output ends with "... [truncated]", you have NOT seen the whole file — call read_file again with a larger max_lines or a start_line to read the rest before concluding.
-- Do not call list_dir again — you already know the structure.
+- The <repo_map> in this prompt is the workspace structure. Do not list the workspace root unless you need a specific subdirectory that is not in the map.
 </output>
 "#;
 
@@ -500,6 +500,10 @@ impl Agent {
     /// Returns `Ok(())` on normal completion or error event; the caller
     /// should drain `tx` to observe the outcome.
     pub async fn run(&mut self, user_text: &str, tx: mpsc::Sender<AgentEvent>) -> Result<()> {
+        if super::title::is_title_prompt(user_text) {
+            return self.run_title_prompt(user_text, &tx).await;
+        }
+
         self.messages
             .push(ChatMessage::plain("user", Some(user_text.to_string())));
 
@@ -554,6 +558,79 @@ impl Agent {
         // The iteration budget is exhausted without a final answer. Leave the
         // working tree as-is — the harness never auto-commits.
         self.finish_with_summary(&tx).await?;
+        Ok(())
+    }
+
+    /// Answer a session-title request without tools, repo map, or history.
+    ///
+    /// The title is streamed as text and emitted as [`AgentEvent::SessionTitle`]
+    /// so consumers can update `summary.json`. The title turn is **not**
+    /// appended to `self.messages`, so `save_all_messages` cannot clobber a
+    /// real conversation with the three-line title exchange.
+    async fn run_title_prompt(
+        &mut self,
+        user_text: &str,
+        tx: &mpsc::Sender<AgentEvent>,
+    ) -> Result<()> {
+        let mut body = super::title::title_request_body(
+            &self.settings.model,
+            user_text,
+            !self.settings.no_stream,
+        );
+        if !self.settings.no_stream && self.usage_supported {
+            body["stream_options"] = json!({"include_usage": true});
+        }
+        let url = format!(
+            "{}/chat/completions",
+            self.settings.base_url().trim_end_matches('/')
+        );
+
+        let parsed: ParsedCompletion = {
+            #[cfg(test)]
+            {
+                if let Some(source) = self.completion_source.as_mut() {
+                    let raw = source(&body);
+                    if self.settings.no_stream {
+                        let v: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+                        super::stream::process_non_stream_json(&v, tx).await
+                    } else {
+                        super::stream::process_stream_text(&raw, tx).await
+                    }
+                } else {
+                    match self.send_with_retry(&url, &mut body, tx).await {
+                        Ok(resp) => {
+                            if self.settings.no_stream {
+                                self.process_non_stream(resp, tx).await
+                            } else {
+                                self.process_stream(resp, tx).await
+                            }
+                        }
+                        Err(_) => ParsedCompletion::default(),
+                    }
+                }
+            }
+            #[cfg(not(test))]
+            {
+                match self.send_with_retry(&url, &mut body, tx).await {
+                    Ok(resp) => {
+                        if self.settings.no_stream {
+                            self.process_non_stream(resp, tx).await
+                        } else {
+                            self.process_stream(resp, tx).await
+                        }
+                    }
+                    Err(_) => ParsedCompletion::default(),
+                }
+            }
+        };
+
+        let mut title = super::title::sanitize_title(&parsed.content);
+        if title.is_empty() {
+            title = super::title::fallback_title(user_text);
+            let _ = tx.send(AgentEvent::TextDelta(title.clone())).await;
+        }
+        let _ = tx.send(AgentEvent::SessionTitle(title)).await;
+        let _ = tx.send(AgentEvent::Done).await;
         Ok(())
     }
 

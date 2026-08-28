@@ -389,6 +389,8 @@ pub fn map_event(event: &AgentEvent, tool_seq: &mut u64) -> Vec<Value> {
         | AgentEvent::VerifyRequired
         | AgentEvent::Steered(_)
         | AgentEvent::AskUser { .. }
+        | AgentEvent::Checkpoint(_)
+        | AgentEvent::SessionTitle(_)
         | AgentEvent::Done
         | AgentEvent::Error(_) => Vec::new(),
     }

@@ -40,12 +40,12 @@ whether the model proposes a plan first and which tools it can use:
 
 | Mode | Plan first? | Toolset | Use case |
 |---|---|---|---|
-| `plan` | Yes | Read-only | Propose a plan, approve, then execute (default) |
-| `agent` | No | Full | Work directly with all tools |
+| `agent` | No | Full | Work directly with all tools (default) |
+| `plan` | Yes | Read-only | Propose a plan, approve, then execute |
 | `chat` | No | Read-only | Q&A / exploration without modifying the workspace |
 
 Choose the mode with `--mode <plan|agent|chat>` on the CLI, or cycle with
-`Shift+Tab` in the TUI. The default is `plan`.
+`Shift+Tab` in the TUI. The default is `agent`.
 
 ```bash
 raven --mode agent -p "Refactor the auth module"   # full tools, no plan

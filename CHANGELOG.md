@@ -4,6 +4,30 @@ All notable changes to Raven are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Mid-turn work was lost on interrupt or crash** — `messages.jsonl` was only
+  written at `Done`, so a long coding turn that set goals/todos/memory could
+  leave the session file stuck on a prior cheap request (for example a
+  session-title prompt). The loop now checkpoints conversation history after
+  every tool round.
+- **Session-title prompts ran as full agent turns** — a "Reply with ONLY a
+  concise 3-5 word title…" wrapper spent thousands of tokens on the system
+  prompt, repo map, and tool schema, then `save_all_messages` replaced the
+  real transcript with those three lines. Title requests are a tiny toolless
+  completion and are not persisted as conversation. The first real user
+  prompt also names the session in the background.
+
+### Changed
+
+- **Default interaction mode is `agent`** — full tools, no plan gate. Plan
+  and chat remain available via `--mode` / `Shift+Tab` / config. Chat mode
+  now says it is read-only in the TUI empty state and keyhint.
+- **System prompt** — drop the always-on "do not call list_dir again"
+  leftover; treat `<repo_map>` as the workspace listing.
+
 ## [0.5.15] - 2026-08-28
 
 ### Added

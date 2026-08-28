@@ -50,6 +50,7 @@ const SESSION_FORMAT_VERSION: u32 = 1;
 pub const CURRENT_SESSION_FORMAT_VERSION: u32 = SESSION_FORMAT_VERSION;
 
 /// Manages session storage for a workspace.
+#[derive(Clone)]
 pub struct SessionStore {
     sessions_dir: PathBuf,
     workspace: PathBuf,
@@ -186,6 +187,30 @@ impl SessionStore {
             "messages_saved",
             &format!("{} messages", messages.len()),
         )
+    }
+
+    /// Set `summary.title` for `id` only when it is still empty.
+    ///
+    /// Used by the background title job so a cheap completion cannot overwrite
+    /// a title the user (or a later turn) already chose. Does not load
+    /// `messages.jsonl`.
+    pub fn apply_title_if_empty(&self, id: &str, title: &str) -> Result<bool> {
+        let title = title.trim();
+        if title.is_empty() {
+            return Ok(false);
+        }
+        let path = self.session_dir(id).join(SUMMARY_FILE);
+        if !path.exists() {
+            return Ok(false);
+        }
+        let mut summary: SessionSummary = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
+        if !summary.title.is_empty() {
+            return Ok(false);
+        }
+        summary.title = title.to_string();
+        summary.updated_at = now_iso();
+        self.write_summary(&summary)?;
+        Ok(true)
     }
 
     /// Update the session's summary (title, updated_at).

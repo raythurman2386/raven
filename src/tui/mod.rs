@@ -43,7 +43,7 @@ use std::io::stdout;
 use std::sync::{Mutex, OnceLock};
 use tokio::sync::mpsc;
 
-use crate::agent::{Agent, AgentEvent, ChatMessage};
+use crate::agent::{generate_session_title, is_title_prompt, Agent, AgentEvent, ChatMessage};
 use crate::commands;
 use crate::config::{Mode, Settings};
 use crate::context::history_tokens;
@@ -304,6 +304,8 @@ struct TuiState {
     /// (preload, prompt, read_only) of the last user-initiated turn, for
     /// `/retry`. Cleared on session reset.
     last_turn: Option<(Vec<ChatMessage>, String, bool)>,
+    /// Background session-title job (first real user prompt only).
+    title_handle: Option<tokio::task::JoinHandle<Option<String>>>,
 }
 
 impl TuiState {
@@ -325,10 +327,13 @@ impl TuiState {
                     fmt_tokens(compact_at as u64),
                 ))),
                 BlockKind::System(SystemBlock::new(String::new())),
-                BlockKind::System(SystemBlock::new(
+                BlockKind::System(SystemBlock::new(if settings.mode == Mode::Chat {
+                    "chat is read-only · Shift+Tab to agent to edit · /help for commands"
+                        .to_string()
+                } else {
                     "try: describe a task, e.g. \"add auth middleware\" · /help for commands"
-                        .to_string(),
-                )),
+                        .to_string()
+                })),
             ],
             log_dirty: true,
             cached_log_lines: Vec::new(),
@@ -375,6 +380,7 @@ impl TuiState {
             prompt_history: Vec::new(),
             hist_idx: 0,
             last_turn: None,
+            title_handle: None,
         }
     }
 
@@ -1105,6 +1111,18 @@ pub async fn run_tui(
                     ));
                     state.log_dirty = true;
                 }
+                AgentEvent::Checkpoint(msgs) => {
+                    if !msgs.is_empty() {
+                        state.session_messages = msgs;
+                        state.messages_dirty = true;
+                        let _ = store.save_all_messages(&session, &state.session_messages);
+                    }
+                }
+                AgentEvent::SessionTitle(title) => {
+                    if session.summary.title.is_empty() {
+                        let _ = store.update_summary(&mut session, Some(title));
+                    }
+                }
                 AgentEvent::PlanProgress(plan) => {
                     state.plan_preview = plan::format_plan(&plan)
                         .lines()
@@ -1221,6 +1239,16 @@ pub async fn run_tui(
                     state.turn_tool_count = 0;
                     state.live_tool = None;
                     state.log_dirty = true;
+                }
+            }
+        }
+
+        if state.title_handle.as_ref().is_some_and(|h| h.is_finished()) {
+            if let Some(handle) = state.title_handle.take() {
+                if let Ok(Some(title)) = handle.await {
+                    if session.summary.title.is_empty() {
+                        let _ = store.update_summary(&mut session, Some(title));
+                    }
                 }
             }
         }
@@ -1388,6 +1416,8 @@ fn keyhint(state: &TuiState) -> String {
         "yes approve · type revise · esc dismiss".to_string()
     } else if state.running {
         "enter interrupt · ctrl+c quit".to_string()
+    } else if state.mode == Mode::Chat {
+        "chat is read-only · shift+tab agent to edit · enter send · /help · ctrl+c quit".to_string()
     } else {
         "enter send · /help · /model · /new · shift+tab mode · ctrl+c quit · up/down recall · wheel/pgup scroll · home/end jump · ↑/↓ completion when popup open".to_string()
     }
@@ -2155,12 +2185,22 @@ fn start_task(
     state.assistant_text.clear();
 
     let user_msg = ChatMessage::plain("user", Some(text.to_string()));
-    let _ = store.append_message(session, &user_msg);
-    // Keep the user line in TUI history so /stop does not wipe it, but
-    // preload the agent without it — `Agent::run` appends `prompt` itself.
+    let title_only = is_title_prompt(text);
+    // Preload the agent without this user line — `Agent::run` appends it.
     let preload = state.session_messages.clone();
-    state.session_messages.push(user_msg);
-    state.messages_dirty = true;
+    if !title_only {
+        let _ = store.append_message(session, &user_msg);
+        // Keep the user line in TUI history so /stop does not wipe it.
+        state.session_messages.push(user_msg);
+        state.messages_dirty = true;
+    }
+    if !title_only && session.summary.title.is_empty() && state.title_handle.is_none() {
+        let settings_for_title = settings.clone();
+        let prompt_for_title = text.to_string();
+        state.title_handle = Some(tokio::spawn(async move {
+            generate_session_title(&settings_for_title, &prompt_for_title).await
+        }));
+    }
 
     // Construct the agent off the TUI thread. `Agent::new` still does a
     // workspace walk + sandboxed git; a parent folder of many repos used
@@ -2241,6 +2281,9 @@ fn abort_current_turn(state: &mut TuiState) {
     }
     state.event_rx = None;
     state.steer_tx = None;
+    if let Some(handle) = state.title_handle.take() {
+        handle.abort();
+    }
 }
 
 /// Bind a fresh channel to this turn and spawn the agent off the TUI thread.

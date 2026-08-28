@@ -106,6 +106,13 @@ pub enum AgentEvent {
     Steered(String),
     /// The plan's step statuses have been updated during execution.
     PlanProgress(Plan),
+    /// Conversation snapshot after a tool round. Consumers persist this so a
+    /// crash or interrupt mid-turn does not lose history (`messages.jsonl`
+    /// is otherwise only written at `Done`).
+    Checkpoint(Vec<ChatMessage>),
+    /// A cheap session-title completion finished. Update `summary.title`;
+    /// do not treat this as conversation history.
+    SessionTitle(String),
     /// The agent finished normally (no more tool calls).
     Done,
     /// An error occurred (HTTP failure, stream error).

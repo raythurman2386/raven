@@ -23,7 +23,7 @@ It's built for focused, supervised work — not an autonomous loop trying to com
 
 ## How I use it
 
-Daily driver is the TUI, usually attached to Zed over ACP (`raven --acp`) so model switching happens in the editor's picker. In a terminal: `raven -p "…"` for plan-mode tasks, `--mode agent` for quick edits, `--yolo` for throwaway work.
+Daily driver is the TUI, usually attached to Zed over ACP (`raven --acp`) so model switching happens in the editor's picker. In a terminal: `raven -p "…"` for agent-mode tasks, `--mode plan` when you want a gated plan, `--yolo` for throwaway work.
 
 - **Sessions** — every turn lands in `.raven/sessions/` as JSONL. `--resume` continues the latest, `--list-sessions` browses, `/export` bundles a session as Markdown/JSON.
 - **Models** — `glm-5.3-flash:cloud` for day-to-day work, `x-ai/grok-4.5` on OpenRouter when a task needs frontier reasoning, `qwen3.8:latest` offline. `/model` + Tab completes; `/provider` switches endpoints.
@@ -62,11 +62,11 @@ raven
 raven -p "Explain the structure of this repository"
 raven -p "Add a README and .gitignore"
 
-# Plan mode (default): propose → approve → execute
+# Agent mode (default): full tools immediately, no plan step
 raven -p "Fix the failing tests"
 
-# Agent mode: full tools immediately, no plan step
-raven --mode agent -p "Refactor utils"
+# Plan mode: propose → approve → execute
+raven --mode plan -p "Refactor utils"
 
 # Fully autonomous (no confirmations)
 raven --yolo -p "Write unit tests for auth"
@@ -184,26 +184,28 @@ raven --export <id>       # export a specific session (see also TUI `/export`)
 
 ## Workflow & tips
 
-### Plan mode (default)
+### Agent mode (default)
 
-Plan mode is the recommended workflow for important changes:
+The default is full tools immediately — same shape as a Grok Build turn.
+Use `--mode plan` (or Shift+Tab in the TUI) when you want a gated plan:
+
 1. **Propose** — agent creates a step-by-step plan
 2. **Review** — you read and approve (or revise)
 3. **Execute** — agent runs the plan with full tools
 
 ```bash
-raven -p "Add type safety to this handler"
+raven --mode plan -p "Add type safety to this handler"
 # (agent proposes a plan)
 # ── Approve? [Y]es / [n]o / [r]evise ──
 # y
 # (agent executes)
 ```
 
-### Quick edits (agent mode)
+### Quick edits
 
-Skip the plan step for quick, exploratory tasks:
+Skip the plan step (this is the default):
 ```bash
-raven --mode agent -p "Refactor this function"
+raven -p "Refactor this function"
 ```
 
 ### TUI tips

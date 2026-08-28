@@ -32,9 +32,10 @@ mod provider;
 
 /// The user-facing interaction mode for a session.
 ///
-/// - [`Mode::Plan`] — propose a plan first (read-only toolset), then execute
-///   after approval. This is the default.
 /// - [`Mode::Agent`] — full toolset, no plan step. The model works directly.
+///   This is the default.
+/// - [`Mode::Plan`] — propose a plan first (read-only toolset), then execute
+///   after approval.
 /// - [`Mode::Chat`] — read-only toolset, no plan step. For Q&A / exploration
 ///   without modifying the workspace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -89,16 +90,16 @@ impl Mode {
 ///
 /// `--yolo` implies `--mode agent`: it disables the plan step and the shell
 /// confirmation gate, and must expose the full (write/shell) toolset. Without
-/// this, `raven --yolo` (no explicit `--mode`) would keep the default
-/// `Mode::Plan` and silently degrade to a read-only toolset, leaving the model
-/// unable to write files or run shell (see issue #126).
+/// this, `raven --yolo` (no explicit `--mode`) would keep a configured
+/// `Mode::Plan` / `Mode::Chat` and silently degrade to a read-only toolset,
+/// leaving the model unable to write files or run shell (see issue #126).
 ///
 /// An explicit CLI `--mode` (`explicit_mode = Some`) takes precedence over the
 /// yolo-implied agent mode, so a user can still request `--mode chat --yolo`
 /// for autonomous read-only exploration. The config-file `mode` does *not*
 /// count as explicit — only a CLI flag pins the mode.
 pub fn resolve_mode(explicit_mode: Option<Mode>, config_mode: Option<Mode>, yolo: bool) -> Mode {
-    let base = explicit_mode.or(config_mode).unwrap_or(Mode::Plan);
+    let base = explicit_mode.or(config_mode).unwrap_or(Mode::Agent);
     if yolo && explicit_mode.is_none() {
         Mode::Agent
     } else {

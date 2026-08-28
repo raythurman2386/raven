@@ -132,7 +132,7 @@ Raven advertises session config options over ACP:
 - **`mode`** (`plan` / `agent` / `chat`) — editors that support config options
   use this picker instead of the older `modes` field. Without it, a client
   that prefers `configOptions` would hide the mode selector and leave you
-  stuck in the default (plan).
+  stuck in the default (agent).
 - **`model`** — every configured provider's models as provider-qualified ids
   (`provider/model`), so you can switch providers and models without
   restarting the thread.

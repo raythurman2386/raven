@@ -42,10 +42,10 @@
 # Overridden by: --max-iterations? No — RAVEN_MAX_ITER / OG_MAX_ITER env.
 #max_iterations = 60
 
-# Interaction mode. "plan" (default): propose → approve → execute.
-# "agent": full tools, no plan step. "chat": read-only Q&A.
+# Interaction mode. "agent" (default): full tools, no plan step.
+# "plan": propose → approve → execute. "chat": read-only Q&A.
 # Overridden by: --mode flag.
-#mode = "plan"
+#mode = "agent"
 
 # Sampling temperature for the model endpoint.
 #temperature = 0.2

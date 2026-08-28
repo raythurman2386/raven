@@ -104,6 +104,16 @@ pub async fn drain_events_logged(
             AgentEvent::Steered(text) => {
                 eprintln!("[steered: {text}]");
             }
+            AgentEvent::Checkpoint(msgs) => {
+                if let Some((store, session)) = debug {
+                    let _ = store.save_all_messages(session, &msgs);
+                }
+            }
+            AgentEvent::SessionTitle(title) => {
+                if let Some((store, session)) = debug {
+                    let _ = store.apply_title_if_empty(&session.summary.id, &title);
+                }
+            }
             AgentEvent::Done => break,
             AgentEvent::Error(e) => {
                 eprintln!("\nError: {}", e);

@@ -35,11 +35,11 @@ fn resolve_mode_yolo_ignores_config_file_mode() {
 }
 
 #[test]
-fn resolve_mode_no_yolo_keeps_default_plan() {
+fn resolve_mode_no_yolo_keeps_default_agent() {
     let mode = resolve_mode(None, None, false);
-    assert_eq!(mode, Mode::Plan);
-    assert!(mode.read_only());
-    assert!(mode.plans_first());
+    assert_eq!(mode, Mode::Agent);
+    assert!(!mode.read_only());
+    assert!(!mode.plans_first());
 }
 
 #[test]

@@ -98,7 +98,7 @@ struct Cli {
     #[arg(short, long)]
     workspace: Option<PathBuf>,
 
-    /// Interaction mode: plan (default), agent, or chat
+    /// Interaction mode: agent (default), plan, or chat
     #[arg(long, value_enum)]
     mode: Option<ModeArg>,
 

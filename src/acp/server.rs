@@ -666,6 +666,19 @@ async fn run_prompt_inner(
             .sessions
             .get(&sid)
             .ok_or_else(|| anyhow::anyhow!("unknown session"))?;
+        if sess.persisted.summary.title.is_empty() && !crate::agent::is_title_prompt(&text) {
+            let settings = sess.settings.clone();
+            let store = sess.store.clone();
+            let id = sess.persisted.summary.id.clone();
+            let prompt = text.clone();
+            tokio::spawn(async move {
+                if let Some(generated) =
+                    crate::agent::generate_session_title(&settings, &prompt).await
+                {
+                    let _ = store.apply_title_if_empty(&id, &generated);
+                }
+            });
+        }
         (sess.settings.clone(), sess.messages.clone())
     };
 
@@ -749,6 +762,23 @@ async fn run_prompt_inner(
             AgentEvent::Error(_) => {
                 stop = StopReason::Refusal;
                 break;
+            }
+            AgentEvent::Checkpoint(msgs) => {
+                let mut srv = server.lock().await;
+                if let Some(sess) = srv.sessions.get_mut(&sid) {
+                    sess.messages = msgs.clone();
+                    let _ = sess.store.save_all_messages(&sess.persisted, &msgs);
+                }
+            }
+            AgentEvent::SessionTitle(generated) => {
+                let mut srv = server.lock().await;
+                if let Some(sess) = srv.sessions.get_mut(&sid) {
+                    if sess.persisted.summary.title.is_empty() {
+                        let _ = sess
+                            .store
+                            .update_summary(&mut sess.persisted, Some(generated));
+                    }
+                }
             }
             other => {
                 let updates = map_event(&other, &mut tool_seq);
