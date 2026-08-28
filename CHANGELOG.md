@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.17] - 2026-08-28
+
 ### Fixed
 
 - **ACP app-server could exit silently mid-turn** — the `Checkpoint` and

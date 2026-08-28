@@ -1,6 +1,6 @@
 [package]
 name = "raven"
-version = "0.5.16"
+version = "0.5.17"
 edition = "2021"
 description = "Privacy-first local coding-agent harness for Ollama / OpenAI-compatible endpoints"
 license = "MIT"
