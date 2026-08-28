@@ -285,6 +285,13 @@ struct TuiState {
     /// Receiver for the in-flight turn only. Replaced on every send so a
     /// leftover `Done` from an aborted turn cannot join the next handle.
     event_rx: Option<mpsc::Receiver<AgentEvent>>,
+    /// Sender into the running turn's steering queue. `None` whenever no
+    /// turn is running; typing while running becomes a queued steer on
+    /// Enter instead of an abort-and-restart.
+    steer_tx: Option<mpsc::UnboundedSender<String>>,
+    /// A steer queued in the turn's final moments that the agent may not
+    /// have consumed before Done. Replayed as a fresh turn at Done time.
+    pending_late_steer: Option<String>,
     selection: Option<Selection>,
     last_click: Option<(u64, DisplayPos)>,
     copy_status: Option<(u64, String)>,
@@ -359,6 +366,8 @@ impl TuiState {
             session_messages: Vec::new(),
             task_handle: None,
             event_rx: None,
+            steer_tx: None,
+            pending_late_steer: None,
             selection: None,
             last_click: None,
             copy_status: None,
@@ -718,7 +727,7 @@ pub async fn run_tui(
                                 scroll_log_by(&mut state, -10);
                             }
                             KeyCode::Left => {
-                                if !state.running || state.pending_question.is_some() {
+                                if state.pending_question.is_none() {
                                     // Move cursor left by one char (byte-safe).
                                     if let Some(prev) = state.input[..state.cursor]
                                         .char_indices()
@@ -731,7 +740,7 @@ pub async fn run_tui(
                                 }
                             }
                             KeyCode::Right => {
-                                if !state.running || state.pending_question.is_some() {
+                                if state.pending_question.is_none() {
                                     // Move right by one char (byte-safe). Advance
                                     // past the char at the cursor, including the
                                     // last char so the cursor can reach the true
@@ -755,7 +764,7 @@ pub async fn run_tui(
                                     state.scroll = state.log_max_scroll;
                                     state.auto_scroll = false;
                                     state.input_dirty = true;
-                                } else if !state.running || state.pending_question.is_some() {
+                                } else if state.pending_question.is_none() {
                                     state.cursor = 0;
                                     state.input_dirty = true;
                                 }
@@ -768,13 +777,13 @@ pub async fn run_tui(
                                     state.scroll = 0;
                                     state.auto_scroll = true;
                                     state.input_dirty = true;
-                                } else if !state.running || state.pending_question.is_some() {
+                                } else if state.pending_question.is_none() {
                                     state.cursor = state.input.len();
                                     state.input_dirty = true;
                                 }
                             }
                             KeyCode::Tab => {
-                                if !state.running || state.pending_question.is_some() {
+                                if state.pending_question.is_none() {
                                     if let Some(comp) = state.completion.as_mut() {
                                         // Fill the input with the highlighted
                                         // candidate. If the span already holds it
@@ -800,8 +809,11 @@ pub async fn run_tui(
                                 }
                             }
                             KeyCode::Char(c) => {
-                                if (!state.running || state.pending_question.is_some())
-                                    && state.input.chars().count() < MAX_INPUT_CHARS
+                                // Typing stays live while a turn runs: the text
+                                // becomes a queued steer on Enter (see the Enter
+                                // handler) instead of being locked out.
+                                if state.pending_question.is_some()
+                                    || state.input.chars().count() < MAX_INPUT_CHARS
                                 {
                                     state.input.insert(state.cursor, c);
                                     state.cursor += c.len_utf8();
@@ -811,7 +823,7 @@ pub async fn run_tui(
                                 state.completion = candidates_for(&state.input, &arg_candidates);
                             }
                             KeyCode::Backspace => {
-                                if !state.running || state.pending_question.is_some() {
+                                if state.pending_question.is_some() || !state.input.is_empty() {
                                     if let Some(prev) = state.input[..state.cursor]
                                         .char_indices()
                                         .next_back()
@@ -888,11 +900,29 @@ pub async fn run_tui(
                                 }
 
                                 if state.running {
-                                    abort_current_turn(&mut state);
-                                    state.push_system("⏸ interrupted — redirecting…");
-                                    state.log_dirty = true;
-                                    start_task(&mut state, &text, &settings, &store, &session)?;
-                                    continue;
+                                    // Steering, not interruption: queue the
+                                    // direction into the running turn and
+                                    // keep streaming. It lands at the next
+                                    // iteration boundary as a `[steer]`
+                                    // message. Slash commands still dispatch
+                                    // (handled above).
+                                    match state.steer_tx.clone() {
+                                        Some(tx) => {
+                                            if tx.send(text.clone()).is_ok() {
+                                                state.push_user(text.clone());
+                                                state.log_dirty = true;
+                                                continue;
+                                            }
+                                            // Channel closed (turn already
+                                            // wrapping up): replay at Done.
+                                            state.pending_late_steer = Some(text);
+                                            continue;
+                                        }
+                                        None => {
+                                            state.pending_late_steer = Some(text);
+                                            continue;
+                                        }
+                                    }
                                 }
 
                                 // Record the prompt for Up/Down recall. Only real
@@ -940,7 +970,9 @@ pub async fn run_tui(
                         // Without this handler, a large paste arrives as a rapid
                         // stream of Char events that get dropped by the poll loop,
                         // and any newline in the pasted text is treated as Enter.
-                        if !state.running || state.pending_question.is_some() {
+                        // Allowed while running too: the text becomes a queued
+                        // steer on Enter, same as typed input.
+                        if state.pending_question.is_none() {
                             let remaining =
                                 MAX_INPUT_CHARS.saturating_sub(state.input.chars().count());
                             let pasted: String = text
@@ -993,6 +1025,12 @@ pub async fn run_tui(
                     if state.auto_scroll {
                         state.scroll = 0;
                     }
+                }
+                AgentEvent::Steered(text) => {
+                    // The user line is already in the log (pushed at queue
+                    // time); surface the moment it reached the model.
+                    state.push_system(format!("→ steered: {text}"));
+                    state.log_dirty = true;
                 }
                 AgentEvent::ToolStart { name, args } => {
                     if name == "run_shell" {
@@ -1130,6 +1168,27 @@ pub async fn run_tui(
                         state.agent_state = AgentState::Idle;
                     }
                     state.running = false;
+                    // A direction typed in the turn's final moments may still
+                    // be queued after Done — the agent's final drain persists
+                    // it in the transcript, but the turn is over. The sender
+                    // is closed at this point; replay any pending late steer
+                    // as a fresh turn so it is acted on, not dropped.
+                    state.steer_tx = None;
+                    if let Some(last) = state.pending_late_steer.take() {
+                        if state.mode.plans_first()
+                            && state.agent_state == AgentState::AwaitingApproval
+                        {
+                            // The plan flow owns the input box right now;
+                            // surface the missed direction instead of
+                            // auto-firing a turn.
+                            state.push_system(format!(
+                                "note: your message arrived after the turn \
+                                 finished — send it again to apply: {last}"
+                            ));
+                        } else {
+                            start_task(&mut state, &last, &settings, &store, &session)?;
+                        }
+                    }
                     state.assistant_text.clear();
                     if state.turn_tool_count > 0 {
                         state.push_tool(format!(
@@ -2191,6 +2250,7 @@ fn abort_current_turn(state: &mut TuiState) {
         handle.abort();
     }
     state.event_rx = None;
+    state.steer_tx = None;
 }
 
 /// Bind a fresh channel to this turn and spawn the agent off the TUI thread.
@@ -2202,8 +2262,12 @@ fn begin_agent_turn(
     configure: impl FnOnce(Agent) -> Agent + Send + 'static,
 ) {
     let (tx, rx) = mpsc::channel::<AgentEvent>(128);
+    let (steer_tx, steer_rx) = mpsc::unbounded_channel::<String>();
     state.event_rx = Some(rx);
-    state.task_handle = Some(spawn_agent_turn(settings, messages, prompt, tx, configure));
+    state.steer_tx = Some(steer_tx);
+    state.task_handle = Some(spawn_agent_turn(
+        settings, messages, prompt, tx, steer_rx, configure,
+    ));
 }
 /// Spawn one agent turn, building the [`Agent`] off the TUI thread.
 ///
@@ -2215,6 +2279,7 @@ fn spawn_agent_turn(
     messages: Vec<ChatMessage>,
     prompt: String,
     tx: mpsc::Sender<AgentEvent>,
+    steer_rx: mpsc::UnboundedReceiver<String>,
     configure: impl FnOnce(Agent) -> Agent + Send + 'static,
 ) -> tokio::task::JoinHandle<anyhow::Result<Vec<ChatMessage>>> {
     tokio::spawn(async move {
@@ -2223,7 +2288,7 @@ fn spawn_agent_turn(
                 .await
                 .unwrap_or_else(|e| Err(anyhow::anyhow!("agent construction cancelled: {e}")));
         let mut agent = match constructed {
-            Ok(agent) => configure(agent),
+            Ok(agent) => configure(agent.with_steer_channel(steer_rx)),
             Err(e) => {
                 let _ = tx
                     .send(AgentEvent::Error(format!("failed to start agent: {e}")))

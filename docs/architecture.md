@@ -116,7 +116,8 @@ resume, and process restarts:
 
 Both are injected into the system prompt each turn (`build_system_message`),
 and `compute_reminders` re-anchors the model on the goal + next pending task
-from iteration 4. Writes are atomic (unique temp name + rename).
+at iteration 4 and then every 8th iteration (12, 20, …). Writes are atomic
+(unique temp name + rename).
 
 ---
 

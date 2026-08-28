@@ -532,6 +532,8 @@ fn dummy_state() -> TuiState {
         session_messages: Vec::new(),
         task_handle: None,
         event_rx: None,
+        steer_tx: None,
+        pending_late_steer: None,
         selection: None,
         last_click: None,
         copy_status: None,
@@ -945,7 +947,7 @@ async fn loop_command_rejects_invalid_counts() {
 }
 
 #[tokio::test]
-async fn steer_restarts_running_turn_with_direction() {
+async fn steer_running_turn_queues_without_aborting() {
     let tmp = tempfile::tempdir().unwrap();
     let store = SessionStore::for_workspace(tmp.path()).unwrap();
     let mut session = store.create("gemma4:latest").unwrap();
@@ -955,8 +957,10 @@ async fn steer_restarts_running_turn_with_direction() {
 
     state.last_turn = Some((Vec::new(), "implement auth".into(), false));
     state.running = true;
-    // Give the running turn a fake handle + receiver so we can observe it
-    // being aborted and replaced.
+    // A live steering sender + fake handle so we can observe that the turn
+    // is NOT aborted and the direction lands in the queue.
+    let (steer_tx, mut steer_rx) = mpsc::unbounded_channel::<String>();
+    state.steer_tx = Some(steer_tx);
     let (_tx, rx) = mpsc::channel::<AgentEvent>(8);
     state.event_rx = Some(rx);
     state.task_handle = Some(tokio::spawn(async { Ok::<_, anyhow::Error>(Vec::new()) }));
@@ -975,9 +979,19 @@ async fn steer_restarts_running_turn_with_direction() {
     .unwrap();
 
     assert!(handled);
-    assert!(state.running, "steer restarts into a running turn");
-    // The old turn was aborted and a fresh handle spawned.
-    assert!(state.task_handle.is_some());
+    assert!(state.running, "steer must leave the running turn alone");
+    assert!(
+        state
+            .blocks
+            .iter()
+            .any(|b| matches!(b, BlockKind::System(s) if s.text().contains("→ steered:"))),
+        "should confirm the steer"
+    );
+    assert_eq!(
+        steer_rx.try_recv().ok().as_deref(),
+        Some("use a token store"),
+        "direction must be queued into the running turn"
+    );
 }
 
 #[tokio::test]

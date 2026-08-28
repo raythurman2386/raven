@@ -214,7 +214,6 @@ impl Agent {
 ///   "stuck in a loop" reminder. The threshold is deliberately high so normal
 ///   context-gathering (goal → list → grep → read) is never interrupted; only
 ///   a genuine tool-calling loop triggers it.
-/// - At `iter == 5`, push a "reflect on progress" nudge.
 pub(crate) fn compute_reminders(
     messages: &[ChatMessage],
     iter: usize,
@@ -241,17 +240,14 @@ pub(crate) fn compute_reminders(
         }
     }
 
-    if iter == 5 {
-        reminders.push(
-            "You've made several iterations. Reflect: are you making progress? \
-             If you're stuck in a loop, try a different approach."
-                .into(),
-        );
-    }
-
-    // Goal-aware reflection: after several iterations, re-anchor the model to
-    // its objective and the next pending task (Goose's `next_step` carry-over).
-    if iter >= 4 {
+    // Goal-aware reflection: after a long stretch of tool-only iterations,
+    // re-anchor the model to its objective and the next pending task (Goose's
+    // `next_step` carry-over). The system message already carries goal/todos
+    // every turn, so this only earns its tokens when a turn drags on: fire
+    // once at iteration 4, then every 8th (12, 20, …) instead of every
+    // iteration — a per-iteration anchor makes small models parrot the
+    // reminder ("Re-anchoring: …") in every narration instead of working.
+    if iter >= 4 && (iter - 4).is_multiple_of(8) {
         let mut anchor = String::new();
         if let Some(goal) = goal {
             if crate::state::normalize_status(&goal.status) != "completed" {

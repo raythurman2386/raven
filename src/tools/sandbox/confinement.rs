@@ -584,6 +584,21 @@ pub(crate) fn run_confined(
                 use std::os::unix::process::ExitStatusExt;
                 if let Some(signal) = status.signal() {
                     let mut out = format!("Error: command killed by signal {signal}\n");
+                    // The seccomp network block kills the first outbound
+                    // socket (AF_INET/6) with SIGSYS. Without this note the
+                    // model sees an opaque exit 159 / signal 31 and burns
+                    // iterations re-diagnosing a deterministic policy kill
+                    // (proxy env vars, IPv4 forcing, curl replacing pnpm…).
+                    if signal == libc::SIGSYS {
+                        out.push_str(
+                            "This sandbox blocks network access (seccomp): the first \
+                             outbound TCP connection is killed with SIGSYS (shell code \
+                             159). The command will keep failing this way — do not \
+                             retry or re-diagnose. Work offline, or ask the user to \
+                             run network-dependent steps (package installs, downloads) \
+                             themselves.\n",
+                        );
+                    }
                     out.push_str(&String::from_utf8_lossy(&stdout));
                     out.push_str(&String::from_utf8_lossy(&stderr));
                     return Ok(super::cap_output(out));

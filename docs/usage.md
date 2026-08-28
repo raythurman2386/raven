@@ -189,13 +189,17 @@ host. Type one and press `Enter`; `/help` lists everything.
 
 ### Interrupting and steering
 
-While a task is running you can still type:
+While a task is running you can keep typing as normal:
 
 - `/stop` (or `/s`) aborts the current turn immediately.
-- Any non-command text followed by `Enter` **steers**: it interrupts the
-  current turn and starts a new one with that instruction appended to the
-  session, so the agent redirects with full context instead of losing the
-  conversation.
+- Any non-command text followed by `Enter` **steers**: the message is queued
+  into the running turn and lands at the next iteration boundary as a
+  `[steer]` user message, so the agent redirects without losing the tool
+  work already in flight. The turn is never aborted or restarted.
+- `/steer <message>` does the same thing explicitly while running (and
+  re-fires the last turn with your direction appended when idle).
+- A message typed just as the turn finishes is replayed as a fresh turn, so
+  it is never silently dropped.
 
 The command registry lives in `src/commands.rs`; adding a command is one
 registry entry plus one TUI dispatch arm, and it auto-appears in `/help`.

@@ -16,7 +16,7 @@ use crate::config::Settings;
 use crate::session::{Session, SessionStore};
 
 use super::blocks::BlockKind;
-use super::{abort_current_turn, begin_agent_turn, theme_name, AgentState, Theme, TuiState};
+use super::{begin_agent_turn, theme_name, AgentState, Theme, TuiState};
 
 /// Dispatch a parsed slash command, mutating TUI state as needed.
 ///
@@ -271,17 +271,28 @@ pub(super) async fn dispatch_slash_command(
                 state.log_dirty = true;
                 return Ok(true);
             }
+            // Running turn: queue the direction into the agent's steering
+            // channel. It lands at the next iteration boundary as a `[steer]`
+            // user message — no abort, no restart, no lost in-flight work.
+            if state.running {
+                let Some(tx) = state.steer_tx.clone() else {
+                    state.push_system("no steerable turn — send a task first");
+                    state.log_dirty = true;
+                    return Ok(true);
+                };
+                let _ = tx.send(msg.to_string());
+                state.push_user(msg.to_string());
+                state.push_system(format!("→ steered: {msg}"));
+                state.log_dirty = true;
+                return Ok(true);
+            }
+            // Idle: re-fire the last turn with the direction appended,
+            // preserving prior context so the model picks up mid-task.
             let Some((preload, prompt, read_only)) = state.last_turn.clone() else {
                 state.push_system("nothing to steer — send a task first");
                 state.log_dirty = true;
                 return Ok(true);
             };
-            if state.running {
-                abort_current_turn(state);
-            }
-            // Restart the turn with the direction appended, preserving all
-            // prior context so the model picks up mid-task with the new
-            // instruction.
             let steer_prompt = format!("{prompt}\n\n[steer] {msg}");
             state.running = true;
             state.status = "running…".into();

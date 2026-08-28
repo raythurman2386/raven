@@ -79,6 +79,9 @@ pub enum AgentEvent {
         question: String,
         reply: tokio::sync::oneshot::Sender<String>,
     },
+    /// A queued mid-turn direction (steering) was injected into the running
+    /// turn as a `[steer]` user message.
+    Steered(String),
     /// The plan's step statuses have been updated during execution.
     PlanProgress(Plan),
     /// The agent finished normally (no more tool calls).

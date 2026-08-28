@@ -387,6 +387,7 @@ pub fn map_event(event: &AgentEvent, tool_seq: &mut u64) -> Vec<Value> {
         | AgentEvent::Subagent { .. }
         | AgentEvent::Retry { .. }
         | AgentEvent::VerifyRequired
+        | AgentEvent::Steered(_)
         | AgentEvent::AskUser { .. }
         | AgentEvent::Done
         | AgentEvent::Error(_) => Vec::new(),

@@ -328,6 +328,34 @@ fn run_shell_verification_command_skips_seccomp_network_block() {
 
 #[test]
 #[cfg(target_os = "linux")]
+fn run_shell_network_kill_explains_sigsys() {
+    // The sandbox's seccomp filter kills the first outbound TCP connection
+    // with SIGSYS. The result must tell the model this is a deterministic
+    // sandbox policy, not an environment bug — otherwise it burns iterations
+    // re-diagnosing (proxy vars, IPv4 forcing, curl instead of pnpm…).
+    let sb = Sandbox::new(std::env::temp_dir().canonicalize().unwrap());
+    let out = sb
+        .run_shell(
+            "python3 -c \"import socket; socket.socket(socket.AF_INET, socket.SOCK_STREAM)\"",
+            10,
+        )
+        .unwrap();
+    assert!(
+        out.contains("killed by signal 31"),
+        "outbound socket should be SIGSYS-killed, got: {out}"
+    );
+    assert!(
+        out.contains("sandbox blocks network access"),
+        "SIGSYS kill must carry the network-block explanation, got: {out}"
+    );
+    assert!(
+        out.contains("do not retry or re-diagnose"),
+        "SIGSYS kill must tell the model not to retry, got: {out}"
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
 fn run_shell_verification_command_skips_rlimits() {
     // Regression: `run_shell` applied RLIMIT_FSIZE (64 MiB) to every command,
     // including sanctioned verification commands like `cargo test`. A test

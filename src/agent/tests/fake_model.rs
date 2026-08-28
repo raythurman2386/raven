@@ -165,6 +165,126 @@ async fn blank_content_caps_after_max_attempts() {
 }
 
 #[tokio::test]
+async fn steer_channel_injects_direction_at_iteration_boundary() {
+    // Round 1: a read_file tool call. The completion closure queues a
+    // direction into the steering channel while that round runs (the way
+    // the TUI does), so the loop drains it at the next boundary — after the
+    // tool result — and the model sees it in round 2.
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("a.rs"), "fn main() {}\n").unwrap();
+    let (steer_tx, steer_rx) = mpsc::unbounded_channel::<String>();
+    let mut bodies = vec![
+        sse_tool_call("call_1", "read_file", r#"{"path":"a.rs"}"#),
+        sse_text("Applied the redirect."),
+    ]
+    .into_iter();
+    let mut first = true;
+    let steer = steer_tx.clone();
+    let source: CompletionSource = Box::new(move |_req| {
+        if first {
+            first = false;
+            let _ = steer.send("focus on the main function".into());
+        }
+        bodies
+            .next()
+            .unwrap_or_else(|| "data: [DONE]\n\n".to_string())
+    });
+    let mut agent = Agent::new(settings_for(tmp.path()))
+        .unwrap()
+        .with_completion_source(source)
+        .with_steer_channel(steer_rx);
+    let (tx, mut rx) = mpsc::channel(64);
+    drop(steer_tx);
+    agent.run("read a.rs", tx).await.unwrap();
+    let events = drain(&mut rx).await;
+
+    assert!(
+        events.iter().any(
+            |e| matches!(e, AgentEvent::Steered(t) if t.contains("focus on the main function"))
+        ),
+        "Steered event must fire when the direction lands"
+    );
+    let steer_idx = agent
+        .messages
+        .iter()
+        .position(|m| {
+            m.role == "user" && m.content.as_deref().is_some_and(|c| c.contains("[steer]"))
+        })
+        .expect("[steer] user message must be persisted");
+    assert!(
+        steer_idx > 0 && agent.messages[steer_idx - 1].role == "tool",
+        "[steer] must land after the tool result, got {:?}",
+        &agent.messages[..=steer_idx]
+    );
+    let last = agent.messages.last().unwrap();
+    assert_eq!(
+        last.content.as_deref(),
+        Some("Applied the redirect."),
+        "turn must continue after the steer and use the redirected round"
+    );
+}
+
+#[tokio::test]
+async fn steer_at_finish_boundary_extends_turn_instead_of_ending() {
+    // Round 1: the model tries to finish ("All done."). The direction is
+    // queued while that round streams, so at the finish boundary the turn
+    // must NOT end — it runs another round that honors the redirect.
+    let tmp = tempfile::tempdir().unwrap();
+    let (steer_tx, steer_rx) = mpsc::unbounded_channel::<String>();
+    let mut bodies = vec![
+        sse_text("All done."),
+        sse_text("Redirected: here are the follow-up results."),
+    ]
+    .into_iter();
+    let mut first = true;
+    let steer = steer_tx.clone();
+    let source: CompletionSource = Box::new(move |_req| {
+        if first {
+            first = false;
+            let _ = steer.send("also check the config".into());
+        }
+        bodies
+            .next()
+            .unwrap_or_else(|| "data: [DONE]\n\n".to_string())
+    });
+    let mut agent = Agent::new(settings_for(tmp.path()))
+        .unwrap()
+        .with_completion_source(source)
+        .with_steer_channel(steer_rx);
+    let (tx, mut rx) = mpsc::channel(64);
+    drop(steer_tx);
+    agent.run("do the main task", tx).await.unwrap();
+    let events = drain(&mut rx).await;
+
+    // The turn continued: the final assistant message is the round-2
+    // content, not the first wrap-up.
+    let last = agent.messages.last().unwrap();
+    assert_eq!(last.role, "assistant");
+    assert_eq!(
+        last.content.as_deref(),
+        Some("Redirected: here are the follow-up results.")
+    );
+    // History contains the first wrap-up, then the [steer] user message.
+    let roles: Vec<(&str, Option<&str>)> = agent
+        .messages
+        .iter()
+        .map(|m| (m.role.as_str(), m.content.as_deref()))
+        .collect();
+    assert!(
+        roles.windows(2).any(|w| w[0].0 == "assistant"
+            && w[1].0 == "user"
+            && w[1].1.unwrap_or("").contains("[steer]")),
+        "assistant wrap-up must be followed by the [steer] message: {roles:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Steered(t) if t.contains("also check the config"))),
+        "Steered event must fire"
+    );
+}
+
+#[tokio::test]
 async fn executes_tool_then_finishes() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("a.rs"), "fn main() {}\n").unwrap();

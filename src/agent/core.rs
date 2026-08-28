@@ -133,9 +133,10 @@ const SYSTEM_BASE: &str = r#"You are an efficient coding agent. You help with so
 </accuracy>
 
 <output>
-- When you have enough information, answer the user's question directly with text.
-- You do NOT need to call a tool for every response. Sometimes just text is the right answer.
-- If you're stuck or a tool returns an error, explain what happened and suggest a fix.
+- Answer the user's question directly with text when you have enough information. You do NOT need to call a tool for every response; sometimes just text is the right answer.
+- Narrate work minimally. Do not announce routine tool calls ("Let me inspect…", "Continuing with task 2…"); let the tool activity speak. Reserve text for decisions, findings, and results the user needs.
+- If you're stuck or a tool returns an error, explain what happened in one or two sentences and adjust course. Never restate or paraphrase <raven_reminder> messages back to the user — they are internal steering, not conversation.
+- When asked to continue mid-task, resume work directly instead of restating the goal, plan, or progress.
 - After reading a file you have its contents for the requested line range. read_file only returns up to 400 lines by default; if the output ends with "... [truncated]", you have NOT seen the whole file — call read_file again with a larger max_lines or a start_line to read the rest before concluding.
 - Do not call list_dir again — you already know the structure.
 </output>
@@ -290,6 +291,16 @@ pub struct Agent {
     /// the model returned nothing (no content, no tool calls). Follows the
     /// same ephemeral pattern as `pending_lint`.
     pub(crate) pending_blank: Option<String>,
+    /// Mid-turn directions queued while this turn was running (TUI steering).
+    /// Flushed as `[steer]` user messages at the next iteration boundary —
+    /// after the current tool batch, or when the model tries to finish — so
+    /// a redirect lands without aborting and restarting the turn. Persisted
+    /// like normal user messages because they *are* user input.
+    pub(crate) pending_steer: Vec<String>,
+    /// Inbound steering channel (TUI-only). Drained into `pending_steer` at
+    /// every iteration boundary so the TUI can push directions into a
+    /// running turn; None for headless runs, sub-agents, and tests.
+    pub(crate) steer_rx: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
     /// Optional plan being executed; step statuses are updated as the agent
     /// progresses through tool calls.
     pub(crate) plan: Option<Plan>,
@@ -347,6 +358,8 @@ impl Agent {
             pending_repeated_failure: None,
             blank_attempts: 0,
             pending_blank: None,
+            pending_steer: Vec::new(),
+            steer_rx: None,
             plan: None,
             current_step: 0,
             compact_thrash_count: 0,
@@ -366,6 +379,53 @@ impl Agent {
     pub fn plan_only(mut self) -> Self {
         self.plan_only = true;
         self
+    }
+
+    /// Attach the inbound steering channel (TUI-only).
+    ///
+    /// The sender is held by the TUI state; directions queued there are
+    /// drained at each iteration boundary without aborting the turn.
+    pub fn with_steer_channel(mut self, rx: tokio::sync::mpsc::UnboundedReceiver<String>) -> Self {
+        self.steer_rx = Some(rx);
+        self
+    }
+
+    /// Queue a mid-turn direction from the user (steering).
+    ///
+    /// Drained at the next iteration boundary as a `[steer]` user message,
+    /// so the running turn picks up the redirect without being aborted and
+    /// restarted. Safe to call while the turn is running.
+    pub fn steer(&mut self, message: impl Into<String>) {
+        self.pending_steer.push(message.into());
+    }
+
+    /// Pull any newly queued directions from the inbound channel (if any)
+    /// into `pending_steer`. Best-effort: a dropped sender just ends the
+    /// stream.
+    fn drain_steer_channel(&mut self) {
+        let Some(rx) = self.steer_rx.as_mut() else {
+            return;
+        };
+        while let Ok(text) = rx.try_recv() {
+            self.pending_steer.push(text);
+        }
+    }
+
+    /// Drain queued steering directions as persisted user messages.
+    ///
+    /// Called between iterations; messages are appended in queue order after
+    /// the last tool results, so providers that require strict message
+    /// alternation still see a valid history.
+    fn take_pending_steer(&mut self) -> Vec<ChatMessage> {
+        self.pending_steer
+            .drain(..)
+            .map(|text| ChatMessage {
+                role: "user".into(),
+                content: Some(format!("[steer] {text}")),
+                tool_calls: None,
+                tool_call_id: None,
+            })
+            .collect()
     }
 
     /// Attach a plan to this agent so step statuses are updated during
@@ -470,11 +530,30 @@ impl Agent {
         }
         self.messages[0] = build_system_message(&self.settings);
 
+        let result = self.run_loop(user_text, tx, &mut edited_any).await;
+
+        // Final steering drain: a direction queued while the last response
+        // was streaming would otherwise vanish from the agent's history. The
+        // TUI replays late steers as a fresh turn, so the model must have
+        // them in context; the sender dropping here is normal.
+        self.drain_steer_channel();
+        for msg in self.take_pending_steer() {
+            self.messages.push(msg);
+        }
+
+        result
+    }
+
+    /// The main iteration loop, split out of `run` so the final steering
+    /// drain executes even on an error return path.
+    async fn run_loop(
+        &mut self,
+        _user_text: &str,
+        tx: mpsc::Sender<AgentEvent>,
+        edited_any: &mut bool,
+    ) -> Result<()> {
         for iter in 0..self.settings.max_iterations {
-            match self
-                .run_single_iteration(&tx, iter, &mut edited_any)
-                .await?
-            {
+            match self.run_single_iteration(&tx, iter, edited_any).await? {
                 IterationOutcome::Continue => continue,
                 IterationOutcome::Finished => return Ok(()),
             }
@@ -513,6 +592,16 @@ impl Agent {
             crate::state::load_goal(&self.settings.workspace).as_ref(),
             &crate::state::load_todos(&self.settings.workspace),
         );
+        // Mid-turn steering: pull anything queued since the last boundary and
+        // append it as persisted user messages, so the next request sees the
+        // redirect (after the tool results, keeping strict alternation).
+        self.drain_steer_channel();
+        for msg in self.take_pending_steer() {
+            if let Some(text) = msg.content.clone() {
+                let _ = tx.send(AgentEvent::Steered(text)).await;
+            }
+            self.messages.push(msg);
+        }
         if let Some(lint) = self.pending_lint.take() {
             reminders.push(lint);
         }
@@ -789,6 +878,23 @@ impl Agent {
         };
 
         if tool_acc.is_empty() {
+            // A queued direction arrives while the model tries to finish:
+            // keep the model's wrap-up text, fold the direction into the
+            // history, clear any stall/verify recovery state, and run another
+            // iteration so the turn honors the redirect instead of ending.
+            self.drain_steer_channel();
+            if !self.pending_steer.is_empty() {
+                self.pending_blank = None;
+                self.pending_verify = None;
+                self.messages.push(assistant);
+                for msg in self.take_pending_steer() {
+                    if let Some(text) = msg.content.clone() {
+                        let _ = tx.send(AgentEvent::Steered(text)).await;
+                    }
+                    self.messages.push(msg);
+                }
+                return Ok(IterationOutcome::Continue);
+            }
             if self
                 .handle_no_tool_calls(tx, assistant, content_blank, *edited_any)
                 .await?

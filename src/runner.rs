@@ -101,6 +101,9 @@ pub async fn drain_events_logged(
                     .unwrap_or_default();
                 let _ = reply.send(answer);
             }
+            AgentEvent::Steered(text) => {
+                eprintln!("[steered: {text}]");
+            }
             AgentEvent::Done => break,
             AgentEvent::Error(e) => {
                 eprintln!("\nError: {}", e);

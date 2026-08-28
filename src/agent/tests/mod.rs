@@ -227,7 +227,7 @@ fn tool_only() -> ChatMessage {
 fn no_reminders_early_and_clean() {
     let msgs = vec![plain("system"), plain("user"), plain("assistant")];
     assert!(compute_reminders(&msgs, 0, None, &[]).is_empty());
-    assert!(compute_reminders(&msgs, 2, None, &[]).is_empty());
+    assert!(compute_reminders(&msgs, 3, None, &[]).is_empty());
 }
 
 #[test]
@@ -278,24 +278,16 @@ fn loop_breaker_ignores_recent_text_output() {
 }
 
 #[test]
-fn iteration_5_adds_reflect_nudge() {
+fn iteration_5_nudge_removed() {
     let msgs = vec![plain("system")];
-    let r = compute_reminders(&msgs, 5, None, &[]);
-    assert!(
-        r.iter().any(|t| t.contains("Reflect")),
-        "iteration-5 nudge should fire, got {r:?}"
-    );
-}
-
-#[test]
-fn iteration_5_does_not_fire_elsewhere() {
-    let msgs = vec![plain("system")];
-    assert!(!compute_reminders(&msgs, 4, None, &[])
-        .iter()
-        .any(|t| t.contains("Reflect")));
-    assert!(!compute_reminders(&msgs, 6, None, &[])
-        .iter()
-        .any(|t| t.contains("Reflect")));
+    for i in [4, 5, 6] {
+        assert!(
+            !compute_reminders(&msgs, i, None, &[])
+                .iter()
+                .any(|t| t.contains("Reflect")),
+            "no reflect nudge at iter {i}"
+        );
+    }
 }
 
 #[test]
@@ -327,6 +319,28 @@ fn goal_aware_reminder_anchors_goal_and_next_task() {
         r.iter().any(|t| t.contains("Next task")),
         "next pending task should be anchored, got {r:?}"
     );
+}
+
+#[test]
+fn goal_aware_reminder_fires_once_then_every_8th() {
+    let goal = crate::state::Goal {
+        description: "Ship it".into(),
+        status: "in_progress".into(),
+        updated_at: "".into(),
+    };
+    let msgs = vec![plain("system")];
+    let fired = |i: usize| {
+        compute_reminders(&msgs, i, Some(&goal), &[])
+            .iter()
+            .any(|t| t.contains("Ship it"))
+    };
+    assert!(fired(4), "first anchor at iter 4");
+    for i in 5..12 {
+        assert!(!fired(i), "no anchor at iter {i}");
+    }
+    assert!(fired(12), "second anchor at iter 12");
+    assert!(!fired(13), "no anchor at iter 13");
+    assert!(fired(20), "third anchor at iter 20");
 }
 
 #[test]
