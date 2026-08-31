@@ -7,6 +7,19 @@ use crate::config::{ConfigFile, Provider};
 use crate::plan::AgentState;
 use serde_json::json;
 use std::path::Path;
+
+/// Skip a test that opens a network socket (provider `/models` fetch or
+/// context-window probe) when running under a restrictive outer sandbox that
+/// SIGSYS-kills AF_INET sockets. Returns `true` when the test should skip.
+fn skip_if_outer_sandbox() -> bool {
+    if crate::testutil::outer_sandbox_restrictive() {
+        eprintln!("outer sandbox blocks AF_INET sockets; skipping network-dependent TUI test");
+        true
+    } else {
+        false
+    }
+}
+
 #[test]
 fn cycle_mode_clears_stuck_pending_approval_when_leaving_plan() {
     let mut state = TuiState {
@@ -663,6 +676,9 @@ fn test_settings(workspace: &std::path::Path) -> Settings {
 
 #[tokio::test]
 async fn model_switch_updates_settings_compact_and_header_blocks() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let store = SessionStore::for_workspace(tmp.path()).unwrap();
     let mut session = store.create("gemma4:latest").unwrap();
@@ -737,6 +753,9 @@ async fn model_switch_updates_settings_compact_and_header_blocks() {
 
 #[test]
 fn slash_command_completes_provider_and_model_names() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let settings = test_settings(tempfile::tempdir().unwrap().path());
     let arg_candidates = |cmd: &str| -> Vec<String> {
         crate::tui::completion_arg_candidates(&settings, &ConfigFile::default(), cmd)
@@ -1218,6 +1237,9 @@ fn date_minus_days_handles_rollover() {
 
 #[test]
 fn opencode_go_models_autocomplete() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     // The provider-aware fallback must surface opencode-go models even when
     // the live /models fetch returns nothing (deterministic offline test).
     let mut settings = test_settings(tempfile::tempdir().unwrap().path());

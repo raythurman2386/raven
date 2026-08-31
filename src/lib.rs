@@ -21,3 +21,6 @@ pub mod tools;
 pub mod tui;
 pub mod update;
 pub mod web;
+
+/// Shared test utilities (also used by integration tests in `tests/`).
+pub mod testutil;

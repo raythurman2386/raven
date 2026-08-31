@@ -24,3 +24,7 @@ fn sandbox() -> Sandbox {
     let tmp = tempfile::tempdir().unwrap();
     Sandbox::new(tmp.path().canonicalize().unwrap())
 }
+
+/// Whether the test process is running under a restrictive outer sandbox that
+/// pre-empts the inner sandbox's exemptions. See [`crate::testutil`].
+pub(crate) use crate::testutil::outer_sandbox_restrictive;

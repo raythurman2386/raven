@@ -15,6 +15,18 @@ use serde_json::{json, Value};
 use std::net::TcpListener as StdTcpListener;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+/// Skip a test that binds a mock HTTP server (AF_INET socket) when running
+/// under a restrictive outer sandbox that SIGSYS-kills sockets. Returns `true`
+/// when the test should skip.
+fn skip_if_outer_sandbox() -> bool {
+    if crate::testutil::outer_sandbox_restrictive() {
+        eprintln!("outer sandbox blocks AF_INET sockets; skipping mock-server agent test");
+        true
+    } else {
+        false
+    }
+}
+
 /// Read the raw HTTP request headers (everything up to and including the
 /// `\r\n\r\n` header terminator), waiting until the full body (per
 /// Content-Length) has arrived. Returns the header block as a String
@@ -360,6 +372,9 @@ fn goal_aware_reminder_skips_completed_goal() {
 
 #[tokio::test]
 async fn repeated_identical_failing_tool_detected() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(tmp.path().join("src")).unwrap();
     std::fs::write(tmp.path().join("src/server.ts"), "existing content\n").unwrap();
@@ -426,6 +441,9 @@ fn args_number_serialized() {
 
 #[tokio::test]
 async fn stream_text_only_reaches_done() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let body = concat!(
         "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\n",
@@ -456,6 +474,9 @@ async fn stream_text_only_reaches_done() {
 
 #[tokio::test]
 async fn stream_interruption_preserves_partial_text() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     // A4: a mid-stream failure after some content was produced must keep the
     // partial assistant text (with an interruption hint) and finish via `Done`
     // so the session persists it — not drop the turn with an `Error`.
@@ -494,6 +515,9 @@ async fn stream_interruption_preserves_partial_text() {
 
 #[tokio::test]
 async fn stream_error_with_no_content_still_aborts() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     // A4: a stream error with NO partial content must still abort via `Error`
     // (nothing to preserve), not fabricate an empty assistant turn.
     let tmp = tempfile::tempdir().unwrap();
@@ -524,6 +548,9 @@ async fn stream_error_with_no_content_still_aborts() {
 
 #[tokio::test]
 async fn stream_tool_call_then_answer() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("a.rs"), "fn main() {}\n").unwrap();
     // Round 1: SSE with a read_file tool call (no content delta).
@@ -563,6 +590,9 @@ async fn stream_tool_call_then_answer() {
 
 #[tokio::test]
 async fn retries_on_5xx_then_succeeds() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let ok_body = concat!(
         "data: {\"choices\":[{\"delta\":{\"content\":\"recovered\"}}]}\n\n",
@@ -584,6 +614,9 @@ async fn retries_on_5xx_then_succeeds() {
 
 #[tokio::test]
 async fn non_stream_text_message() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let body = r#"{"choices":[{"message":{"role":"assistant","content":"plain json answer"}}]}"#;
     let (base, _h) = spawn_mock(vec![body]).await;
@@ -604,6 +637,9 @@ async fn non_stream_text_message() {
 
 #[tokio::test]
 async fn model_not_found_no_retry() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let err_body = r#"{"error":"model 'nope' not found"}"#;
     let (base, _h) = spawn_mock_status(vec![(404, err_body)]).await;
@@ -622,6 +658,9 @@ async fn model_not_found_no_retry() {
 
 #[tokio::test]
 async fn verify_requires_run_tests() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(
         tmp.path().join("Cargo.toml"),
@@ -658,6 +697,9 @@ async fn verify_requires_run_tests() {
 #[tokio::test]
 #[cfg(target_os = "linux")]
 async fn verify_passes_when_run_tests_called() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(
         tmp.path().join("Cargo.toml"),
@@ -700,6 +742,9 @@ async fn verify_passes_when_run_tests_called() {
 
 #[tokio::test]
 async fn verify_off_does_not_gate() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let edit_round = concat!(
         "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"write_file\",\"arguments\":\"{\\\"path\\\":\\\"a.rs\\\",\\\"content\\\":\\\"fn main() {}\\\"}\"}}]}}]}\n\n",
@@ -725,6 +770,9 @@ async fn verify_off_does_not_gate() {
 
 #[tokio::test]
 async fn verify_caps_at_max_attempts() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(
         tmp.path().join("Cargo.toml"),
@@ -762,6 +810,9 @@ async fn verify_caps_at_max_attempts() {
 
 #[tokio::test]
 async fn verify_skips_when_no_test_runner() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let edit_round = concat!(
         "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"write_file\",\"arguments\":\"{\\\"path\\\":\\\"a.rs\\\",\\\"content\\\":\\\"fn main() {}\\\"}\"}}]}}]}\n\n",
@@ -790,6 +841,9 @@ async fn verify_skips_when_no_test_runner() {
 
 #[tokio::test]
 async fn verify_gates_when_package_json_and_node_modules_exist() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(
         tmp.path().join("package.json"),
@@ -826,6 +880,9 @@ async fn verify_gates_when_package_json_and_node_modules_exist() {
 
 #[tokio::test]
 async fn verify_skips_when_package_json_but_no_node_modules() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(
         tmp.path().join("package.json"),
@@ -859,6 +916,9 @@ async fn verify_skips_when_package_json_but_no_node_modules() {
 #[tokio::test]
 #[cfg(target_os = "linux")]
 async fn verify_passes_when_run_shell_runs_test_command() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(
         tmp.path().join("Cargo.toml"),
@@ -904,6 +964,9 @@ async fn verify_passes_when_run_shell_runs_test_command() {
 
 #[tokio::test]
 async fn verify_still_gates_when_run_shell_is_not_test_command() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(
         tmp.path().join("Cargo.toml"),
@@ -951,6 +1014,9 @@ async fn verify_still_gates_when_run_shell_is_not_test_command() {
 #[tokio::test]
 #[cfg(target_os = "linux")]
 async fn verify_gates_when_run_tests_exits_nonzero() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(
         tmp.path().join("Cargo.toml"),
@@ -998,6 +1064,9 @@ async fn verify_gates_when_run_tests_exits_nonzero() {
 #[tokio::test]
 #[cfg(target_os = "linux")]
 async fn verify_gates_when_run_shell_test_exits_nonzero() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(
         tmp.path().join("Cargo.toml"),
@@ -1053,6 +1122,9 @@ async fn verify_gates_when_run_shell_test_exits_nonzero() {
 
 #[tokio::test]
 async fn retries_on_429_then_succeeds() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let ok_body = concat!(
         "data: {\"choices\":[{\"delta\":{\"content\":\"recovered\"}}]}\n\n",
@@ -1074,6 +1146,9 @@ async fn retries_on_429_then_succeeds() {
 
 #[tokio::test]
 async fn compaction_triggers_when_context_exceeds_threshold() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let summarizer_body = r#"{"choices":[{"message":{"role":"assistant","content":"summary"}}]}"#;
     let agent_body = concat!(
@@ -1099,6 +1174,9 @@ async fn compaction_triggers_when_context_exceeds_threshold() {
 
 #[tokio::test]
 async fn compaction_thrashing_pauses_after_cap() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     // A summarizer that returns a huge summary so compaction never actually
     // reduces the history (after >= before) — the thrashing case.
@@ -1149,6 +1227,9 @@ async fn compaction_thrashing_pauses_after_cap() {
 
 #[tokio::test]
 async fn multi_turn_conversation() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("a.rs"), "fn main() {}\n").unwrap();
     let turn1 = concat!(
@@ -1194,6 +1275,9 @@ async fn multi_turn_conversation() {
 
 #[tokio::test]
 async fn repo_map_stale_after_file_edit() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let edit_round = concat!(
         "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"write_file\",\"arguments\":\"{\\\"path\\\":\\\"a.rs\\\",\\\"content\\\":\\\"fn main() {}\\\"}\"}}]}}]}\n\n",
@@ -1216,6 +1300,9 @@ async fn repo_map_stale_after_file_edit() {
 
 #[tokio::test]
 async fn repo_map_rebuilt_on_next_turn_when_stale() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let edit_round = concat!(
         "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"write_file\",\"arguments\":\"{\\\"path\\\":\\\"a.rs\\\",\\\"content\\\":\\\"fn main() {}\\\"}\"}}]}}]}\n\n",
@@ -1249,6 +1336,9 @@ async fn repo_map_rebuilt_on_next_turn_when_stale() {
 
 #[tokio::test]
 async fn repo_map_not_rebuilt_when_not_stale() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let text_round = concat!(
         "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n",
@@ -1277,6 +1367,9 @@ async fn repo_map_not_rebuilt_when_not_stale() {
 
 #[tokio::test]
 async fn budget_exhaustion_emits_summary_and_done_not_error() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("a.rs"), "fn main() {}\n").unwrap();
 
@@ -1340,6 +1433,9 @@ async fn budget_exhaustion_emits_summary_and_done_not_error() {
 
 #[tokio::test]
 async fn budget_exhaustion_summary_keeps_meter_and_strips_wire_usage() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     // The wrap-up request is a real metered provider call: its meter must be
     // persisted on the summary message, and its request body — which replays
     // history that now carries usage — must NOT contain any usage field.
@@ -1395,6 +1491,9 @@ async fn budget_exhaustion_summary_keeps_meter_and_strips_wire_usage() {
 
 #[tokio::test]
 async fn blank_response_stalls_then_recovers_not_done() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     // Round 1-2: blank responses (only [DONE], no content delta).
     let blank = "data: [DONE]\n\n";
@@ -1427,6 +1526,9 @@ async fn blank_response_stalls_then_recovers_not_done() {
 
 #[tokio::test]
 async fn same_file_edits_in_one_turn_are_not_lost() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("a.txt"), "foo\n").unwrap();
     // Round 1: two search_replace calls in ONE turn against a.txt.
@@ -1459,6 +1561,9 @@ async fn same_file_edits_in_one_turn_are_not_lost() {
 
 #[tokio::test]
 async fn stream_options_400_falls_back_and_retries() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     // A strict provider that rejects `stream_options.include_usage` with a
     // 400 must not fail the turn: the field is stripped, the request is
     // retried immediately without it, and usage calibration is disabled for
@@ -1497,6 +1602,9 @@ async fn stream_options_400_falls_back_and_retries() {
 
 #[tokio::test]
 async fn stream_options_400_after_transient_does_not_exhaust_retries() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     // Two 503s then a stream_options 400 must still succeed: the 400 strip
     // path must not consume a transient-retry slot.
     let tmp = tempfile::tempdir().unwrap();
@@ -1530,6 +1638,9 @@ async fn stream_options_400_after_transient_does_not_exhaust_retries() {
 
 #[tokio::test]
 async fn usage_chunk_feeds_calibration() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     // A provider that reports usage on the final empty-choices chunk feeds
     // one calibration sample per request; the clamp path then uses the
     // corrected estimate.
@@ -1561,6 +1672,9 @@ async fn usage_chunk_feeds_calibration() {
 
 #[tokio::test]
 async fn no_usage_reported_leaves_calibration_inert() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     // Providers that never send usage keep the calibration inert: zero
     // samples, passthrough estimates — the graceful fallback.
     let tmp = tempfile::tempdir().unwrap();
@@ -1580,6 +1694,9 @@ async fn no_usage_reported_leaves_calibration_inert() {
 
 #[tokio::test]
 async fn streaming_request_includes_usage_and_feeds_calibration_offline() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     // Offline (completion_source) end-to-end: the outgoing streaming body
     // must request `stream_options.include_usage`, and the usage chunk in the
     // scripted response must feed exactly one calibration sample — no real
@@ -1624,6 +1741,9 @@ async fn streaming_request_includes_usage_and_feeds_calibration_offline() {
 
 #[tokio::test]
 async fn usage_chunk_is_persisted_on_assistant_message() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     // The provider's meter must ride out of the loop on the assistant
     // message it belongs to, so session persistence records real usage.
     // The wire replay path (request_messages_json) strips it again.
@@ -1654,6 +1774,9 @@ async fn usage_chunk_is_persisted_on_assistant_message() {
 
 #[tokio::test]
 async fn no_usage_reported_leaves_assistant_usage_none() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     // Providers without meters persist exactly as before: usage stays None
     // and no usage key appears in the serialized transcript line.
     let tmp = tempfile::tempdir().unwrap();
@@ -1681,6 +1804,9 @@ async fn no_usage_reported_leaves_assistant_usage_none() {
 
 #[tokio::test]
 async fn tool_call_iterations_persist_one_usage_per_iteration() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     // Each provider response is one metered request; a tool-calling turn
     // must record the meter on the assistant message that requested the
     // tools, not drop it. The mock serves its scripted list in order, so

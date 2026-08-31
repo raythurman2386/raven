@@ -824,6 +824,12 @@ fn text_preview(text: &str) -> String {
 }
 
 /// Serve ACP on the given reader/writer until stdin EOF.
+///
+/// Logs a diagnostic to stderr before returning so a clean (exit-0) mid-turn
+/// death is never silent — the harness can distinguish "stdin EOF" from a
+/// dispatch/write error. `serve_io` only returns `Ok(())` when the stdin line
+/// loop ends on EOF; any `Err` here is a stdout write failure that bubbles to
+/// `main` (which prints it and exits 1).
 pub async fn serve_io<R, W>(server: AcpServer, reader: R, writer: W) -> Result<()>
 where
     R: BufRead + Send + 'static,
@@ -845,6 +851,27 @@ where
         }
     });
 
+    let result = serve_io_loop(server, &mut line_rx, &writer).await;
+    match &result {
+        Ok(()) => {
+            // Clean exit: the stdin line loop ended on EOF. This is the only
+            // path that yields exit code 0. Log it so a mid-turn EOF (e.g. the
+            // harness closing the pipe) is visible in stderr instead of being
+            // silent.
+            eprintln!("raven --acp: serve_io exiting cleanly (stdin EOF)");
+        }
+        Err(e) => {
+            eprintln!("raven --acp: serve_io error: {e:#}");
+        }
+    }
+    result
+}
+
+async fn serve_io_loop(
+    server: Arc<Mutex<AcpServer>>,
+    line_rx: &mut mpsc::UnboundedReceiver<String>,
+    writer: &Arc<Mutex<dyn FrameWrite>>,
+) -> Result<()> {
     while let Some(line) = line_rx.recv().await {
         if line.trim().is_empty() {
             continue;

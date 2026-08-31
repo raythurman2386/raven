@@ -68,6 +68,18 @@ async fn drain(rx: &mut mpsc::Receiver<AgentEvent>) -> Vec<AgentEvent> {
     events
 }
 
+/// Skip a test that invokes a real tool (run_tests/run_lint/run_shell) which
+/// spawns a confined child, when running under a restrictive outer sandbox
+/// that kills the child. Returns `true` when the test should skip.
+fn skip_if_outer_sandbox() -> bool {
+    if crate::testutil::outer_sandbox_restrictive() {
+        eprintln!("outer sandbox restrictive; skipping eval-suite test that invokes a real tool");
+        true
+    } else {
+        false
+    }
+}
+
 /// 02_single_edit — fix a buggy function via search_replace, then finish.
 #[tokio::test]
 async fn eval_suite_single_edit_fixes_double() {
@@ -321,6 +333,9 @@ async fn eval_suite_blank_stall_recovers() {
 /// Enforced verify gate after edits when verify=true.
 #[tokio::test]
 async fn eval_suite_verify_gate_after_edit() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     // Minimal cargo project so has_test_runner is true.
     std::fs::write(
@@ -553,6 +568,9 @@ async fn eval_suite_think_records_thought() {
 /// 12_verify_before_done — finishing an edit without tests arms the gate.
 #[tokio::test]
 async fn eval_suite_verify_before_done_emits_gate() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(
         tmp.path().join("Cargo.toml"),
@@ -599,6 +617,9 @@ async fn eval_suite_verify_before_done_emits_gate() {
 /// must still arm the enforced-verify gate.
 #[tokio::test]
 async fn eval_suite_claims_tests_passed_without_run_tests_still_gates() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(
         tmp.path().join("Cargo.toml"),

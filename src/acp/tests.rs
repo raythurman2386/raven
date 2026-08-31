@@ -13,6 +13,18 @@ use std::io::Write;
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::Mutex;
 
+/// Skip a test that opens a network socket (provider `/models` fetch or
+/// context-window probe) when running under a restrictive outer sandbox that
+/// SIGSYS-kills AF_INET sockets. Returns `true` when the test should skip.
+fn skip_if_outer_sandbox() -> bool {
+    if crate::testutil::outer_sandbox_restrictive() {
+        eprintln!("outer sandbox blocks AF_INET sockets; skipping network-dependent ACP test");
+        true
+    } else {
+        false
+    }
+}
+
 fn settings(ws: &std::path::Path) -> Settings {
     Settings {
         model: "fake-model".into(),
@@ -194,6 +206,9 @@ fn stop_reason_wire_values() {
 
 #[tokio::test]
 async fn initialize_then_session_new_and_list() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let ws = tmp.path().canonicalize().unwrap();
     let server = Arc::new(Mutex::new(test_server(&ws)));
@@ -241,6 +256,9 @@ async fn initialize_then_session_new_and_list() {
 
 #[tokio::test]
 async fn session_new_advertises_model_config_option() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let ws = tmp.path().canonicalize().unwrap();
     let server = Arc::new(Mutex::new(test_server(&ws)));
@@ -374,6 +392,9 @@ async fn session_new_rejects_relative_cwd() {
 
 #[tokio::test]
 async fn set_mode_and_close() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let ws = tmp.path().canonicalize().unwrap();
     let server = Arc::new(Mutex::new(test_server(&ws)));
@@ -423,6 +444,9 @@ async fn set_mode_and_close() {
 
 #[tokio::test]
 async fn set_config_option_switches_mode() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let ws = tmp.path().canonicalize().unwrap();
     let server = Arc::new(Mutex::new(test_server(&ws)));
@@ -513,6 +537,9 @@ async fn prompt_unknown_session_errors() {
 
 #[tokio::test]
 async fn load_replays_history() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let ws = tmp.path().canonicalize().unwrap();
     let store = crate::session::SessionStore::for_workspace(&ws).unwrap();
@@ -629,6 +656,9 @@ async fn authenticate_accepts_advertised_method_and_rejects_unknown() {
 
 #[tokio::test]
 async fn set_model_updates_session_and_rejects_unknown_session() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let ws = tmp.path().canonicalize().unwrap();
     let server = Arc::new(Mutex::new(test_server(&ws)));
@@ -682,6 +712,9 @@ async fn set_model_updates_session_and_rejects_unknown_session() {
 
 #[tokio::test]
 async fn set_model_rejects_missing_or_empty_model() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let ws = tmp.path().canonicalize().unwrap();
     let server = Arc::new(Mutex::new(test_server(&ws)));
@@ -726,6 +759,9 @@ async fn capabilities_advertise_set_capability() {
 
 #[tokio::test]
 async fn set_config_option_switches_provider_and_model() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let ws = tmp.path().canonicalize().unwrap();
     let server = Arc::new(Mutex::new(test_server(&ws)));
@@ -781,6 +817,9 @@ async fn set_config_option_switches_provider_and_model() {
 
 #[tokio::test]
 async fn set_config_option_rejects_unknown_option_and_missing_value() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let ws = tmp.path().canonicalize().unwrap();
     let server = Arc::new(Mutex::new(test_server(&ws)));
@@ -835,6 +874,9 @@ async fn set_config_option_rejects_unknown_option_and_missing_value() {
 
 #[tokio::test]
 async fn set_model_with_provider_qualifier_switches_provider() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let ws = tmp.path().canonicalize().unwrap();
     let server = Arc::new(Mutex::new(test_server(&ws)));

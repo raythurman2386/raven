@@ -58,6 +58,10 @@ impl Sandbox {
         command
             .args(&args)
             .current_dir(&self.workspace)
+            // Null stdin: never inherit raven's stdio (see shell.rs — in ACP
+            // mode fd 0 is the live JSON-RPC pipe; a child reading it would
+            // consume ACP frames and could cause a clean mid-turn EOF).
+            .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
         setup_shell_env(&mut command, &self.workspace);
@@ -133,6 +137,7 @@ impl Sandbox {
         {
             return std::process::Command::new(resolve_command("pytest"))
                 .arg("--version")
+                .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status()
@@ -195,6 +200,10 @@ impl Sandbox {
         command
             .args(&args)
             .current_dir(&self.workspace)
+            // Null stdin: never inherit raven's stdio (see shell.rs — in ACP
+            // mode fd 0 is the live JSON-RPC pipe; a child reading it would
+            // consume ACP frames and could cause a clean mid-turn EOF).
+            .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
         setup_shell_env(&mut command, &self.workspace);

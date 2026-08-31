@@ -23,6 +23,18 @@ fn raven_bin() -> &'static str {
 /// The platform's executable suffix (`.exe` on Windows, empty elsewhere).
 const EXE_SUFFIX: &str = std::env::consts::EXE_SUFFIX;
 
+/// Skip a test that binds a local `TcpListener` (AF_INET socket) when running
+/// under a restrictive outer sandbox that SIGSYS-kills sockets. Returns `true`
+/// when the test should skip.
+fn skip_if_outer_sandbox() -> bool {
+    if raven::testutil::outer_sandbox_restrictive() {
+        eprintln!("outer sandbox blocks AF_INET sockets; skipping update integration test");
+        true
+    } else {
+        false
+    }
+}
+
 /// The raven binary filename on this platform (`raven` / `raven.exe`).
 fn raven_name() -> String {
     format!("raven{EXE_SUFFIX}")
@@ -215,6 +227,9 @@ fn host_triple() -> &'static str {
 
 #[test]
 fn self_update_replaces_and_rolls_back() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let release = dir.path().join("release");
     let (pubkey, _) = build_release(
@@ -270,6 +285,9 @@ fn self_update_replaces_and_rolls_back() {
 
 #[test]
 fn rollback_restores_backup() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let target = dir.path().join(raven_name());
     copy_binary(&target);
@@ -293,6 +311,9 @@ fn rollback_restores_backup() {
 
 #[test]
 fn self_update_fails_closed_on_bad_signature() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let release = dir.path().join("release");
     let (pubkey, _) = build_release(
@@ -345,6 +366,9 @@ fn self_update_fails_closed_on_bad_signature() {
 
 #[test]
 fn rollback_without_backup_fails() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let target = dir.path().join(raven_name());
     copy_binary(&target);

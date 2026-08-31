@@ -223,6 +223,14 @@ fn build_map_uncached(workspace: &Path) -> Option<String> {
 /// budget on the most useful paths first.
 fn collect_source_files(workspace: &Path) -> Vec<PathBuf> {
     let mut files = git_list_sources(workspace).unwrap_or_else(|| ignore_walk_sources(workspace));
+    // If git is present but the workspace is nested under a parent repo whose
+    // `.gitignore` excludes it (e.g. a temp dir under a gitignored
+    // `.raven/tmp/`), `git ls-files` returns an empty list with success. That
+    // would silently drop every source file. Fall back to the filesystem walk
+    // in that case so the map still builds.
+    if files.is_empty() {
+        files = ignore_walk_sources(workspace);
+    }
     files.sort_by(|a, b| {
         let ra = a.strip_prefix(workspace).unwrap_or(a);
         let rb = b.strip_prefix(workspace).unwrap_or(b);
@@ -283,6 +291,12 @@ fn ignore_walk_sources(workspace: &Path) -> Vec<PathBuf> {
         .ignore(true)
         .hidden(false)
         .require_git(false)
+        // Do not inherit `.gitignore` from parent directories. The workspace
+        // is the mapping root: only gitignore files *within* it should apply.
+        // Without this, a workspace nested under a parent repo (e.g. a temp
+        // dir under a gitignored `.raven/tmp/`) has all its files skipped by
+        // the parent's `.gitignore`.
+        .parents(false)
         .filter_entry(|e| {
             if e.depth() == 0 {
                 return true;

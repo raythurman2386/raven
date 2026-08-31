@@ -44,7 +44,13 @@ impl Sandbox {
 
         cmd.current_dir(&self.workspace);
         setup_shell_env(&mut cmd, &self.workspace);
-        cmd.stdout(std::process::Stdio::piped())
+        // Explicitly null stdin: the child must never inherit raven's own
+        // stdio. In ACP mode raven's fd 0 is the live JSON-RPC pipe — a child
+        // that reads stdin would consume ACP frames, and a surviving
+        // grandchild holding fd 0 open can corrupt pipe teardown. Both can
+        // make the harness see a clean mid-turn EOF (exit 0).
+        cmd.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
         // Sanctioned test runners (vitest/jest/mocha/npm test/cargo test/pytest/
