@@ -27,4 +27,6 @@ fn sandbox() -> Sandbox {
 
 /// Whether the test process is running under a restrictive outer sandbox that
 /// pre-empts the inner sandbox's exemptions. See [`crate::testutil`].
+/// Only used by Linux-gated tests (the sandbox confinement is Linux-only).
+#[cfg(target_os = "linux")]
 pub(crate) use crate::testutil::outer_sandbox_restrictive;
