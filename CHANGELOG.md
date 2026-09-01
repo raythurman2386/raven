@@ -6,13 +6,39 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.18] - 2026-09-01
+
 ### Added
 
+- **`raven --system` OS-administration scope** — an opt-in `--system` flag turns
+  Raven into a whole-OS management agent (run `omarchy`/`systemctl`/`pacman`, edit
+  `~/.config/` and system dirs) without touching the default repo-scoped flow. The
+  sandbox is rooted at `/` (write-everywhere at the Landlock layer) via the existing
+  workspace-root plumbing, `confirm_shell` is forced on, and `--system` is mutually
+  exclusive with `--yolo` so the agent never runs fully autonomously. Includes a
+  dedicated OS-administration system prompt, a headless system runner, and system
+  memory at `~/.raven/system/MEMORY.md`. See `docs/omarchy.md` and `docs/security.md`.
 - **GLM-5.3 flagship support** — `glm-5.3:cloud` (Ollama's newly-released
   flagship, strongest coding/agentic in the series) is now in the `/model`
   autocomplete fallback list and the onboarding wizard's Ollama model list,
   alongside the existing `glm-5.3-flash:cloud`. Both resolve to a 1M-token
   context window.
+
+### Fixed
+
+- **Sandbox could read home secrets** — the Landlock `$HOME` grant is now
+  Execute-only (traversal); read+exec is scoped to PATH dirs under `$HOME` plus the
+  real toolchain dirs (`~/.cargo/registry`, `~/.rustup`, `~/.local/share/mise/installs`,
+  `~/.config/mise`, `~/.config/nvm`). A confined child can no longer read `~/.ssh`,
+  `~/.env`, `~/.aws`, sibling workspaces, or documents. Also pins mise and git global
+  config under the workspace so shims don't walk up into `$HOME`.
+- **ACP child could consume the live JSON-RPC pipe** — every confined child now gets
+  `Stdio::null()` stdin (children no longer inherit Raven's live ACP pipe, which could
+  cause a clean mid-turn EOF), and a diagnostic is logged before `serve_io` returns so
+  a clean exit is never silent.
+- **ACP checkpoint could rewind the final text** — checkpoint writes are now
+  serialized per session so a stale snapshot can never rename after the final write and
+  drop the final assistant text (fixes a Windows-only flake).
 
 ## [0.5.17] - 2026-08-28
 
