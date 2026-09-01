@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **GLM-5.3 flagship support** — `glm-5.3:cloud` (Ollama's newly-released
+  flagship, strongest coding/agentic in the series) is now in the `/model`
+  autocomplete fallback list and the onboarding wizard's Ollama model list,
+  alongside the existing `glm-5.3-flash:cloud`. Both resolve to a 1M-token
+  context window.
+
 ## [0.5.17] - 2026-08-28
 
 ### Fixed

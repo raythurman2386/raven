@@ -26,7 +26,7 @@ It's built for focused, supervised work — not an autonomous loop trying to com
 Daily driver is the TUI, usually attached to Zed over ACP (`raven --acp`) so model switching happens in the editor's picker. In a terminal: `raven -p "…"` for agent-mode tasks, `--mode plan` when you want a gated plan, `--yolo` for throwaway work.
 
 - **Sessions** — every turn lands in `.raven/sessions/` as JSONL. `--resume` continues the latest, `--list-sessions` browses, `/export` bundles a session as Markdown/JSON.
-- **Models** — `glm-5.3-flash:cloud` for day-to-day work, `x-ai/grok-4.5` on OpenRouter when a task needs frontier reasoning, `qwen3.8:latest` offline. `/model` + Tab completes; `/provider` switches endpoints.
+- **Models** — `glm-5.3-flash:cloud` for day-to-day work, `glm-5.3:cloud` when a task needs the flagship, `x-ai/grok-4.5` on OpenRouter for frontier reasoning, `qwen3.8:latest` offline. `/model` + Tab completes; `/provider` switches endpoints.
 - **Hermes lineage** — `read_file` document extraction mirrors Hermes Agent's `read_extract.py` (same `anydoc` core), and loop-control fallbacks mirror Hermes's max-iteration recovery. Ideas borrowed from good harnesses; the code is all here.
 
 ---
@@ -143,7 +143,7 @@ The agent tracks token usage with a built-in token estimator (no external vocab 
 
 Context window sizes are fetched from the model's actual metadata via Ollama's `/api/show` endpoint. This returns the real `context_length` from the model file (e.g. `gemma4` → 128K, `qwen3.5` → 256K, `deepseek-v4-pro:cloud` → 1M). If the API is unreachable (Ollama not running, model not found), a name-based heuristic is used as fallback:
 
-- `glm-5.3-flash:cloud`, `deepseek-v4:cloud` (flash and pro) → 1M
+- `glm-5.3:cloud`, `glm-5.3-flash:cloud`, `deepseek-v4:cloud` (flash and pro) → 1M
 - `qwen3.5` → 256K
 - `gemma4`, `gemma3`, `qwen2.5`, `qwen3`, `llama3.1`, `llama3.2`, `deepseek`, `codestral`, `glm` → 128K
 - `llama3`, `codellama`, `"32k"` in name → 32K
@@ -318,7 +318,7 @@ cat evals/out/<run-id>.md
 ```
 
 **Top-performing models (current):**
-- **Ollama Cloud (daily-use recommended):** `glm-5.3-flash:cloud` (default, excellent), `kimi-k3:cloud` (latest, excellent), `deepseek-v4-pro:cloud` (high quality), `deepseek-v4-flash:cloud` (efficient)
+- **Ollama Cloud (daily-use recommended):** `glm-5.3-flash:cloud` (default, excellent), `glm-5.3:cloud` (flagship, strongest coding/agentic), `kimi-k3:cloud` (latest, excellent), `deepseek-v4-pro:cloud` (high quality), `deepseek-v4-flash:cloud` (efficient)
 - **OpenRouter (frontier):** `x-ai/grok-4.5` (best reasoning, multimodal), `x-ai/grok-4.6` (frontier)
 - **Local (when cloud unavailable):** `qwen3.8:latest`
 

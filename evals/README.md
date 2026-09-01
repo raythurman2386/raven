@@ -143,6 +143,7 @@ Do not grow vanity cases. Add a case when a real failure mode appears.
 | `grok-4.5` | OpenRouter | Multimodal/Reasoning | ✅ Recommended | Frontier performance; best reasoning and cost for complex evals |
 | `grok-4.6` | OpenRouter | Multimodal/Reasoning | ✅ Recommended | Frontier performance; excellent reasoning for complex evals |
 | `nemotron-3-ultra:cloud` | Ollama Cloud | Agentic | ✅ Passing | Built for long-running agent workflows |
+| `glm-5.3:cloud` | Ollama Cloud | Coding/Agentic | ✅ Recommended | Flagship GLM-5.3; strongest coding/agentic in the series |
 | `glm-5.3-flash:cloud` | Ollama Cloud | Long-horizon | ✅ Passing | Optimized for long-horizon tasks; some flakiness |
 | `kimi-k3:cloud` | Ollama Cloud | Agentic/Multimodal | ⚠️ Partial | Passes most cases; may need auth/usage credits |
 | `kimi-k2.7-code:cloud` | Ollama Cloud | Coding/Agentic | ⚠️ Partial | Coding-focused; long-horizon improvements over k2.6 |
@@ -182,6 +183,7 @@ Reports are saved to `evals/out/<timestamp>.{json,md}` for analysis.
 - **First choice:** `qwen3.8` (all-around excellence for local; Ollama Cloud recommended)
 - **Alternative:** `deepseek-v4-flash:cloud` (for cheap high performance in the cloud)
 - **Fallback:** `glm-5.3-flash` (if qwen and deepseek are unavailable; fast, reliable, high reasoning)
+- **Flagship:** `glm-5.3:cloud` (strongest coding/agentic in the GLM-5.3 series)
 
 **For frontier/complex reasoning:**
 - `grok-4.5` (via OpenRouter; multimodal, excellent model)

@@ -257,7 +257,7 @@ The context window is fetched from the model's actual metadata via Ollama's `/ap
 
 | Model name contains | Inferred window |
 |---|---|
-| `glm` + `cloud` | 1 000 000 |
+| `glm` + `cloud` (e.g. `glm-5.3:cloud`, `glm-5.3-flash:cloud`) | 1 000 000 |
 | `deepseek-v4` + `cloud` (flash and pro) | 1 000 000 |
 | `qwen3.5` | 262 144 |
 | `gemma4`, `gemma3`, `qwen2.5`, `qwen3`, `llama3.1`, `llama3.2`, `deepseek`, `codestral`, `glm` | 128 000 |

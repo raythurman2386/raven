@@ -210,6 +210,7 @@ pub fn completion_arg_candidates(
                 "gemma4:latest",
                 "deepseek-v4-flash:cloud",
                 "deepseek-v4-pro:cloud",
+                "glm-5.3:cloud",
                 "glm-5.3-flash:cloud",
                 "x-ai/grok-4.5",
                 "x-ai/grok-4.6",

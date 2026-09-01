@@ -58,6 +58,7 @@ pub fn fallback_models(provider_name: &str) -> Vec<String> {
             "qwen3:14b".into(),
             "deepseek-v4-flash:cloud".into(),
             "deepseek-v4-pro:cloud".into(),
+            "glm-5.3:cloud".into(),
             "glm-5.3-flash:cloud".into(),
         ],
         "openrouter" => vec!["x-ai/grok-4.5".into(), "x-ai/grok-4.6".into()],
@@ -416,6 +417,8 @@ mod tests3 {
         let m = fallback_models("ollama");
         assert!(m.contains(&"qwen3.8:latest".to_string()));
         assert!(m.contains(&"deepseek-v4-pro:cloud".to_string()));
+        assert!(m.contains(&"glm-5.3:cloud".to_string()));
+        assert!(m.contains(&"glm-5.3-flash:cloud".to_string()));
     }
 
     #[test]

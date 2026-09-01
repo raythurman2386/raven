@@ -94,6 +94,7 @@
 # Built-in default: http://localhost:11434/v1
 base_url = "http://localhost:11434/v1"
 default_model = "glm-5.3-flash:cloud"
+# Flagship: glm-5.3:cloud (strongest coding/agentic); flash is the fast default.
 # Point at Ollama Cloud or a remote authenticated host and set a key:
 # base_url = "https://ollama.com/v1"
 # api_key_env = "OLLAMA_API_KEY"   # or literal api_key = "..."
