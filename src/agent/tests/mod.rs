@@ -10,7 +10,7 @@ use super::core::Agent;
 use super::loop_control::compute_reminders;
 use super::stream::args_to_string;
 use super::types::{AgentEvent, ChatMessage, FunctionCall, ToolCall};
-use crate::config::Mode;
+use crate::config::{Mode, Scope};
 use serde_json::{json, Value};
 use std::net::TcpListener as StdTcpListener;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -193,6 +193,7 @@ fn settings_for(workspace: &std::path::Path, base_url: &str) -> crate::config::S
         workspace: workspace.to_path_buf(),
         max_iterations: 5,
         mode: Mode::Agent,
+        scope: Scope::Repo,
         yolo: true,
         temperature: 0.0,
         max_tokens: 4096,
@@ -1845,5 +1846,33 @@ async fn tool_call_iterations_persist_one_usage_per_iteration() {
             ("assistant".to_string(), 200)
         ],
         "each iteration's meter lands on its own assistant message"
+    );
+}
+
+#[test]
+fn system_scope_system_message_uses_os_prompt_and_omits_repo_blocks() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut settings = settings_for(tmp.path(), "http://127.0.0.1:1");
+    settings.scope = Scope::System;
+    settings.workspace = std::path::PathBuf::from("/");
+
+    let agent = Agent::new(settings).unwrap();
+    let content = agent.messages[0].content.as_deref().unwrap();
+
+    assert!(
+        content.contains("operating-system administration agent"),
+        "system scope should use the OS admin prompt, got: {content}"
+    );
+    assert!(
+        content.contains("System root: /"),
+        "system scope should anchor at the OS root"
+    );
+    assert!(
+        !content.contains("Workspace root"),
+        "system scope should not emit a repo workspace root"
+    );
+    assert!(
+        !content.contains("AGENTS.md"),
+        "system scope should not inject project instructions"
     );
 }

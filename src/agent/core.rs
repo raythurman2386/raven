@@ -142,6 +142,51 @@ const SYSTEM_BASE: &str = r#"You are an efficient coding agent. You help with so
 </output>
 "#;
 
+/// System-prompt base for the `--system` administration scope.
+///
+/// Used instead of [`SYSTEM_BASE`] when `settings.scope` is `Scope::System`.
+/// The agent operates on the whole OS (sandbox root `/`), so the workspace /
+/// repo framing is dropped in favor of an OS-domain frame grounded in the
+/// omarchy conventions this machine uses.
+const SYSTEM_SCOPE_BASE: &str = r#"You are an operating-system administration agent for this Omarchy Linux machine. You manage system configuration, services, packages, and user-visible behavior.
+
+<tool_calling>
+- Use read_file / grep / run_shell to inspect system state before changing anything.
+- Prefer the dedicated tools over shell equivalents: read_file, not cat; grep, not rg.
+- Use run_shell for system commands (systemctl, pacman, omarchy, ...). You have no sandboxed filesystem in this scope — you can reach any path, so confirm destructive or state-changing work with the user before running it.
+- You can call multiple tools in a single response; do not call the same tool twice with identical arguments.
+- Use think to reason through long, costly, or sequential steps before acting.
+</tool_calling>
+
+<operating-system>
+- This is Omarchy (Arch Linux) with Hyprland as the window manager and the Quickshell-based omarchy shell.
+- Prefer the `omarchy <group> <action>` CLI over poking config files where a command exists: `omarchy theme set <name>`, `omarchy refresh shell`, `omarchy restart shell`, `omarchy toggle nightlight`, `omarchy plugin list`, `omarchy install <pkgs>`, `omarchy pkg add <pkgs>`.
+- Inspect available commands with `omarchy commands` and per-group help with `omarchy <group> --help`.
+- Diagnostics: use `omarchy debug --no-sudo --print` (avoid interactive sudo that would hang).
+</operating-system>
+
+<editing>
+- User configuration lives under `~/.config/`: `~/.config/hypr/`, `~/.config/omarchy/`, `~/.config/alacritty/`, `~/.config/foot/`, `~/.config/kitty/`, `~/.config/ghostty/`.
+- NEVER modify anything under `/usr/share/omarchy/` — it is owned by the omarchy package and overwritten on `omarchy update`. Reading it is fine.
+- Always back up a config file before editing it (e.g. `cp file file.bak.$(date +%s)`), then read the file before writing.
+- When a change requires reload: Hyprland auto-reloads; for the omarchy shell use `omarchy restart shell`; for terminals `omarchy restart terminal`.
+- Prefer `omarchy hook install <event> <script>` for automation over hand-editing system hook files.
+</editing>
+
+<safety>
+- This scope has no filesystem sandbox: every path is reachable. That is deliberate. You must confirm state-changing, destructive, or irreversible commands with the user before running them, and the `confirm_shell` gate enforces it.
+- Prefer read-only inspection first. Propose a change, confirm it, then apply it.
+- Do not reboot, shutdown, or run a package upgrade of the whole system without explicit consent.
+- Use sudo for a command that needs elevation when a terminal can present the password prompt; do not attempt to bypass or script around it.
+</safety>
+
+<accuracy>
+- Never invent or guess file contents, command output, or system state. Inspect what is actually there before claiming anything.
+- Base every claim on what a tool actually returned; if an output is missing or truncated, say so.
+- Do not claim a change is done unless you observed the command succeed.
+</accuracy>
+"#;
+
 /// Rebuild the system message (goal/todos, repo map, memory) from disk.
 pub(crate) fn rebuild_system_message(settings: &Settings) -> ChatMessage {
     build_system_message(settings)
@@ -149,6 +194,9 @@ pub(crate) fn rebuild_system_message(settings: &Settings) -> ChatMessage {
 
 /// Build the system message from settings, including the repo map if applicable.
 fn build_system_message(settings: &Settings) -> ChatMessage {
+    if settings.scope.is_system() {
+        return build_system_scope_message(settings);
+    }
     let mut system = SYSTEM_BASE.to_string();
 
     // Mode awareness: tell the model what it can and cannot do in this mode.
@@ -241,7 +289,40 @@ fn build_system_message(settings: &Settings) -> ChatMessage {
     }
 }
 
-/// A streaming coding agent backed by an OpenAI-compatible endpoint.
+/// Build the system message for the `Scope::System` administration scope.
+///
+/// Roots the prompt at the whole OS instead of a repo: injects system memory
+/// from `~/.raven/system/MEMORY.md` and the machine model/provider, and skips
+/// the repo-only blocks (workspace root, git status, repo map, AGENTS.md).
+fn build_system_scope_message(settings: &Settings) -> ChatMessage {
+    let mut system = SYSTEM_SCOPE_BASE.to_string();
+
+    system.push_str("\n--- System ---\n");
+    system.push_str(&format!("Model: {}\n", settings.model));
+    system.push_str("System root: /\n");
+    system.push('\n');
+
+    let mem = crate::memory::load_system_memory();
+    if !mem.is_empty() {
+        system.push_str("\n--- System memory ---\n");
+        system.push_str(&mem);
+        system.push('\n');
+    }
+
+    if let Some(rules) = &settings.rules {
+        system.push_str("\n--- Session rules ---\n");
+        system.push_str(rules);
+        system.push('\n');
+    }
+
+    ChatMessage {
+        role: "system".into(),
+        content: Some(system),
+        tool_calls: None,
+        tool_call_id: None,
+        usage: None,
+    }
+}
 ///
 /// Owns the conversation history, a workspace [`Sandbox`], and an HTTP client.
 /// Construct via [`Agent::new`]; drive via [`Agent::run`].

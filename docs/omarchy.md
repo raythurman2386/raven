@@ -276,6 +276,36 @@ and [zed_connection.md](zed_connection.md).
 
 ---
 
+## System scope (`raven --system`)
+
+Beyond the repo-scoped coding default, Raven ships an opt-in OS-administration
+scope: `raven --system "<task>"`. This is useful for managing Omarchy itself —
+installing packages, editing `~/.config/`, restarting services — without
+leaving the Raven session. Key differences from the default:
+
+- The sandbox is rooted at `/` (write access anywhere), which is what lets it
+  reach system config; **`confirm_shell` is forced on** and `--system` is
+  incompatible with `--yolo` (`raven --system --yolo` is rejected).
+- It loads a system OS-administration prompt that prefers
+  `omarchy <group> <action>` commands, never edits `/usr/share/omarchy/` (that
+  is package-owned and overwritten on `omarchy update`), backs up configs
+  before writing, and reads before changing.
+- It does **not** persist to a repo session store and does not run the
+  enforced-verify gate (there is no workspace test runner for OS work).
+
+Example:
+```bash
+raven --system "show the disk layout and running services"
+raven --system "set night light to turn on at 21:00"
+raven --system "install docker and the common DB clients"
+```
+
+The wrappers and Agents panel described above drive the **repo** default. When
+you want Raven to act on the OS, launch it in system scope explicitly. See
+[security.md](security.md) for the system-scope trust posture.
+
+---
+
 ## Related files (this machine's layout)
 
 ```

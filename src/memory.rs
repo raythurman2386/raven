@@ -34,6 +34,34 @@ pub fn load_memory(workspace: &Path) -> String {
     }
 }
 
+/// Load system-scope memory from the given home root's
+/// `.raven/system/MEMORY.md`.
+///
+/// Used by the `--system` scope (where the sandbox root is `/`, so the
+/// workspace-relative `.raven/MEMORY.md` path is not meaningful). Falls back
+/// to `<home>/.raven/MEMORY.md` when the system file is absent, so an existing
+/// global memory file is still read. Returns an empty string if neither exists.
+fn load_system_memory_from(home: &Path) -> String {
+    let system = home.join(".raven").join("system").join("MEMORY.md");
+    let content = match std::fs::read_to_string(&system) {
+        Ok(c) => Some(c),
+        Err(_) => std::fs::read_to_string(home.join(".raven").join("MEMORY.md")).ok(),
+    };
+    match content {
+        Some(c) => truncate_memory(&c),
+        None => String::new(),
+    }
+}
+
+/// Load system-scope memory from `~/.raven/system/MEMORY.md`.
+/// See [`load_system_memory_from`].
+pub fn load_system_memory() -> String {
+    match dirs::home_dir() {
+        Some(home) => load_system_memory_from(&home),
+        None => String::new(),
+    }
+}
+
 /// Truncate memory to fit within both char and line limits.
 fn truncate_memory(content: &str) -> String {
     let truncated: String = content.chars().take(MAX_MEMORY_CHARS).collect();
@@ -253,5 +281,17 @@ mod tests {
         assert!(result.contains("already contains"));
         let content = std::fs::read_to_string(tmp.path().join(".raven").join("MEMORY.md")).unwrap();
         assert_eq!(content.matches("- Use Rust").count(), 1);
+    }
+
+    #[test]
+    fn load_system_memory_reads_global_system_file_when_home_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join(".raven").join("system");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("MEMORY.md"), "## System\n- Installed docker\n").unwrap();
+        // Use the explicit home-root variant so the test is deterministic on
+        // every OS (no reliance on env-var-based HOME resolution).
+        let out = load_system_memory_from(tmp.path());
+        assert!(out.contains("Installed docker"), "got: {out}");
     }
 }

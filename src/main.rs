@@ -43,7 +43,7 @@ use raven::agent::{run_parallel, Agent, ChatMessage};
 use raven::config::{
     default_max_iter, env_compact_threshold, env_context_window, env_searxng_engines,
     env_searxng_url, load_config_file, load_dotenv_from, load_global_dotenv, needs_onboarding,
-    resolve_mode, resolve_provider, run_onboarding, Mode, Settings,
+    resolve_mode, resolve_provider, run_onboarding, Mode, Scope, Settings,
 };
 use raven::context::{fetch_context_window, infer_context_window};
 use raven::runner;
@@ -110,6 +110,12 @@ struct Cli {
     /// step). An explicit `--mode` overrides this implicit agent-mode behavior.
     #[arg(long)]
     yolo: bool,
+
+    /// Run in system-administration scope: the sandbox is rooted at `/`, a
+    /// system OS-administration prompt is used, and `confirm_shell` is forced
+    /// on (mutually exclusive with `--yolo`).
+    #[arg(long)]
+    system: bool,
 
     /// Force TUI
     #[arg(long)]
@@ -335,14 +341,37 @@ async fn main() -> Result<()> {
 
     let max_iterations = cfg.max_iterations.unwrap_or_else(default_max_iter);
     let mode = resolve_mode(cli.mode.map(Mode::from), cfg.mode, cli.yolo);
+
+    // System scope is opt-in and mutually exclusive with --yolo: a system-admin
+    // agent must always confirm state-changing commands. Reject the combination
+    // up front with a clear error instead of silently weakening the gate.
+    let scope = if cli.system {
+        if cli.yolo {
+            anyhow::bail!(
+                "--system forces confirmation of state-changing commands and is not \
+                 compatible with --yolo. Run without --yolo, or omit --system."
+            );
+        }
+        Scope::System
+    } else {
+        Scope::Repo
+    };
+
     let temperature = cfg.temperature.unwrap_or(0.2);
 
     let settings = Settings {
         model,
         provider,
-        workspace,
+        // System scope roots the sandbox at `/` (write-everywhere at the
+        // Landlock layer); repo scope keeps the resolved repo workspace.
+        workspace: if scope.is_system() {
+            PathBuf::from("/")
+        } else {
+            workspace
+        },
         max_iterations,
         mode,
+        scope,
         yolo: cli.yolo,
         temperature,
         max_tokens,
@@ -350,8 +379,10 @@ async fn main() -> Result<()> {
         context_window,
         compact_threshold,
         no_stream: cli.no_stream || cfg.no_stream.unwrap_or(false),
-        verify: !cli.no_verify && cfg.verify.unwrap_or(true),
-        confirm_shell: !cli.yolo,
+        // System scope: no workspace test runner, so no enforced-verify gate.
+        verify: !scope.is_system() && !cli.no_verify && cfg.verify.unwrap_or(true),
+        // System scope always confirms shell commands (never autonomous).
+        confirm_shell: scope.is_system() || !cli.yolo,
         theme: cli
             .theme
             .or(cfg.theme)
@@ -359,11 +390,17 @@ async fn main() -> Result<()> {
         searxng_url,
         searxng_engines,
         sandbox_extra_rw: Vec::new(),
-        allow_delegate: true,
+        // System scope: no sub-agents, no nested goal/todo persistence.
+        allow_delegate: !scope.is_system(),
     };
 
     if cli.acp {
         return raven::acp::run_stdio(settings, cfg_for_acp).await;
+    }
+
+    if scope.is_system() {
+        let task = cli.prompt.unwrap_or_else(|| cli.task.join(" "));
+        return raven::system::run(settings, &task).await;
     }
 
     if let Some(tasks) = cli.parallel {

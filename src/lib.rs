@@ -16,6 +16,7 @@ pub mod runner;
 pub mod session;
 pub mod skills;
 pub mod state;
+pub mod system;
 pub mod tokenizer;
 pub mod tools;
 pub mod tui;
