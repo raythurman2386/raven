@@ -795,13 +795,13 @@ async fn run_prompt_inner(
                     }
                 };
                 let saver = tokio::spawn(async move {
-                    let write = tokio::task::spawn_blocking(move || {
-                        store.save_all_messages(&session, &snapshot)
-                    });
                     if let Some(prev) = prev_saver {
                         let _ = prev.await;
                     }
-                    let _ = write.await;
+                    let _ = tokio::task::spawn_blocking(move || {
+                        store.save_all_messages(&session, &snapshot)
+                    })
+                    .await;
                 });
                 let mut srv = server.lock().await;
                 if let Some(sess) = srv.sessions.get_mut(&sid) {
@@ -863,14 +863,14 @@ async fn run_prompt_inner(
             // Chain after any in-flight checkpoint so the final full-history
             // write can never be overtaken by a stale one, and finish before
             // the prompt response is sent (the client may resume immediately).
+            if let Some(prev) = prev_saver {
+                let _ = prev.await;
+            }
             let write = tokio::task::spawn_blocking(move || {
                 let mut session = session;
                 let _ = store.save_all_messages(&session, &messages);
                 store.update_summary(&mut session, Some(title))
             });
-            if let Some(prev) = prev_saver {
-                let _ = prev.await;
-            }
             let _ = write.await;
             Ok(stop)
         }
