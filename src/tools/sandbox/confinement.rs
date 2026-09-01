@@ -123,6 +123,9 @@ impl FsPolicy {
     /// - `~/.local/share/mise/installs` (mise-installed tool binaries)
     /// - `~/.config/mise` (mise's config, which its shims read to resolve
     ///   installed tools)
+    /// - `~/.config/nvm` (nvm-installed tool binaries; mise shims resolve
+    ///   node/npm into this tree, which needs read to exec the npm-cli.js
+    ///   symlink target under `lib/node_modules`)
     ///
     /// Everything else under `$HOME` is traversal-only (see
     /// [`Self::traversal_roots`]).
@@ -151,6 +154,7 @@ impl FsPolicy {
                 ".rustup",
                 ".local/share/mise/installs",
                 ".config/mise",
+                ".config/nvm",
             ] {
                 push(home.join(sub));
             }

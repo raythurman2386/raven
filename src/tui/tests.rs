@@ -3,7 +3,7 @@
 
 use super::render::prewrap_lines;
 use super::*;
-use crate::config::{ConfigFile, Provider};
+use crate::config::{ConfigFile, Provider, Scope};
 use crate::plan::AgentState;
 use serde_json::json;
 use std::path::Path;
@@ -657,6 +657,7 @@ fn test_settings(workspace: &std::path::Path) -> Settings {
         workspace: workspace.to_path_buf(),
         max_iterations: 5,
         mode: Mode::Agent,
+        scope: Scope::Repo,
         yolo: true,
         temperature: 0.0,
         max_tokens: 4096,

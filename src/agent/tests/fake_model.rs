@@ -8,7 +8,7 @@
 
 use super::super::core::{clamp_max_tokens, Agent, CompletionSource};
 use super::super::types::AgentEvent;
-use crate::config::{Mode, Provider, Settings};
+use crate::config::{Mode, Provider, Scope, Settings};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
@@ -33,6 +33,7 @@ fn settings_for(workspace: &std::path::Path) -> Settings {
         workspace: workspace.to_path_buf(),
         max_iterations: 5,
         mode: Mode::Agent,
+        scope: Scope::Repo,
         yolo: true,
         temperature: 0.0,
         max_tokens: 4096,

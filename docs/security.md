@@ -297,3 +297,44 @@ cargo test --lib tools::validate
 These tests verify that a confined child cannot read outside the Landlock
 allowlist, cannot make network syscalls, cannot write more than `RLIMIT_FSIZE`,
 and that `open_beneath` rejects traversal/symlink escapes.
+
+---
+
+## System scope (`--system`)
+
+Raven also ships an opt-in `--system` scope for OS administration
+(`raven --system "…"`). This scope is **fundamentally different** from the
+repo default and must be understood as a separate trust posture:
+
+- **The sandbox is rooted at `/`.** Because the entire sandbox (`Sandbox.workspace`,
+  the Landlock RW roots, `safe_resolve`, `open_beneath`) anchors on the workspace
+  root, setting that root to `/` in system scope grants the agent write access
+  to *every path on the machine*. `safe_resolve`'s lexical/symlink checks and
+  `openat2/RESOLVE_BENEATH` become effectively no-ops, because every path is
+  under `/`. The Landlock `/` RW grant unions over the usual read-only subpaths
+  (`/etc`, `/usr`, …), so those are writable too. This is intentional: it is
+  what makes `raven --system` able to manage system configuration, packages,
+  and services.
+- **The real safety net is `confirm_shell`, not the sandbox.** Every `run_shell`
+  command must be user-approved unless it matches the `safe_command_re`
+  allowlist. More importantly, **`--system` forces `confirm_shell` on** and is
+  **mutually exclusive with `--yolo`**: `raven --system --yolo` is rejected with
+  a clear error. A system-scope agent is never fully autonomous.
+- **The `dangerous_re` denylist still applies** as a last-resort filter for
+  obviously destructive commands (recursive root deletes, `mkfs`, fork bombs,
+  `curl | sh`, …).
+- **`--system` suppresses repo behaviors**: no enforced-verify gate (no
+  workspace test runner), no `delegate_task`, no goal/todo persistence, and a
+  separate system prompt (`SYSTEM_SCOPE_BASE`) that instructs the agent to
+  prefer `omarchy`/`systemctl`/`pacman` commands, never edit
+  `/usr/share/omarchy/`, back up configs before writing, and confirm
+  destructive work.
+
+**Recommendation:** use `--system` only on a trusted, single-user machine where
+you are present to approve commands. It is not a hardening boundary — it is a
+convenience scope whose protection is the confirmation gate and the command
+denylist. For stronger isolation of system-administration work, run it inside a
+container or VM, or audit the commands it proposes before approving them.
+
+See `docs/omarchy.md` for how the system scope complements the repo default on
+an Omarchy machine.

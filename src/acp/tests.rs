@@ -6,7 +6,7 @@ use super::protocol::{
 };
 use super::server::{dispatch, AcpServer, FrameWrite};
 use crate::agent::AgentEvent;
-use crate::config::{ConfigFile, Mode, Provider, Settings};
+use crate::config::{ConfigFile, Mode, Provider, Scope, Settings};
 use crate::plan::{Plan, PlanStep, PlanStepStatus};
 use serde_json::{json, Value};
 use std::io::Write;
@@ -32,6 +32,7 @@ fn settings(ws: &std::path::Path) -> Settings {
         workspace: ws.to_path_buf(),
         max_iterations: 4,
         mode: Mode::Agent,
+        scope: Scope::Repo,
         yolo: true,
         temperature: 0.0,
         max_tokens: 4096,
