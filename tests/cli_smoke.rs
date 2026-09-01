@@ -74,7 +74,10 @@ fn self_update_help_lists_flags() {
 #[test]
 fn headless_without_task_errors() {
     // With no task and --headless, the CLI must exit non-zero with a clear message.
-    let (out, err, status) = run(&["--headless"]);
+    // Pin the context window so the startup network probe (fetch_context_window)
+    // is skipped — otherwise a sandboxed/offline environment SIGSYS-kills the
+    // process before it reaches the no-task check.
+    let (out, err, status) = run(&["--headless", "--context-window", "128000"]);
     assert!(!status.success(), "headless with no task should fail");
     let combined = format!("{out}{err}");
     assert!(
@@ -113,6 +116,11 @@ fn session_persistence_roundtrip() {
         ws_path,
         "-p",
         "persistence smoke test",
+        // Pin the context window so the startup network probe is skipped
+        // (otherwise a sandboxed/offline environment SIGSYS-kills the process
+        // before it persists the session).
+        "--context-window",
+        "128000",
     ]);
 
     let sessions_dir = ws.path().join(".raven").join("sessions");

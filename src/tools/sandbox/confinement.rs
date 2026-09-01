@@ -63,23 +63,96 @@ impl FsPolicy {
         roots
     }
 
-    /// Read-only roots: system prefixes plus `$HOME`.
+    /// Read-only roots: system prefixes.
     ///
-    /// HOME is always RO (never RW). Landlock needs Execute on every path
-    /// component to exec a toolchain binary under `~/.local` / `~/.rustup`,
-    /// so granting only leaf dirs left intermediates ungranted (EACCES).
-    /// A workspace under HOME still gets its own RW rule; Landlock ORs
-    /// matching rules, so writes inside the workspace stay allowed.
+    /// These are granted read+exec so system tooling (`/usr/bin/*`, shared
+    /// libs, `/etc`, `/proc`) works. `$HOME` is deliberately NOT here — it is
+    /// granted only as a traversal root (Execute) so a confined child can
+    /// reach toolchain dirs under `$HOME` without being able to read arbitrary
+    /// home files (`~/.ssh`, `~/.env`, `~/.aws`, sibling workspaces, docs).
     pub(crate) fn ro_roots(&self) -> Vec<PathBuf> {
-        let mut roots: Vec<PathBuf> = ["/usr", "/bin", "/lib", "/lib64", "/etc", "/proc"]
+        ["/usr", "/bin", "/lib", "/lib64", "/etc", "/proc"]
             .into_iter()
             .map(PathBuf::from)
-            .collect();
+            .collect()
+    }
+
+    /// Traversal roots: `$HOME` and `~/.cargo` with Execute only.
+    ///
+    /// Landlock needs Execute on every path component to reach a binary under
+    /// `$HOME` (e.g. `~/.cargo/bin/cargo`), but granting read on all of
+    /// `$HOME` would let a confined child read secrets (`~/.ssh`, `~/.env`,
+    /// `~/.aws`, sibling workspaces, documents). Execute alone permits
+    /// traversal into `$HOME` without ReadFile/ReadDir, so the child can reach
+    /// the toolchain dirs (granted separately) but cannot list or read the
+    /// rest of the home directory.
+    ///
+    /// `~/.cargo` is also Execute-only (not read): the read+exec grants are
+    /// scoped to `~/.cargo/bin` (proxies) and `~/.cargo/registry` (host
+    /// registry), so `~/.cargo/credentials` — a direct child of `~/.cargo` —
+    /// stays unreadable. Cargo never reads it anyway because `CARGO_HOME` is
+    /// pinned to `workspace/.raven/cargo-home`.
+    pub(crate) fn traversal_roots(&self) -> Vec<PathBuf> {
+        let mut roots = Vec::new();
         if let Ok(home) = std::env::var("HOME").map(PathBuf::from) {
             if let Ok(home_canon) = home.canonicalize() {
-                if !roots.iter().any(|p| p == &home_canon) {
-                    roots.push(home_canon);
+                roots.push(home_canon);
+            }
+            let cargo = home.join(".cargo");
+            if let Ok(c) = cargo.canonicalize() {
+                if !roots.iter().any(|r| r == &c) {
+                    roots.push(c);
                 }
+            }
+        }
+        roots
+    }
+
+    /// Toolchain roots: read+exec on the dirs where toolchain binaries live.
+    ///
+    /// These are the `$HOME` subtrees a confined child needs to read+exec to
+    /// run cargo/rustc/node/etc:
+    /// - every `PATH` directory under `$HOME` (so any tool on PATH can exec —
+    ///   `~/.cargo/bin`, `~/.local/bin`, `~/.local/share/mise/shims`,
+    ///   `~/.config/nvm/.../bin`, `~/.opencode/bin`, …). PATH dirs are bin
+    ///   dirs, not secret dirs (`~/.ssh`, `~/.env`, `~/.aws` are never on
+    ///   PATH), so this does not widen the read surface to home secrets.
+    /// - `~/.cargo/registry` (host registry, reachable through the pinned
+    ///   `CARGO_HOME` symlink)
+    /// - `~/.rustup` (real toolchain binaries that rustup proxies exec)
+    /// - `~/.local/share/mise/installs` (mise-installed tool binaries)
+    /// - `~/.config/mise` (mise's config, which its shims read to resolve
+    ///   installed tools)
+    ///
+    /// Everything else under `$HOME` is traversal-only (see
+    /// [`Self::traversal_roots`]).
+    pub(crate) fn toolchain_roots(&self) -> Vec<PathBuf> {
+        let mut roots = Vec::new();
+        let home = std::env::var("HOME").map(PathBuf::from).ok();
+        let mut push = |p: PathBuf| {
+            if let Ok(c) = p.canonicalize() {
+                if !roots.iter().any(|r| r == &c) {
+                    roots.push(c);
+                }
+            }
+        };
+        if let Some(home) = &home {
+            // PATH dirs under $HOME (bin dirs only — never secret dirs).
+            if let Some(path) = std::env::var_os("PATH") {
+                for dir in std::env::split_paths(&path) {
+                    if dir.starts_with(home) {
+                        push(dir);
+                    }
+                }
+            }
+            // Real toolchain dirs that proxies/shims resolve into.
+            for sub in [
+                ".cargo/registry",
+                ".rustup",
+                ".local/share/mise/installs",
+                ".config/mise",
+            ] {
+                push(home.join(sub));
             }
         }
         roots
@@ -179,6 +252,8 @@ fn apply_landlock(workspace: &Path, extra_rw: &[PathBuf]) {
     let policy = FsPolicy::new(workspace, extra_rw.to_vec());
     let rw_paths = policy.rw_roots();
     let ro_paths = policy.ro_roots();
+    let traversal_paths = policy.traversal_roots();
+    let toolchain_paths = policy.toolchain_roots();
 
     let result = Ruleset::default()
         .set_compatibility(CompatLevel::BestEffort)
@@ -186,6 +261,12 @@ fn apply_landlock(workspace: &Path, extra_rw: &[PathBuf]) {
         .and_then(|r| r.create())
         .and_then(|r| r.add_rules(path_beneath_rules(&rw_paths, access_all)))
         .and_then(|r| r.add_rules(path_beneath_rules(&ro_paths, access_read)))
+        // `$HOME` is Execute-only (traversal) so a confined child can reach
+        // the toolchain dirs without being able to read arbitrary home files.
+        .and_then(|r| r.add_rules(path_beneath_rules(&traversal_paths, AccessFs::Execute)))
+        // The toolchain dirs under `$HOME` get read+exec so cargo/rustc/node
+        // can run. Everything else under `$HOME` stays traversal-only.
+        .and_then(|r| r.add_rules(path_beneath_rules(&toolchain_paths, access_read)))
         .and_then(|r| r.restrict_self());
 
     match result {
@@ -346,6 +427,12 @@ pub(crate) fn setup_shell_env(cmd: &mut Command, workspace: &Path) {
                 cmd.env(key, val);
             }
         }
+        // Pin git's global config to a workspace-local file so `git config`
+        // (without `--local`) doesn't try to write `~/.gitconfig`, which the
+        // narrowed Landlock grant no longer makes writable. Mirrors the
+        // `GIT_CONFIG_NOSYSTEM=1` isolation in the git tools.
+        let git_config = workspace.join(".raven").join("gitconfig");
+        cmd.env("GIT_CONFIG_GLOBAL", &git_config);
     }
     pin_build_tool_dirs(cmd, workspace);
 }
@@ -370,6 +457,22 @@ pub(crate) fn pin_build_tool_dirs(cmd: &mut Command, workspace: &Path) {
     cmd.env("CARGO_HOME", &cargo_home);
     cmd.env("CARGO_TARGET_DIR", &target_dir);
     cmd.env("npm_config_cache", &npm_cache);
+    // Pin mise's config discovery + cache/state dirs to the workspace so its
+    // shims (node/npm/go/...) don't walk up the directory tree reading
+    // `.mise.toml` files under `$HOME` (e.g. `~/Work/.mise.toml`) or write to
+    // `~/.cache/mise` / `~/.local/state/mise` — none of which the narrowed
+    // Landlock grant makes readable/writable. `MISE_CEILING_PATHS` stops the
+    // config walk-up at the workspace; mise still reads
+    // `~/.config/mise/config.toml` (granted read via the toolchain roots).
+    // Mirrors the CARGO_HOME/TMPDIR pinning above.
+    cmd.env("MISE_CEILING_PATHS", workspace);
+    let mise_cache = raven_dir.join("mise-cache");
+    let mise_state = raven_dir.join("mise-state");
+    for dir in [&mise_cache, &mise_state] {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    cmd.env("MISE_CACHE_DIR", &mise_cache);
+    cmd.env("MISE_STATE_DIR", &mise_state);
     // Pin the temp dir only on Unix. Windows has no Landlock, and overriding
     // TEMP/TMP there breaks MSVC link.exe (UTF-16LE response-file parse).
     #[cfg(not(windows))]

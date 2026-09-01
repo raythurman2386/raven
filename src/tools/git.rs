@@ -170,6 +170,7 @@ impl Sandbox {
         let mut cmd = Command::new("git");
         cmd.args(["rev-parse", "--is-inside-work-tree"])
             .current_dir(&self.workspace)
+            .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
         setup_shell_env(&mut cmd, &self.workspace);
@@ -216,6 +217,7 @@ impl Sandbox {
         ]);
         cmd.args(args)
             .current_dir(&self.workspace)
+            .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
         setup_shell_env(&mut cmd, &self.workspace);

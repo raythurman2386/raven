@@ -21,6 +21,10 @@ fn run_tests_cargo_project_compiles_under_confinement() {
 name = "eval_add_test"
 version = "0.1.0"
 edition = "2021"
+
+# Standalone workspace root so cargo doesn't walk up to the parent repo's
+# Cargo.toml (which the narrowed Landlock grant no longer makes readable).
+[workspace]
 "#,
     )
     .unwrap();
@@ -61,7 +65,7 @@ fn run_lint_cargo_project_runs_clippy() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(
         tmp.path().join("Cargo.toml"),
-        "[package]\nname=\"x\"\nversion=\"0.1.0\"\n",
+        "[package]\nname=\"x\"\nversion=\"0.1.0\"\n\n[workspace]\n",
     )
     .unwrap();
     let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
@@ -165,6 +169,10 @@ fn run_tests_skips_rlimits_for_large_linker_outputs() {
     // debug test binary larger than 64 MiB (or a test that writes a large
     // file) was SIGXFSZ-killed. Sanctioned test runners must skip rlimits
     // the same way they skip the seccomp network block.
+    if super::outer_sandbox_restrictive() {
+        eprintln!("outer sandbox caps RLIMIT_FSIZE below 70 MiB; skipping rlimit regression test");
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(
         tmp.path().join("Cargo.toml"),
@@ -172,6 +180,10 @@ fn run_tests_skips_rlimits_for_large_linker_outputs() {
 name = "eval_big_write"
 version = "0.1.0"
 edition = "2021"
+
+# Standalone workspace root so cargo doesn't walk up to the parent repo's
+# Cargo.toml (which the narrowed Landlock grant no longer makes readable).
+[workspace]
 "#,
     )
     .unwrap();
@@ -218,6 +230,10 @@ fn run_tests_npm_project_skips_seccomp_network_block() {
     // With the block active the child is killed by SIGSYS (exit 159 / signal 31)
     // and the output would contain "killed by signal"; with the exemption it
     // prints OK and exits 0.
+    if super::outer_sandbox_restrictive() {
+        eprintln!("outer sandbox blocks AF_INET sockets; skipping network-block regression test");
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(
         tmp.path().join("package.json"),

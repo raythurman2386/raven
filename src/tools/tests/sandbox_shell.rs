@@ -288,12 +288,67 @@ fn confined_child_cannot_read_outside_workspace() {
 
 #[test]
 #[cfg(target_os = "linux")]
+fn confined_child_cannot_read_home_secrets() {
+    // Regression: the sandbox used to grant read on all of `$HOME`, so a
+    // confined child could read `~/.ssh`, `~/.env`, `~/.aws`, sibling
+    // workspaces, documents, etc. Now `$HOME` is Execute-only (traversal);
+    // only the toolchain dirs (`~/.cargo/bin`, `~/.cargo/registry`,
+    // `~/.rustup`, `~/.local`) get read+exec. A file directly under `$HOME`
+    // (outside those dirs) must be unreadable.
+    let home = std::env::var("HOME").unwrap();
+    // Pick a file that exists directly under `$HOME` and is outside the
+    // toolchain dirs. `.bashrc` / `.profile` are standard and present on
+    // most Linux setups; fall back to `.bash_profile` / `.zshrc`.
+    let candidates = [
+        ".bashrc",
+        ".profile",
+        ".bash_profile",
+        ".zshrc",
+        ".gitconfig",
+    ];
+    let probe = candidates
+        .iter()
+        .map(|c| std::path::PathBuf::from(&home).join(c))
+        .find(|p| p.exists())
+        .expect("expected a dotfile directly under $HOME");
+    let tmp = tempfile::tempdir().unwrap();
+    let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
+    let out = sb
+        .run_shell(&format!("cat {}", probe.display()), 10)
+        .unwrap();
+    assert!(
+        !out.contains("exit=0"),
+        "confined child must not read a file directly under $HOME: {out}"
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn confined_child_can_exec_toolchain_from_home() {
+    // The narrowed grant must still let a confined child exec toolchain
+    // binaries under `$HOME` (`~/.cargo/bin/cargo`, `~/.rustup`, `~/.local`).
+    // If the traversal/read grants are too tight, cargo won't run.
+    let tmp = tempfile::tempdir().unwrap();
+    let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
+    let out = sb.run_shell("cargo --version", 30).unwrap();
+    assert!(
+        out.contains("exit=0"),
+        "confined child must be able to exec cargo from ~/.cargo: {out}"
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
 fn run_shell_verification_command_skips_seccomp_network_block() {
     // Regression for #155: `run_shell` hardcoded `skip_network_block = false`,
     // so a sanctioned test runner (vitest/v8) that opens an AF_INET socket for
     // coverage/worker IPC was SIGSYS-killed (exit 159). `run_tests` already
     // exempts npm projects; `run_shell` must do the same for commands the
     // enforced-verify gate credits as verification.
+    if super::outer_sandbox_restrictive() {
+        eprintln!("outer sandbox blocks AF_INET sockets; skipping network-block regression test");
+        return;
+    }
     if std::process::Command::new("node")
         .arg("--version")
         .stdout(std::process::Stdio::null())
@@ -367,6 +422,10 @@ fn run_shell_verification_command_skips_rlimits() {
     // that writes a large file (or a linker emitting a >64 MiB binary) was
     // SIGXFSZ-killed. Verification commands must skip rlimits the same way
     // they skip the seccomp network block.
+    if super::outer_sandbox_restrictive() {
+        eprintln!("outer sandbox caps RLIMIT_FSIZE below 70 MiB; skipping rlimit regression test");
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(
         tmp.path().join("Cargo.toml"),
@@ -374,6 +433,10 @@ fn run_shell_verification_command_skips_rlimits() {
 name = "eval_big_write_shell"
 version = "0.1.0"
 edition = "2021"
+
+# Standalone workspace root so cargo doesn't walk up to the parent repo's
+# Cargo.toml (which the narrowed Landlock grant no longer makes readable).
+[workspace]
 "#,
     )
     .unwrap();

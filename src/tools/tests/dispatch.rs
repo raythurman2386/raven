@@ -345,7 +345,7 @@ fn run_lint_in_full_toolset() {
 #[test]
 fn dispatch_run_lint_on_cargo_project() {
     let tmp = tempfile::tempdir().unwrap();
-    std::fs::write(tmp.path().join("Cargo.toml"), "[package]\n").unwrap();
+    std::fs::write(tmp.path().join("Cargo.toml"), "[package]\n\n[workspace]\n").unwrap();
     let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
     let out = dispatch(&sb, "run_lint", &serde_json::json!({}), false)
         .unwrap_or_else(|e| format!("Tool error: {e}"));
