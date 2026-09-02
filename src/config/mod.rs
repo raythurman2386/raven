@@ -116,13 +116,11 @@ pub fn resolve_mode(explicit_mode: Option<Mode>, config_mode: Option<Mode>, yolo
 /// - `workspace_arg`: system scope administers the whole machine; a
 ///   `--workspace` would be silently overridden.
 ///
-/// `yolo` is allowed: `--system --yolo` is an explicit user opt-in to a
-/// fully autonomous system agent on a machine they trust (single-user
-/// desktops). Without it, system scope still auto-runs read-only
-/// diagnostics and dev commands and confirms only state-changing ones.
+/// `yolo` is not validated here: it participates only at the call site
+/// (`confirm_shell = !yolo` in `main`), which is also where the system
+/// prompt picks up its autonomy appendix.
 pub fn resolve_scope(
     system: bool,
-    _yolo: bool,
     acp: bool,
     parallel: bool,
     workspace_arg: Option<&std::path::Path>,

@@ -147,47 +147,50 @@ pub fn safe_command_re() -> &'static Regex {
 /// confirmation prompt. Tiered on top of [`safe_command_re`] (which still
 /// applies — dev commands stay safe in system scope too).
 ///
-/// Autonomous in system scope:
-/// - Read-only diagnostics: `systemctl`/`journalctl`/`coredumpctl`/`loginctl`
-///   status+list+show, `pacman`/`pacman-conf` query+search+info,
-///   `systemd-analyze` read-only subcommands, `ip`, `ss`, `df`, `free`,
-///   `lscpu`, `lsblk`, `lspci`, `lsusb`, `uptime`, `vmstat`, `top`-style
-///   readers, `bluetoothctl`/`nmcli`/`resolvectl` info, `hyprctl` reads,
-///   `gum`-free text tools, `omarchy-*` informational helpers.
-/// - The `omarchy <group> <action>` CLI where the action is informational
-///   (`omarchy debug`, `omarchy commands`, `omarchy version`, `omarchy
-///   <group> --help`, `omarchy bar list`, `omarchy plugin list`, …).
+/// Autonomous in system scope (read-only diagnostics only):
+/// - `pacman` query/search/info forms (never `-S`/`-R`/`-U`/`--sync`),
+/// - `systemctl`/`journalctl`/`coredumpctl`/`loginctl` read-only subcommands,
+/// - `hyprctl`/`nmcli`/`resolvectl`/`bluetoothctl` status readers,
+/// - hardware/resource readers (`lsblk`, `lscpu`, `free`, `sensors`, …),
+/// - `omarchy` informational commands (`version`, `commands`, `debug`,
+///   `<group> --help`, `theme list`, `plugin list`, `bar list`).
 ///
-/// Still confirmed (never autonomous): package install/remove/upgrade,
-/// `systemctl start/stop/restart/enable/disable/mask`, `omarchy install/refresh/
-/// restart/theme set/pkg/remove`, anything matching `safe_command_re`'s
-/// destructive denylist (`dangerous_re`), `sudo`/`su`, power operations
-/// (`reboot`/`shutdown`/`poweroff`), process kills, and raw config writes
-/// outside the sandbox's file tools.
+/// Still confirmed (never autonomous): package install/remove/upgrade
+/// (including long forms `--sync`/`-S`), `systemctl
+/// start/stop/restart/enable/disable/mask`, `nmcli` mutations (`connection
+/// modify/up`, `networking off`), `hyprctl keyword/reload/dispatch`,
+/// `journalctl --vacuum*`/`--rotate` (log deletion), `omarchy
+/// install/refresh/restart/theme set/pkg/remove`, anything matching the
+/// destructive denylist (`dangerous_re`), `sudo`/`su`, power operations,
+/// process kills, and raw config writes outside the sandbox's file tools.
 ///
-/// The split mirrors the omarchy skill's own guidance: inspect first,
-/// propose, confirm, then apply.
+/// Whole-line safety is enforced separately by
+/// [`system_command_autonomous`]: every `|`-segment must individually match
+/// this allowlist, and sequencing/redirect metacharacters (`;`, `&&`, `||`,
+/// `>`, `<`, `$(`, backticks) force a confirmation — an allowlisted prefix
+/// alone must never approve a compound line.
 pub fn system_safe_command_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         // Verbose mode (?x): whitespace/comments in the pattern are ignored.
         // Read-only only: the `regex` crate has no lookahead, so pacman's
         // sync flags are enumerated explicitly (query/search/info only —
-        // install (-S pkg), refresh (-Sy), upgrade (-Su) are NOT listed).
+        // install (-S pkg), refresh (-Sy), upgrade (-Su), and the long forms
+        // --sync/--remove are NOT listed).
         Regex::new(
             r"(?xi)^\s*(?:
-            pacman\s+(?:-[Qq](?:[SiIlodtu]*)|-Q[a-z]*|-Ss|-Si|-Sg|-Sl|-Sg|-Sp|-Sn|-F[a-z]*|--query|--sync|--search|--info)\b|
+            pacman\s+(?:-[Qq](?:[SiIlodtu]*)|-Q[a-z]*|-Ss|-Si|-Sl|-Sp|-Sn|-F[a-z]*|--query|--search|--info)\b|
             pacman-conf|
             # systemd read-only
             systemctl\s+(?:status|list-|show|is-active|is-enabled|is-failed|cat|get-default|list-dependencies)|
-            journalctl|
+            journalctl\s+(?:-[a-zA-Z]|--[a-zA-Z-]+)|
             coredumpctl\s+(?:list|info|dump)|
             loginctl\s+(?:list|show|status)|
             systemd-analyze\s+(?:blame|critical-chain|security|time|dump)|
             busctl\s+(?:list|status|tree)|
             # desktop / hardware state readers
             hyprctl\s+(?:monitors|workspaces|clients|activewindow|activeworkspace|version|getoption|decos|devices|binds|layers|splash|cursorinfo)|
-            nmcli\s+(?:device|connection|general|networking)\s+(?:status|show|list)?|
+            nmcli\s+(?:device\s+status|general\s+status|networking\s+connectivity|connection\s+show)|
             resolvectl\s+(?:status|query)|
             bluetoothctl\s+(?:info|devices|list)|
             upower\s+-[id]|
@@ -201,6 +204,48 @@ pub fn system_safe_command_re() -> &'static Regex {
         )
         .expect("valid regex")
     })
+}
+
+/// Decide whether a `run_shell` command may run without confirmation in
+/// system scope.
+///
+/// Rules, in order:
+/// 1. Sequencing/redirect/substitution metacharacters (`;`, `&`, `<`, `>`,
+///    backtick, `$(`) always prompt — an allowlisted prefix (`systemctl
+///    status x; sudo …`) must not approve what follows, and `>` changes
+///    where data lands.
+/// 2. Otherwise the line must be autonomous segment-by-segment: each
+///    `|`-separated segment individually matches the system read-only
+///    allowlist ([`system_safe_command_re`]) or the dev allowlist
+///    ([`safe_command_re`]). A pipe to a non-allowlisted sink prompts.
+///
+/// This gate never *blocks*: anything it does not auto-approve still goes
+/// through the normal confirmation prompt (or runs under `--yolo`).
+pub fn system_command_autonomous(command: &str, scope: crate::config::Scope) -> bool {
+    if !scope.is_system() {
+        return false;
+    }
+    // Any metacharacter forces a prompt: sequencing (`;`, `&&`, `||`),
+    // pipes (`|` — the sink can be a writer: `lscpu | tee /etc/ld.so.preload`),
+    // redirection (`>`), and substitution (`$(`, backtick). An allowlisted
+    // prefix must never stand in for what follows it, and segment-wise
+    // approval via the dev allowlist would let `chmod`/`tee`-class sinks
+    // write privileged files. System-scope diagnostics are issued as single
+    // commands; anything compound prompts.
+    let sequence = Regex::new(r"[;|&<>`]|\$\(").expect("valid regex");
+    if sequence.is_match(command) {
+        return false;
+    }
+    // journalctl's --vacuum* / --rotate flags delete or rotate logs: they are
+    // state-changing, so journalctl is only autonomous without them (checked
+    // here because the regex crate has no lookahead).
+    if command.contains("--vacuum") || command.contains("--rotate") {
+        return false;
+    }
+    // Only the system read-only allowlist auto-runs. The dev allowlist
+    // (chmod, mv, cp, …) is deliberately NOT honored here: in system scope
+    // those targets are system files, so mutations prompt.
+    system_safe_command_re().is_match(command.trim())
 }
 
 /// Normalize a path by resolving `.` and `..` components lexically.

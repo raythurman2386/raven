@@ -343,12 +343,11 @@ async fn main() -> Result<()> {
     let max_iterations = cfg.max_iterations.unwrap_or_else(default_max_iter);
     let mode = resolve_mode(cli.mode.map(Mode::from), cfg.mode, cli.yolo);
 
-    // System scope is opt-in and mutually exclusive with --yolo: a system-admin
-    // agent must always confirm state-changing commands. Reject the combination
-    // up front with a clear error instead of silently weakening the gate.
+    // System scope is opt-in; incompatible flag combinations error here
+    // instead of being silently ignored. --yolo is handled below (it only
+    // toggles confirm_shell / the prompt's autonomy appendix).
     let scope = resolve_scope(
         cli.system,
-        cli.yolo,
         cli.acp,
         cli.parallel.is_some(),
         cli_workspace_arg.as_deref(),

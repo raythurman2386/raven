@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 
 use crate::error::ToolError;
 use crate::tools::{
-    dispatch, safe_command_re, system_safe_command_re, validate_tool_call, Sandbox,
+    dispatch, safe_command_re, system_command_autonomous, validate_tool_call, Sandbox,
     MAX_ARGUMENTS_BYTES,
 };
 
@@ -169,12 +169,11 @@ impl Agent {
 
             // Shell permission gate: when confirm_shell is on (not --yolo),
             // every run_shell command is confirmed with the user first,
-            // reusing the ask_user oneshot path. Commands matching the
-            // safe_command_re allowlist (cargo, git, ls, etc.) skip the
-            // prompt; in system scope the system allowlist additionally
-            // autoruns read-only diagnostics (pacman queries, systemctl
-            // status, omarchy info) so the agent can inspect freely. If the
-            // user declines, the command is replaced with a no-op
+            // reusing the ask_user oneshot path. In system scope,
+            // system_command_autonomous pre-approves read-only diagnostics
+            // per pipe-segment (compound lines with `;`/`|`/`>`/etc. always
+            // prompt — an allowlisted prefix must not approve what follows).
+            // If the user declines, the command is replaced with a no-op
             // explanation the model can see.
             if self.settings.confirm_shell && tc.function.name == "run_shell" {
                 let command = args
@@ -183,8 +182,7 @@ impl Agent {
                     .unwrap_or("")
                     .to_string();
                 let pre_approved = if self.settings.scope.is_system() {
-                    safe_command_re().is_match(&command)
-                        || system_safe_command_re().is_match(&command)
+                    system_command_autonomous(&command, self.settings.scope)
                 } else {
                     safe_command_re().is_match(&command)
                 };

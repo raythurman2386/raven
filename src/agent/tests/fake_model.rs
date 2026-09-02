@@ -649,8 +649,8 @@ async fn confirm_shell_denies_on_n_and_runs_on_yes() {
     // Round 1: model issues a non-allowlisted shell command. With
     // confirm_shell on, the loop must emit AskUser and NOT execute yet.
     // Round 2 (after "n"): the model re-issues with a different command.
-    // Round 3: answer "y" → the command really runs (echo writes nothing,
-    // so assert on the tool result text instead).
+    // Round 3: answer "y" → the command really runs (assert via the file
+    // marker the command creates).
     let tmp = tempfile::tempdir().unwrap();
     let mut settings = settings_for(tmp.path());
     settings.yolo = false;
