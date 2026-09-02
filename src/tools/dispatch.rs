@@ -155,7 +155,13 @@ pub fn dispatch(
         "memory_update" => {
             let section = args.get("section").and_then(|v| v.as_str()).unwrap_or("");
             let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
-            crate::memory::update_memory(&sandbox.workspace, section, content)
+            // System scope reads memory from ~/.raven/system/MEMORY.md, so
+            // writes must land there too (read/write symmetry).
+            if sandbox.scope.is_system() {
+                crate::memory::update_system_memory(section, content)
+            } else {
+                crate::memory::update_memory(&sandbox.workspace, section, content)
+            }
         }
         "git_status" => sandbox.git_status(),
         "git_diff" => {

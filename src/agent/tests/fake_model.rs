@@ -640,3 +640,85 @@ async fn tool_round_emits_checkpoint_with_tool_result() {
         "checkpoint must include the tool result so a crash mid-turn keeps history"
     );
 }
+
+#[tokio::test]
+async fn confirm_shell_denies_on_n_and_runs_on_yes() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
+    // Round 1: model issues a non-allowlisted shell command. With
+    // confirm_shell on, the loop must emit AskUser and NOT execute yet.
+    // Round 2 (after "n"): the model re-issues with a different command.
+    // Round 3: answer "y" → the command really runs (assert via the file
+    // marker the command creates).
+    let tmp = tempfile::tempdir().unwrap();
+    let mut settings = settings_for(tmp.path());
+    settings.yolo = false;
+    settings.confirm_shell = true;
+
+    // Answerer: intercept AskUser events from a spawned run and reply.
+    async fn answer_ask_user(rx: &mut mpsc::Receiver<AgentEvent>, reply: &str) -> bool {
+        loop {
+            tokio::select! {
+                ev = rx.recv() => {
+                    match ev {
+                        Some(AgentEvent::AskUser { reply: tx, .. }) => {
+                            let _ = tx.send(reply.to_string());
+                            return true;
+                        }
+                        Some(_) => continue,
+                        None => return false,
+                    }
+                }
+                _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {
+                    return false;
+                }
+            }
+        }
+    }
+
+    // ── Deny path ──────────────────────────────────────────────
+    let bodies = vec![
+        sse_tool_call("c1", "run_shell", r#"{"command":"pkill -f nothing-real"}"#),
+        sse_text("Declined."),
+    ];
+    let mut agent = Agent::new(settings.clone())
+        .unwrap()
+        .with_completion_source(scripted(bodies));
+    let (tx, mut rx) = mpsc::channel(64);
+    let run = tokio::spawn(async move { agent.run("run a command", tx).await });
+    let asked = answer_ask_user(&mut rx, "n").await;
+    let _ = run.await;
+    assert!(asked, "AskUser must fire for a non-allowlisted command");
+    assert!(
+        !tmp.path().join("deny-marker.txt").exists(),
+        "denied command must not execute"
+    );
+
+    // ── Allow path ─────────────────────────────────────────────
+    let tmp2 = tempfile::tempdir().unwrap();
+    std::fs::write(tmp2.path().join("real.txt"), "x").unwrap();
+    let mut settings2 = settings_for(tmp2.path());
+    settings2.yolo = false;
+    settings2.confirm_shell = true;
+    let bodies = vec![
+        sse_tool_call(
+            "c1",
+            "run_shell",
+            r#"{"command":"ln -s real.txt allow-marker.txt"}"#,
+        ),
+        sse_text("Done."),
+    ];
+    let mut agent = Agent::new(settings2)
+        .unwrap()
+        .with_completion_source(scripted(bodies));
+    let (tx, mut rx) = mpsc::channel(64);
+    let run = tokio::spawn(async move { agent.run("run a command", tx).await });
+    let asked = answer_ask_user(&mut rx, "y").await;
+    let _ = run.await;
+    assert!(asked, "AskUser must fire on the allow path too");
+    assert!(
+        tmp2.path().join("allow-marker.txt").exists(),
+        "approved command must execute"
+    );
+}

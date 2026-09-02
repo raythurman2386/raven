@@ -43,7 +43,7 @@ impl Sandbox {
         };
 
         cmd.current_dir(&self.workspace);
-        setup_shell_env(&mut cmd, &self.workspace);
+        setup_shell_env(&mut cmd, &self.workspace, &self.raven_dir());
         // Explicitly null stdin: the child must never inherit raven's own
         // stdio. In ACP mode raven's fd 0 is the live JSON-RPC pipe — a child
         // that reads stdin would consume ACP frames, and a surviving

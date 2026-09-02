@@ -397,8 +397,9 @@ fn apply_os_confinement(
 /// vars `cmd.exe` and common tools need to start.
 ///
 /// Also pins build-tool caches (`CARGO_HOME`, `TMPDIR`, npm cache, …) under
-/// the workspace — see [`pin_build_tool_dirs`].
-pub(crate) fn setup_shell_env(cmd: &mut Command, workspace: &Path) {
+/// `raven_dir` — see [`pin_build_tool_dirs`]. System scope passes
+/// `~/.raven` there; repo scope the workspace's own `.raven`.
+pub(crate) fn setup_shell_env(cmd: &mut Command, workspace: &Path, raven_dir: &Path) {
     cmd.env_clear();
     #[cfg(windows)]
     {
@@ -431,24 +432,24 @@ pub(crate) fn setup_shell_env(cmd: &mut Command, workspace: &Path) {
                 cmd.env(key, val);
             }
         }
-        // Pin git's global config to a workspace-local file so `git config`
+        // Pin git's global config to a raven-local file so `git config`
         // (without `--local`) doesn't try to write `~/.gitconfig`, which the
         // narrowed Landlock grant no longer makes writable. Mirrors the
         // `GIT_CONFIG_NOSYSTEM=1` isolation in the git tools.
-        let git_config = workspace.join(".raven").join("gitconfig");
+        let git_config = raven_dir.join("gitconfig");
         cmd.env("GIT_CONFIG_GLOBAL", &git_config);
     }
-    pin_build_tool_dirs(cmd, workspace);
+    pin_build_tool_dirs(cmd, workspace, raven_dir);
 }
 
-/// Pin package-manager caches and temp dirs inside the workspace.
+/// Pin package-manager caches and temp dirs under `raven_dir` (repo scope:
+/// `{workspace}/.raven`; system scope: `~/.raven`).
 ///
 /// Landlock no longer grants the process temp dir, so rustc/cargo/npm must
 /// not write there. Keeping `CARGO_HOME`, `CARGO_TARGET_DIR`, `TMPDIR`, and
-/// the npm cache under the workspace rule also avoids `EXDEV` hardlink
+/// the npm cache under the Landlock-covered rule also avoids `EXDEV` hardlink
 /// failures across Landlock hierarchies.
-pub(crate) fn pin_build_tool_dirs(cmd: &mut Command, workspace: &Path) {
-    let raven_dir = workspace.join(".raven");
+pub(crate) fn pin_build_tool_dirs(cmd: &mut Command, workspace: &Path, raven_dir: &Path) {
     let cargo_home = raven_dir.join("cargo-home");
     let tmp_dir = raven_dir.join("tmp");
     let npm_cache = raven_dir.join("npm-cache");

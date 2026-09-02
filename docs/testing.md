@@ -16,7 +16,9 @@ cargo test
   - `src/commands.rs` — slash-command parsing, alias resolution, registry uniqueness, help rendering
   - `src/context.rs` — token estimation, compaction (preserves system message, reduces tokens, keeps tool-call/result pairs), tool-result pruning, thrashing protection
   - `src/state.rs` — persistent todo/goal load/save round-trips, atomic writes, system-prompt formatting
-  - `src/tools/` — sandbox path confinement (including symlink-escape rejection and `openat2`/`open_beneath` traversal rejection), list_dir, read_file, write_file, search_replace, grep, run_shell (dangerous command blocking, API key stripping, direct-exec classification, confined-child behavior incl. Landlock/network-block/RLIMIT_FSIZE), worktree isolation between branches, dispatch routing, glob matching, unified diff parsing, apply_patch, document extraction
+  - `src/tools/` — sandbox path confinement (including symlink-escape rejection and `openat2`/`open_beneath` traversal rejection), list_dir, read_file, write_file, search_replace, grep, run_shell (dangerous command blocking, API key stripping, direct-exec classification, confined-child behavior incl. Landlock/network-block/RLIMIT_FSIZE; grep/search_code walk caps + truncation notes), system-scope shell allowlist (read-only diagnostics auto-run vs mutations prompt, 70+ case matrix), worktree isolation between branches, dispatch routing, glob matching, unified diff parsing, apply_patch, document extraction
+  - `src/session.rs` — scope-aware store roots (`for_settings`: repo vs `~/.raven/system/sessions`), export-dir derivation, atomic writes, round-trips
+  - `src/config/` — `resolve_scope` flag-combination matrix (`--system` × `--yolo`/`--acp`/`--parallel`/`--workspace`)
   - `src/plan.rs` — plan parsing (JSON, numbered list, bullet list, code block), plan formatting
   - `src/tokenizer.rs` — token counting behavior
   - `src/tui/render.rs` + `src/tui/markdown.rs` — markdown rendering (headings, bold/italic, inline code, fenced code blocks, ordered/unordered lists, blockquotes, links, tables, unclosed-token degradation), scrollback pre-wrapping, tool-call glimmer/fade
@@ -31,6 +33,8 @@ Writing the test suite caught two real bugs in production code:
 2. **`WalkDir` root filtering** — `filter_entry` skipped the root directory entry because temp dirs start with `.`, causing grep/search_code to find zero files
 3. **`apply_patch` error handling** — context mismatch errors were silently written to the file instead of being returned to the caller
 4. **`safe_resolve` traversal detection** — `Path::starts_with` on non-canonicalized paths passed traversal checks because `..` components matched the workspace prefix
+5. **System allowlist regex** — the first draft of `system_safe_command_re` used verbose-mode syntax without the `(?x)` flag (and lookahead, unsupported by `regex`), so every command silently failed to match; the 73-case matrix test caught it before shipping
+6. **HOME-mutating memory tests** — `update_system_memory` tests raced on the process-wide `HOME` env var under parallel test execution; the explicit-home variant (`update_system_memory_from`) made them deterministic
 
 ## Coverage
 

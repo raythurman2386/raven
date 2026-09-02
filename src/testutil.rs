@@ -38,3 +38,17 @@ pub fn outer_sandbox_restrictive() -> bool {
         false
     }
 }
+
+/// Serialize tests that mutate the process-wide `HOME` env var.
+///
+/// Rust runs tests in parallel within one process; `dirs::home_dir()` reads
+/// `HOME` (Unix) / `USERPROFILE` (Windows) at call time, so two tests that
+/// both set or remove the variable race. Lock this for the whole
+/// set→assert→restore window. Zero-dependency (no `serial_test` crate).
+pub fn home_env_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    match LOCK.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}

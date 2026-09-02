@@ -80,18 +80,26 @@ impl Sandbox {
         if trimmed.is_empty() || git_out_empty(trimmed) {
             return Ok("no changes".into());
         }
-        let rel = ".raven/tmp/apply.patch";
-        let full = self.workspace.join(rel);
+        // Stage the patch under the raven dir (excluded from git diffs via
+        // `:!.raven/`). Prefer a workspace-relative path — `git apply` and
+        // Windows' `\\?\C:\...` canonicalized temp dirs don't mix — and fall
+        // back to absolute only when the raven dir sits outside the
+        // workspace (system scope).
+        let full = self.raven_dir().join("tmp").join("apply.patch");
+        let rel = full
+            .strip_prefix(&self.workspace)
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| full.to_string_lossy().into_owned());
         if let Some(parent) = full.parent() {
             std::fs::create_dir_all(parent)?;
         }
         std::fs::write(&full, patch)?;
-        let check = self.run_git(&["apply", "--check", "--", rel])?;
+        let check = self.run_git(&["apply", "--check", "--", &rel])?;
         if git_cmd_failed(&check) {
             let _ = std::fs::remove_file(&full);
             anyhow::bail!("patch does not apply: {check}");
         }
-        let out = self.run_git(&["apply", "--", rel])?;
+        let out = self.run_git(&["apply", "--", &rel])?;
         let _ = std::fs::remove_file(&full);
         if git_cmd_failed(&out) {
             anyhow::bail!("git apply failed: {out}");
@@ -173,7 +181,7 @@ impl Sandbox {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
-        setup_shell_env(&mut cmd, &self.workspace);
+        setup_shell_env(&mut cmd, &self.workspace, &self.raven_dir());
         let mut confined = spawn_confined(&mut cmd, &self.workspace, &self.extra_rw, false, false)
             .context("spawn git")?;
         match wait_for_child(&mut confined.child, 30) {
@@ -220,7 +228,7 @@ impl Sandbox {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
-        setup_shell_env(&mut cmd, &self.workspace);
+        setup_shell_env(&mut cmd, &self.workspace, &self.raven_dir());
         cmd.env("GIT_AUTHOR_NAME", "raven")
             .env("GIT_AUTHOR_EMAIL", "raven@local")
             .env("GIT_COMMITTER_NAME", "raven")

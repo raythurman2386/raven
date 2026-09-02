@@ -404,6 +404,11 @@ impl Sandbox {
         }
 
         const MAX_FILE_SIZE: u64 = 1_048_576;
+        // Cap how many files one grep will walk. Repo workspaces stay far
+        // under this; a workspace of `/` (system scope) holds hundreds of
+        // thousands of files, so an unscoped grep there must stop somewhere
+        // instead of stalling for minutes.
+        const MAX_WALK_FILES: usize = 20_000;
 
         let skip = [
             ".git",
@@ -414,6 +419,13 @@ impl Sandbox {
             "target",
             "dist",
             "build",
+            // Kernel pseudo-filesystems: huge, side-effectful to read, and
+            // meaningless to search. Only relevant when the root is `/`.
+            "proc",
+            "sys",
+            "dev",
+            "run",
+            "boot",
         ];
 
         let mut files: Vec<PathBuf> = Vec::new();
@@ -444,6 +456,9 @@ impl Sandbox {
                 continue;
             }
             files.push(p);
+            if files.len() >= MAX_WALK_FILES {
+                break;
+            }
         }
 
         let searched = files.len() as u32;
@@ -486,10 +501,17 @@ impl Sandbox {
         });
 
         let results = results.into_inner().unwrap_or_else(|e| e.into_inner());
-        Ok(if results.is_empty() {
-            format!("No matches (searched {} files)", searched)
+        let tail = if files.len() >= MAX_WALK_FILES {
+            format!(
+                "\n…[file walk stopped at {MAX_WALK_FILES} files; narrow the search with a path argument]"
+            )
         } else {
-            results.join("\n")
+            String::new()
+        };
+        Ok(if results.is_empty() {
+            format!("No matches (searched {} files){}", searched, tail)
+        } else {
+            results.join("\n") + &tail
         })
     }
 }
@@ -501,6 +523,11 @@ pub(crate) fn sandbox_search_code(
     max_results: usize,
 ) -> Result<String> {
     let q = query.to_lowercase();
+    let exts = [
+        "py", "js", "ts", "tsx", "jsx", "rs", "go", "java", "cpp", "c", "h", "md", "txt", "toml",
+        "yaml", "yml", "json", "sh", "bash", "css", "html", "sql",
+    ];
+    const MAX_WALK_FILES: usize = 20_000;
     let skip = [
         ".git",
         "node_modules",
@@ -510,12 +537,16 @@ pub(crate) fn sandbox_search_code(
         "target",
         "dist",
         "build",
-    ];
-    let exts = [
-        "py", "js", "ts", "tsx", "jsx", "rs", "go", "java", "cpp", "c", "h", "md", "txt", "toml",
-        "yaml", "yml", "json", "sh", "bash", "css", "html", "sql",
+        // Kernel pseudo-filesystems (relevant when the root is `/`).
+        "proc",
+        "sys",
+        "dev",
+        "run",
+        "boot",
     ];
     let mut results = Vec::new();
+    let mut searched = 0usize;
+    let mut truncated = false;
     for entry in WalkDir::new(&sandbox.workspace)
         .into_iter()
         .filter_entry(|e| {
@@ -529,6 +560,11 @@ pub(crate) fn sandbox_search_code(
     {
         if !entry.file_type().is_file() {
             continue;
+        }
+        searched += 1;
+        if searched > MAX_WALK_FILES {
+            truncated = true;
+            break;
         }
         let path = entry.path();
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -549,9 +585,19 @@ pub(crate) fn sandbox_search_code(
             }
         }
     }
+    let mut tail = String::new();
+    if truncated {
+        tail = format!(
+            "\n…[search stopped after {MAX_WALK_FILES} files; narrow the search with a path argument]"
+        );
+    }
     Ok(if results.is_empty() {
-        "No matches found".into()
+        format!(
+            "No matches (searched {} files){}",
+            searched.min(MAX_WALK_FILES),
+            tail
+        )
     } else {
-        results.join("\n")
+        results.join("\n") + &tail
     })
 }

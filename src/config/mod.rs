@@ -107,6 +107,49 @@ pub fn resolve_mode(explicit_mode: Option<Mode>, config_mode: Option<Mode>, yolo
     }
 }
 
+/// Resolve the operational scope from the `--system` flag, rejecting
+/// flag combinations that cannot work in system scope (each previously
+/// either silently weakened a gate or was silently ignored).
+///
+/// - `acp`: the ACP adapter assumes a repo workspace for its session store.
+/// - `parallel`: sub-agents are disabled in system scope (`allow_delegate`).
+/// - `workspace_arg`: system scope administers the whole machine; a
+///   `--workspace` would be silently overridden.
+///
+/// `yolo` is not validated here: it participates only at the call site
+/// (`confirm_shell = !yolo` in `main`), which is also where the system
+/// prompt picks up its autonomy appendix.
+pub fn resolve_scope(
+    system: bool,
+    acp: bool,
+    parallel: bool,
+    workspace_arg: Option<&std::path::Path>,
+) -> Result<Scope> {
+    if !system {
+        return Ok(Scope::Repo);
+    }
+    if acp {
+        anyhow::bail!(
+            "--system is not compatible with --acp: the ACP adapter expects a \
+             repo workspace. Run --acp without --system."
+        );
+    }
+    if parallel {
+        anyhow::bail!(
+            "--system is not compatible with --parallel: sub-agents are \
+             disabled in system scope."
+        );
+    }
+    if let Some(ws) = workspace_arg {
+        anyhow::bail!(
+            "--system administers the whole machine and ignores --workspace \
+             ({}) — run without --workspace, or without --system.",
+            ws.display()
+        );
+    }
+    Ok(Scope::System)
+}
+
 /// The operational scope of a session.
 ///
 /// - [`Scope::Repo`] — the default. The agent operates inside a single repo

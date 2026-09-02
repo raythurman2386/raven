@@ -78,12 +78,37 @@ fn truncate_memory(content: &str) -> String {
 ///
 /// Creates the file with a template if it doesn't exist.
 pub fn update_memory(workspace: &Path, section: &str, content: &str) -> Result<String> {
-    let dir = workspace.join(".raven");
-    std::fs::create_dir_all(&dir)?;
-    let path = dir.join("MEMORY.md");
+    update_memory_at(
+        &workspace.join(".raven").join("MEMORY.md"),
+        section,
+        content,
+    )
+}
+
+/// Append content to a section of the system-scope memory file
+/// (`~/.raven/system/MEMORY.md`), mirroring where `load_system_memory` reads.
+pub fn update_system_memory(section: &str, content: &str) -> Result<String> {
+    let home = dirs::home_dir().context("cannot determine home directory")?;
+    update_system_memory_from(&home, section, content)
+}
+
+/// Explicit-home variant of [`update_system_memory`] so tests can be
+/// deterministic without mutating the process-wide `HOME` (mirrors
+/// [`load_system_memory_from`]).
+fn update_system_memory_from(home: &Path, section: &str, content: &str) -> Result<String> {
+    let path = home.join(".raven").join("system").join("MEMORY.md");
+    update_memory_at(&path, section, content)
+}
+
+/// Shared section-append implementation behind [`update_memory`] and
+/// [`update_system_memory`].
+fn update_memory_at(path: &Path, section: &str, content: &str) -> Result<String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
 
     let mut file_content = if path.exists() {
-        std::fs::read_to_string(&path).context("read MEMORY.md")?
+        std::fs::read_to_string(path).context("read MEMORY.md")?
     } else {
         MEMORY_TEMPLATE.to_string()
     };
@@ -115,7 +140,7 @@ pub fn update_memory(workspace: &Path, section: &str, content: &str) -> Result<S
         file_content.push_str(&format!("\n## {}\n{entry}\n", section));
     }
 
-    std::fs::write(&path, file_content)?;
+    std::fs::write(path, file_content)?;
     Ok(format!("Updated memory [{}]: {}", section, content.trim()))
 }
 
@@ -293,5 +318,24 @@ mod tests {
         // every OS (no reliance on env-var-based HOME resolution).
         let out = load_system_memory_from(tmp.path());
         assert!(out.contains("Installed docker"), "got: {out}");
+    }
+
+    #[test]
+    fn update_system_memory_writes_under_home_system() {
+        let home = tempfile::tempdir().unwrap();
+        update_system_memory_from(home.path(), "Conventions", "Prefer omarchy CLI").unwrap();
+        let path = home.path().join(".raven").join("system").join("MEMORY.md");
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("Prefer omarchy CLI"), "got: {content}");
+        assert!(content.contains("## Conventions"), "template created");
+    }
+
+    #[test]
+    fn update_system_memory_skips_duplicate() {
+        let home = tempfile::tempdir().unwrap();
+        update_system_memory_from(home.path(), "Conventions", "Prefer omarchy CLI").unwrap();
+        let out =
+            update_system_memory_from(home.path(), "Conventions", "Prefer omarchy CLI").unwrap();
+        assert!(out.contains("already contains"), "got: {out}");
     }
 }

@@ -318,10 +318,7 @@ impl TuiState {
                     settings.model,
                     settings.base_url()
                 ))),
-                BlockKind::System(SystemBlock::new(format!(
-                    "workspace {}",
-                    settings.workspace.display()
-                ))),
+                BlockKind::System(SystemBlock::new(workspace_label(settings))),
                 BlockKind::System(SystemBlock::new(format!(
                     "context {} · compact ~{}",
                     fmt_tokens(settings.context_window as u64),
@@ -526,7 +523,7 @@ pub async fn run_tui(
     const DRAW_INTERVAL: std::time::Duration = std::time::Duration::from_millis(60);
     let mut last_draw = std::time::Instant::now();
 
-    let store = SessionStore::for_workspace(&settings.workspace)?;
+    let store = SessionStore::for_settings(&settings)?;
     let mut session = if let Some(s) = resume_session {
         state.push_system(format!(
             "resumed session {} ({} messages)",
@@ -872,7 +869,8 @@ pub async fn run_tui(
                                     // Span already holds a complete candidate:
                                     // fall through and submit the input.
                                 }
-                                if state.input.trim().is_empty() {
+                                if state.input.trim().is_empty() && state.pending_question.is_none()
+                                {
                                     continue;
                                 }
                                 let text = state.input.trim().to_string();
@@ -900,9 +898,31 @@ pub async fn run_tui(
                                 }
 
                                 if let Some(reply) = state.pending_question.take() {
-                                    let _ = reply.send(text.clone());
+                                    // Empty input while a question is pending
+                                    // means "no": the agent sees a denial and
+                                    // moves on, matching the headless runner
+                                    // (empty stdin answer = not confirmed).
+                                    let answer = if text.is_empty() {
+                                        "n".to_string()
+                                    } else {
+                                        text.clone()
+                                    };
+                                    let _ = reply.send(answer);
                                     state.pending_question_text = None;
                                     state.status = "running".into();
+                                    // Surface the acceptance immediately: the
+                                    // next visible event (model response) can
+                                    // be many seconds away, and without this
+                                    // the screen shows no change at all.
+                                    state.push_system(format!(
+                                        "→ answered: {}",
+                                        if text.is_empty() {
+                                            "n".to_string()
+                                        } else {
+                                            text.clone()
+                                        }
+                                    ));
+                                    state.log_dirty = true;
                                     continue;
                                 }
 
@@ -956,14 +976,18 @@ pub async fn run_tui(
                                     || state.selection.take().is_some()
                                 {
                                     state.input_dirty = true;
-                                } else if state.pending_question.take().is_some() {
+                                } else if let Some(reply) = state.pending_question.take() {
+                                    // Dismissing a question counts as a denial:
+                                    // send it so the agent proceeds instead of
+                                    // seeing a dropped channel.
+                                    let _ = reply.send("n".to_string());
                                     state.pending_question_text = None;
                                     state.status = if state.running {
                                         "running".into()
                                     } else {
                                         "ready".into()
                                     };
-                                    state.push_system("question dismissed");
+                                    state.push_system("question dismissed — command denied");
                                     state.log_dirty = true;
                                 } else {
                                     break 'ui;
@@ -996,6 +1020,16 @@ pub async fn run_tui(
                                 state.completion = candidates_for(&state.input, &arg_candidates);
                             }
                         }
+                    }
+                    Event::Resize(_w, _h) => {
+                        // A resize invalidates the painted buffer: ratatui
+                        // redraws the full frame only when we ask it to, and
+                        // the idle draw gate has nothing dirty after this
+                        // event — so without forcing it here, the terminal
+                        // keeps showing content laid out for the old size
+                        // (missing input box, orphaned cursor).
+                        state.input_dirty = true;
+                        state.log_dirty = true;
                     }
                     Event::Mouse(m) => {
                         let size: Rect = terminal.size().unwrap_or_default().into();
@@ -1603,7 +1637,11 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &mut TuiSt
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            format!(" {}", settings.workspace.display()),
+            if settings.scope.is_system() {
+                " system ".to_string()
+            } else {
+                format!(" {}", settings.workspace.display())
+            },
             Style::default().fg(theme.dim),
         ),
     ];
@@ -1621,6 +1659,14 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &mut TuiSt
         status_line.push(Span::styled(
             format!(" {} {}", spinner_frame(state.tick), tool),
             Style::default().fg(theme.tool),
+        ));
+    } else if state.running && state.pending_question.is_none() {
+        // Between tool rounds (e.g. right after a confirmation) nothing
+        // streams for a while — show that we're waiting on the model so the
+        // UI doesn't read as frozen.
+        status_line.push(Span::styled(
+            format!(" {} awaiting model…", spinner_frame(state.tick)),
+            Style::default().fg(theme.plan),
         ));
     }
     if state.pending_question_text.is_some() {
@@ -2117,6 +2163,16 @@ fn deactivate_tool(blocks: &mut [BlockKind], name: &str, preview: &str, tick: u6
     }
 }
 
+/// Header/status label for the session's operating surface: the workspace
+/// path in repo scope, or the system-scope notice (sandbox rooted at `/`).
+fn workspace_label(settings: &Settings) -> String {
+    if settings.scope.is_system() {
+        "scope system · full machine access (sandbox root /)".to_string()
+    } else {
+        format!("workspace {}", settings.workspace.display())
+    }
+}
+
 /// Abort any in-flight agent task and reset the UI + session to a fresh state.
 ///
 /// Shared by Ctrl+N and `/new` so both paths abort the running task, drop the
@@ -2142,7 +2198,7 @@ fn reset_session(
         settings.model,
         settings.base_url()
     ));
-    state.push_system(format!("workspace {}", settings.workspace.display()));
+    state.push_system(workspace_label(settings));
     state.push_system(String::new());
     state.log_dirty = true;
     state.plan_preview.clear();

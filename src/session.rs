@@ -1,7 +1,8 @@
 //! Session persistence — save/load conversation history as JSONL.
 //!
-//! Sessions are stored per-workspace under `.raven/sessions/`.
-//! Each session is a directory containing:
+//! Sessions are stored per-workspace under `.raven/sessions/` (repo scope) or
+//! under `~/.raven/system/sessions/` (system scope). Each session is a
+//! directory containing:
 //!   - `summary.json`   — metadata (id, model, timestamps, title) — the marker file
 //!   - `messages.jsonl`  — append-only conversation (one ChatMessage per line)
 //!
@@ -12,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 use crate::agent::ChatMessage;
+use crate::config::Settings;
 
 /// Metadata for a session, stored in `summary.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,6 +68,26 @@ impl SessionStore {
             sessions_dir,
             workspace: workspace.to_path_buf(),
         })
+    }
+
+    /// Create a session store matching the settings' scope.
+    ///
+    /// Repo scope roots the store at `{workspace}/.raven/sessions/` as before.
+    /// System scope (workspace `/`) roots it at `~/.raven/system/sessions/`,
+    /// matching the system-memory convention, so the privileged scope gets an
+    /// on-disk audit trail instead of writing under `/`.
+    pub fn for_settings(settings: &Settings) -> Result<Self> {
+        if settings.scope.is_system() {
+            let home = dirs::home_dir().context("cannot determine home directory")?;
+            let sessions_dir = home.join(".raven").join("system").join("sessions");
+            std::fs::create_dir_all(&sessions_dir)?;
+            Ok(Self {
+                sessions_dir,
+                workspace: home,
+            })
+        } else {
+            Self::for_workspace(&settings.workspace)
+        }
     }
 
     /// Create a new session with a collision-proof ID.
@@ -275,10 +297,13 @@ impl SessionStore {
         Ok(dest_dir.to_path_buf())
     }
 
-    /// Default export directory for a session: `{workspace}/.raven/exports/{id}/`.
+    /// Default export directory for a session: `{workspace}/.raven/exports/{id}/`
+    /// (system scope: `~/.raven/system/exports/{id}/` — derived from the
+    /// sessions dir's parent so it stays next to the store it exports from).
     pub fn default_export_dir(&self, session: &Session) -> PathBuf {
-        self.workspace
-            .join(".raven")
+        self.sessions_dir
+            .parent()
+            .unwrap_or(self.workspace.as_path())
             .join("exports")
             .join(&session.summary.id)
     }
@@ -554,6 +579,131 @@ fn unix_to_ymd_hms(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::config::{Mode, Provider, Scope, Settings};
+
+    /// Minimal settings for `for_settings` tests, mirroring the fixture in
+    /// `tui/tests.rs`.
+    fn settings_for_scope(scope: Scope, workspace: &Path) -> Settings {
+        Settings {
+            model: "test-model".into(),
+            provider: Provider::builtin("ollama").expect("ollama builtin"),
+            workspace: workspace.to_path_buf(),
+            max_iterations: 5,
+            mode: Mode::Agent,
+            scope,
+            yolo: false,
+            temperature: 0.2,
+            max_tokens: 1024,
+            rules: None,
+            context_window: 8192,
+            compact_threshold: 0.75,
+            no_stream: false,
+            verify: true,
+            confirm_shell: true,
+            theme: "ravenwood".into(),
+            searxng_url: None,
+            searxng_engines: Vec::new(),
+            sandbox_extra_rw: Vec::new(),
+            allow_delegate: true,
+        }
+    }
+
+    #[test]
+    fn for_settings_repo_roots_store_under_workspace() {
+        let tmp = tempfile::tempdir().unwrap();
+        let settings = settings_for_scope(Scope::Repo, tmp.path());
+        let store = SessionStore::for_settings(&settings).unwrap();
+        assert_eq!(
+            store.sessions_dir,
+            tmp.path().join(".raven").join("sessions")
+        );
+        assert_eq!(store.workspace, tmp.path());
+    }
+
+    // Windows: dirs::home_dir() reads USERPROFILE, not HOME, so faking HOME
+    // does not redirect the store root there — these system-scope tests are
+    // Unix-only (the config tests use the same isolation precedent).
+    #[cfg(unix)]
+    #[test]
+    fn for_settings_system_roots_store_under_home() {
+        let _guard = crate::testutil::home_env_lock();
+        let home = tempfile::tempdir().unwrap();
+        let original_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", home.path());
+        let settings = settings_for_scope(Scope::System, Path::new("/"));
+        let result = SessionStore::for_settings(&settings);
+        match original_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        let store = result.unwrap();
+        assert_eq!(
+            store.sessions_dir,
+            home.path().join(".raven").join("system").join("sessions")
+        );
+        assert_eq!(store.workspace, home.path());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn for_settings_system_round_trips_sessions() {
+        let _guard = crate::testutil::home_env_lock();
+        let home = tempfile::tempdir().unwrap();
+        let original_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", home.path());
+        let settings = settings_for_scope(Scope::System, Path::new("/"));
+        let created = SessionStore::for_settings(&settings)
+            .unwrap()
+            .create("test-model")
+            .unwrap();
+        let reopened = SessionStore::for_settings(&settings).unwrap();
+        let listed = reopened.list().unwrap();
+        match original_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, created.summary.id);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn default_export_dir_follows_store_root() {
+        // Repo scope: exports land next to the workspace store.
+        let tmp = tempfile::tempdir().unwrap();
+        let ws_store = SessionStore::for_workspace(tmp.path()).unwrap();
+        let session = ws_store.create("m").unwrap();
+        assert_eq!(
+            ws_store.default_export_dir(&session),
+            tmp.path()
+                .join(".raven")
+                .join("exports")
+                .join(&session.summary.id)
+        );
+
+        // System scope: exports land under ~/.raven/system/exports, next to
+        // the system sessions dir (not directly under ~/.raven).
+        let _guard = crate::testutil::home_env_lock();
+        let home = tempfile::tempdir().unwrap();
+        let original_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", home.path());
+        let settings = settings_for_scope(Scope::System, Path::new("/"));
+        let sys_store = SessionStore::for_settings(&settings).unwrap();
+        let session = sys_store.create("m").unwrap();
+        match original_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        assert_eq!(
+            sys_store.default_export_dir(&session),
+            home.path()
+                .join(".raven")
+                .join("system")
+                .join("exports")
+                .join(&session.summary.id)
+        );
+    }
 
     #[test]
     fn write_atomic_uses_unique_tmp_and_leaves_none_behind() {
