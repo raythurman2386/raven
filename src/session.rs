@@ -621,6 +621,10 @@ mod tests {
         assert_eq!(store.workspace, tmp.path());
     }
 
+    // Windows: dirs::home_dir() reads USERPROFILE, not HOME, so faking HOME
+    // does not redirect the store root there — these system-scope tests are
+    // Unix-only (the config tests use the same isolation precedent).
+    #[cfg(unix)]
     #[test]
     fn for_settings_system_roots_store_under_home() {
         let home = tempfile::tempdir().unwrap();
@@ -640,6 +644,7 @@ mod tests {
         assert_eq!(store.workspace, home.path());
     }
 
+    #[cfg(unix)]
     #[test]
     fn for_settings_system_round_trips_sessions() {
         let home = tempfile::tempdir().unwrap();
@@ -660,6 +665,7 @@ mod tests {
         assert_eq!(listed[0].id, created.summary.id);
     }
 
+    #[cfg(unix)]
     #[test]
     fn default_export_dir_follows_store_root() {
         // Repo scope: exports land next to the workspace store.

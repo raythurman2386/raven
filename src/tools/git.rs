@@ -81,12 +81,15 @@ impl Sandbox {
             return Ok("no changes".into());
         }
         // Stage the patch under the raven dir (excluded from git diffs via
-        // `:!​.raven/`); system scope redirects staging to `~/.raven/tmp`,
-        // since `/.raven` is not writable. The path passed to `git apply` is
-        // absolute — git runs with cwd = workspace, and `/` is never inside
-        // the repo-relative diff paths.
+        // `:!.raven/`). Prefer a workspace-relative path — `git apply` and
+        // Windows' `\\?\C:\...` canonicalized temp dirs don't mix — and fall
+        // back to absolute only when the raven dir sits outside the
+        // workspace (system scope).
         let full = self.raven_dir().join("tmp").join("apply.patch");
-        let rel = full.to_string_lossy().into_owned();
+        let rel = full
+            .strip_prefix(&self.workspace)
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| full.to_string_lossy().into_owned());
         if let Some(parent) = full.parent() {
             std::fs::create_dir_all(parent)?;
         }
