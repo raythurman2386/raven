@@ -351,3 +351,46 @@ fn dispatch_run_lint_on_cargo_project() {
         .unwrap_or_else(|e| format!("Tool error: {e}"));
     assert!(out.contains("--- run_lint (cargo)"), "{out}");
 }
+
+#[test]
+fn sandbox_raven_dir_repo_is_under_workspace() {
+    let tmp = tempfile::tempdir().unwrap();
+    let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
+    assert_eq!(
+        sb.raven_dir(),
+        tmp.path().canonicalize().unwrap().join(".raven")
+    );
+}
+
+#[test]
+fn sandbox_raven_dir_system_is_under_home() {
+    let home = tempfile::tempdir().unwrap();
+    let original_home = std::env::var_os("HOME");
+    std::env::set_var("HOME", home.path());
+    let sb = crate::tools::sandbox::Sandbox::with_scope(
+        std::path::PathBuf::from("/"),
+        crate::config::Scope::System,
+    );
+    let dir = sb.raven_dir();
+    match original_home {
+        Some(h) => std::env::set_var("HOME", h),
+        None => std::env::remove_var("HOME"),
+    }
+    assert_eq!(dir, home.path().join(".raven"));
+}
+
+#[test]
+fn sandbox_raven_dir_system_falls_back_without_home() {
+    let original_home = std::env::var_os("HOME");
+    std::env::remove_var("HOME");
+    let sb = crate::tools::sandbox::Sandbox::with_scope(
+        std::path::PathBuf::from("/"),
+        crate::config::Scope::System,
+    );
+    let dir = sb.raven_dir();
+    match original_home {
+        Some(h) => std::env::set_var("HOME", h),
+        None => std::env::remove_var("HOME"),
+    }
+    assert_eq!(dir, std::path::PathBuf::from("/.raven"));
+}

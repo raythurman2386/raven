@@ -3,7 +3,9 @@
 
 #[cfg(unix)]
 use crate::tools::sandbox::wait_for_child;
-use crate::tools::sandbox::{dangerous_re, is_direct_exec_command, safe_command_re};
+use crate::tools::sandbox::{
+    dangerous_re, is_direct_exec_command, safe_command_re, system_safe_command_re,
+};
 use crate::tools::Sandbox;
 #[cfg(unix)]
 use std::process::Command;
@@ -713,6 +715,103 @@ fn dangerous_re_allows_safe_commands() {
         assert!(
             !dangerous_re().is_match(cmd),
             "safe command should not be blocked: {cmd}"
+        );
+    }
+}
+
+#[test]
+fn system_safe_command_re_autoruns_readonly_diagnostics() {
+    let allow = [
+        "pacman -Qe",
+        "pacman -Qi docker",
+        "pacman -Ql git",
+        "pacman -Ss terminal",
+        "pacman -Si docker",
+        "pacman -Fy",
+        "pacman -Qdt",
+        "pacman --query",
+        "pacman-conf",
+        "systemctl status ollama",
+        "systemctl list-units --type=service",
+        "systemctl is-active docker",
+        "systemctl cat nginx",
+        "journalctl -u ollama --no-pager",
+        "journalctl -b -p err",
+        "coredumpctl list 1234",
+        "loginctl list-sessions",
+        "systemd-analyze blame",
+        "busctl tree",
+        "omarchy version",
+        "omarchy commands | head -50",
+        "omarchy debug --no-sudo --print",
+        "omarchy theme list",
+        "omarchy plugin list",
+        "omarchy bar list",
+        "omarchy pkg --help",
+        "lsblk",
+        "free -h",
+        "lscpu",
+        "sensors",
+        "hyprctl monitors",
+        "hyprctl getoption general:gaps_in",
+        "hyprctl binds",
+        "nmcli device status",
+        "resolvectl status",
+        "bluetoothctl devices",
+    ];
+    for cmd in allow {
+        assert!(
+            system_safe_command_re().is_match(cmd),
+            "read-only diagnostic must autorun in system scope: {cmd}"
+        );
+    }
+}
+
+#[test]
+fn system_safe_command_re_requires_confirmation_for_mutations() {
+    let deny = [
+        "pacman -Syu",
+        "pacman -S docker",
+        "pacman -R docker",
+        "pacman -Rs docker",
+        "pacman -U pkg.tar.zst",
+        "pacman -Scc",
+        "pacman -D --asexplicit docker",
+        "systemctl restart ollama",
+        "systemctl enable docker",
+        "systemctl stop nginx",
+        "systemctl mask docker",
+        "omarchy pkg add docker",
+        "omarchy pkg remove docker",
+        "omarchy install docker",
+        "omarchy refresh shell",
+        "omarchy refresh hyprland",
+        "omarchy theme set catppuccin",
+        "omarchy restart shell",
+        "omarchy update",
+        "omarchy system reboot",
+        "sudo pacman -S docker",
+        "sudo systemctl restart x",
+        "reboot",
+        "shutdown now",
+        "poweroff",
+        "kill -9 123",
+        "pkill -f ollama",
+        "killall ollama",
+        "rm -rf /tmp/x",
+        "useradd bob",
+        "usermod -aG wheel ret",
+        "mount /dev/sdb1 /mnt",
+        "umount /mnt",
+        "dd if=/dev/zero of=/dev/sda",
+        "chmod 777 /etc/passwd",
+        "echo hi > /etc/hosts",
+        "git push --force",
+    ];
+    for cmd in deny {
+        assert!(
+            !system_safe_command_re().is_match(cmd),
+            "state-changing command must still prompt in system scope: {cmd}"
         );
     }
 }

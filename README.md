@@ -26,6 +26,7 @@ It's built for focused, supervised work — not an autonomous loop trying to com
 Daily driver is the TUI, usually attached to Zed over ACP (`raven --acp`) so model switching happens in the editor's picker. In a terminal: `raven -p "…"` for agent-mode tasks, `--mode plan` when you want a gated plan, `--yolo` for throwaway work.
 
 - **Sessions** — every turn lands in `.raven/sessions/` as JSONL. `--resume` continues the latest, `--list-sessions` browses, `/export` bundles a session as Markdown/JSON.
+- **System scope** — `raven --system` runs the same TUI against the whole machine (sandbox root `/`, tiered shell policy: diagnostics auto-run, mutations confirm — or `--system --yolo` for full autonomy on a trusted machine, OS-administration prompt) for Omarchy/desktop management; sessions audit-trailed under `~/.raven/system/sessions/`.
 - **Models** — `glm-5.3-flash:cloud` for day-to-day work, `glm-5.3:cloud` when a task needs the flagship, `x-ai/grok-4.5` on OpenRouter for frontier reasoning, `qwen3.8:latest` offline. `/model` + Tab completes; `/provider` switches endpoints.
 - **Hermes lineage** — `read_file` document extraction mirrors Hermes Agent's `read_extract.py` (same `anydoc` core), and loop-control fallbacks mirror Hermes's max-iteration recovery. Ideas borrowed from good harnesses; the code is all here.
 

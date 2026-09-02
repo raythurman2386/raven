@@ -73,6 +73,50 @@ Output is streamed to stdout: assistant text deltas, tool calls (`→ tool(args)
 
 ---
 
+## System scope
+
+`raven --system` runs the same TUI/headless harness against the whole machine
+instead of a repo workspace: the sandbox is rooted at `/`, the system prompt is
+an OS-administration frame (prefers `omarchy <group> <action>` commands, backs
+up configs before editing, never touches `/usr/share/omarchy/`), and shell
+commands follow a tiered policy: read-only diagnostics and dev commands run
+without a prompt, state-changing operations require confirmation — unless you
+opt into full autonomy with `--yolo`.
+
+```bash
+# Interactive TUI (same interface as the default agent)
+raven --system
+
+# One-shot task, streamed to stdout
+raven --system -p "show the disk layout and running services"
+```
+
+Behavior differences from the repo-scoped default:
+
+- **Sessions persist** under `~/.raven/system/sessions/` (an audit trail of
+  privileged work); `--list-sessions`, `--export`, and `--resume` operate on
+  that store. Memory lives in `~/.raven/system/MEMORY.md`, written by
+  `memory_update` and injected into the system prompt.
+- **No verify gate, no sub-agents** — there is no workspace test runner for
+  OS work, and `todo_write` / `goal_set` / `delegate_task` are refused.
+- **Tiered shell policy** (without `--yolo`): read-only diagnostics auto-run —
+  `pacman -Q/-Ss/-Si/-F`, `systemctl status/list/show/cat`, `journalctl`,
+  `coredumpctl`, `hyprctl` reads, hardware readers, `omarchy` informational
+  commands — while mutations (installs, service changes, `sudo`, kills)
+  prompt for approval. `--system --yolo` disables the gate entirely (the
+  destructive-command denylist and network block still apply); use it only
+  on a trusted single-user machine.
+- **Network in shell commands is blocked by default** (seccomp). Package
+  installs and downloads need an explicit opt-out in the environment:
+  `RAVEN_SANDBOX_NETWORK_BLOCK=0` (e.g. in `~/.raven/.env`). The block is a
+  separate layer from confirmations and applies in both scopes.
+- Incompatible flags error out clearly: `--system --acp`, `--system
+  --parallel`, and `--system --workspace <path>`.
+
+See `docs/security.md` for the trust posture of running a write-anywhere agent.
+
+---
+
 ## Plan mode
 
 Plan mode asks the model to propose a plan first, then proceeds to execution.

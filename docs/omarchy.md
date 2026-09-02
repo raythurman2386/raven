@@ -279,29 +279,68 @@ and [zed_connection.md](zed_connection.md).
 ## System scope (`raven --system`)
 
 Beyond the repo-scoped coding default, Raven ships an opt-in OS-administration
-scope: `raven --system "<task>"`. This is useful for managing Omarchy itself —
-installing packages, editing `~/.config/`, restarting services — without
-leaving the Raven session. Key differences from the default:
+scope. It runs the **same TUI** as the default agent — same interface, same
+slash commands — with better system knowledge and troubleshooting ability.
+Key differences:
 
 - The sandbox is rooted at `/` (write access anywhere), which is what lets it
-  reach system config; **`confirm_shell` is forced on** and `--system` is
-  incompatible with `--yolo` (`raven --system --yolo` is rejected).
+  reach system config. The shell policy is tiered: read-only diagnostics
+  (`pacman -Q`, `systemctl status`, `journalctl`, `hyprctl` reads, …) run
+  without a prompt; mutations (installs, service changes, `sudo`) confirm
+  first. `--system --yolo` is a supported opt-in to full autonomy on a
+  trusted single-user machine — this device's wrappers use it (the
+  destructive-command denylist and network block still apply).
 - It loads a system OS-administration prompt that prefers
   `omarchy <group> <action>` commands, never edits `/usr/share/omarchy/` (that
   is package-owned and overwritten on `omarchy update`), backs up configs
   before writing, and reads before changing.
-- It does **not** persist to a repo session store and does not run the
-  enforced-verify gate (there is no workspace test runner for OS work).
+- Sessions persist under `~/.raven/system/sessions/` (audit trail); memory is
+  `~/.raven/system/MEMORY.md`. No enforced-verify gate (no workspace test
+  runner for OS work), no sub-agents.
+- Network in shell commands is blocked by default — set
+  `RAVEN_SANDBOX_NETWORK_BLOCK=0` (e.g. in `~/.raven/.env`) for package
+  installs; the block applies in both scopes and survives `--yolo`.
 
-Example:
+Launch contract:
+
 ```bash
-raven --system "show the disk layout and running services"
-raven --system "set night light to turn on at 21:00"
-raven --system "install docker and the common DB clients"
+raven --system        # interactive TUI (same UI as the default agent)
+raven --system -p "show the disk layout and running services"   # one-shot
+raven --system --list-sessions   # audit trail lives in ~/.raven/system/sessions
 ```
 
-The wrappers and Agents panel described above drive the **repo** default. When
-you want Raven to act on the OS, launch it in system scope explicitly. See
+### Desktop wiring for system scope (local wrappers)
+
+On this machine the system scope is reachable from the desktop, not only from
+a shell. All of it lives under `~` and survives `omarchy update`:
+
+| Surface | Entry point |
+|---|---|
+| Terminal / script | `omarchy-agent-system [--inline] [--prompt "task"]` |
+| Agent wrapper passthrough | `omarchy-agent --system [--prompt "task"]` |
+| Omarchy menu | `Trigger → Raven System Task` (`omarchy menu summon trigger.raven-system`) |
+| Crash notification | Click "Process crashed" → `omarchy-agent-crash` → Raven in system scope |
+
+- **`~/.local/bin/omarchy-agent-system`** — asks for a task (gum when
+  available) and runs `raven --system -p "…"` inside `omarchy-launch-tui`
+  under the shared `org.omarchy.agent` app-id; `--inline` execs raven directly.
+  It never adds `--yolo`: system scope forces `confirm_shell` on, and
+  state-changing commands prompt in the terminal.
+- **`~/.local/bin/omarchy-agent`** — when the default agent is `raven`,
+  `--system` passthrough switches to the OS-administration scope; everything
+  else keeps launching the repo-scoped `raven --yolo`.
+- **`~/.local/bin/omarchy-agent-crash`** — when the default agent is `raven`,
+  routes crash diagnosis to `omarchy-agent-system` with the same
+  systemd-coredump facts the stock script gathers, pointing at the
+  `diagnose-crash` skill via `~/.raven/skills/` (Raven's skill root).
+  Otherwise it falls through to the stock binary.
+
+The diagnose-crash skill is symlinked into `~/.raven/skills/` next to the
+omarchy skill, so both are discoverable with `skill_search` in either scope.
+
+The wrappers and Agents panel otherwise drive the **repo** default. When you
+want Raven to act on the OS, use any of the entries above; the effective
+command is always `raven --system "<task>"`. See
 [security.md](security.md) for the system-scope trust posture.
 
 ---
@@ -311,11 +350,15 @@ you want Raven to act on the OS, launch it in system scope explicitly. See
 ```
 ~/.local/bin/omarchy-default-agent
 ~/.local/bin/omarchy-agent
+~/.local/bin/omarchy-agent-system
+~/.local/bin/omarchy-agent-crash
 ~/.local/bin/omarchy-agent-usage-raven
 ~/.local/bin/omarchy-agent-usage-update
-~/.config/omarchy/extensions/omarchy-menu.jsonc   # setup.default.agent.raven
+~/.config/omarchy/extensions/omarchy-menu.jsonc   # setup.default.agent.raven + trigger.raven-system
 ~/.config/omarchy/plugins/<user>.agents/           # clone + raven assets + Main.qml path fix
 ~/.config/omarchy/shell.json                       # bar placement + providers
 ~/.local/state/omarchy/agents/usage/raven.json     # panel input
+~/.raven/skills/omarchy                            # symlink → omarchy skill
+~/.raven/skills/diagnose-crash                     # symlink → diagnose-crash skill
 assets/rvn.svg                                     # brand mark (repo)
 ```

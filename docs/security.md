@@ -316,25 +316,56 @@ repo default and must be understood as a separate trust posture:
   what makes `raven --system` able to manage system configuration, packages,
   and services.
 - **The real safety net is `confirm_shell`, not the sandbox.** Every `run_shell`
-  command must be user-approved unless it matches the `safe_command_re`
-  allowlist. More importantly, **`--system` forces `confirm_shell` on** and is
-  **mutually exclusive with `--yolo`**: `raven --system --yolo` is rejected with
-  a clear error. A system-scope agent is never fully autonomous.
+  command must be user-approved unless it matches an allowlist: the general
+  dev allowlist (`safe_command_re` — `cargo`, `git`, `ls`, …) everywhere, plus
+  a **system-scope allowlist** (`system_safe_command_re`) that auto-runs
+  read-only diagnostics — `pacman` query/search/info, `systemctl`
+  status/list/show/cat, `journalctl`, `coredumpctl`, `hyprctl` reads, hardware
+  readers, `omarchy` informational commands — so the system agent can inspect
+  freely. State-changing operations (package install/remove/upgrade, service
+  start/stop/restart, `omarchy install/refresh/theme set/pkg`, `sudo`, kills,
+  power ops) always prompt unless the user passes `--yolo`. **`--system
+  --yolo` is a supported explicit opt-in** to a fully autonomous system agent
+  on a trusted single-user machine; without it, a system-scope agent is never
+  fully autonomous.
 - **The `dangerous_re` denylist still applies** as a last-resort filter for
   obviously destructive commands (recursive root deletes, `mkfs`, fork bombs,
-  `curl | sh`, …).
+  `curl | sh`, …) — **including under `--yolo`**.
 - **`--system` suppresses repo behaviors**: no enforced-verify gate (no
   workspace test runner), no `delegate_task`, no goal/todo persistence, and a
   separate system prompt (`SYSTEM_SCOPE_BASE`) that instructs the agent to
   prefer `omarchy`/`systemctl`/`pacman` commands, never edit
   `/usr/share/omarchy/`, back up configs before writing, and confirm
   destructive work.
+- **Network access in shell commands is blocked by default** (seccomp
+  AF_INET/AF_INET6 kill) in *both* scopes. Package installs, downloads, and
+  DNS-touching diagnostics fail with a deterministic SIGSYS kill unless the
+  user opts out explicitly with `RAVEN_SANDBOX_NETWORK_BLOCK=0` (e.g. in
+  `~/.raven/.env`). The opt-out is environment-level, deliberate, and
+  survives `--yolo`: the network block is a separate layer from the
+  confirmation gate.
+- **Sessions persist as an audit trail.** System-scope sessions (TUI or
+  headless one-shot) are written to `~/.raven/system/sessions/` — deliberately
+  outside `/`-rooted paths and matching the system-memory convention
+  (`~/.raven/system/MEMORY.md`). Transcripts therefore record exactly which
+  commands the privileged agent ran, with the user's approval decisions
+  implicit in what executed. Treat this directory as sensitive: it can contain
+  the output of privileged commands.
+- **Scope is a first-class axis through the standard harness**: the TUI,
+  headless one-shot runner, plan flow, and session tooling (`/new`,
+  `/cleanup`, `/export`, `--resume`) all work in system scope against the
+  system store; `raven --system` with no prompt opens the same TUI as the
+  repo default, with the OS-administration prompt and write-anywhere sandbox.
 
-**Recommendation:** use `--system` only on a trusted, single-user machine where
-you are present to approve commands. It is not a hardening boundary — it is a
-convenience scope whose protection is the confirmation gate and the command
-denylist. For stronger isolation of system-administration work, run it inside a
-container or VM, or audit the commands it proposes before approving them.
+**Recommendation:** use `--system` only on a trusted, single-user machine. It
+is not a hardening boundary — it is a convenience scope whose default
+protection is the tiered confirmation gate (diagnostics auto-run, mutations
+prompt) and the command denylist. `--system --yolo` removes the per-command
+gate entirely (the denylist and network block remain); treat it as appropriate
+only where the user is the sole operator of the machine and accepts the blast
+radius. For stronger isolation of system-administration work, run it inside a
+container or VM, or audit the session transcripts under
+`~/.raven/system/sessions/` afterward.
 
 See `docs/omarchy.md` for how the system scope complements the repo default on
 an Omarchy machine.

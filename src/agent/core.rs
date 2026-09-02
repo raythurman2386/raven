@@ -154,6 +154,8 @@ const SYSTEM_SCOPE_BASE: &str = r#"You are an operating-system administration ag
 - Use read_file / grep / run_shell to inspect system state before changing anything.
 - Prefer the dedicated tools over shell equivalents: read_file, not cat; grep, not rg.
 - Use run_shell for system commands (systemctl, pacman, omarchy, ...). You have no sandboxed filesystem in this scope — you can reach any path, so confirm destructive or state-changing work with the user before running it.
+- Read-only diagnostics and the omarchy CLI's informational commands run without a confirmation prompt: pacman -Q/-Ss/-Si/-F, systemctl status/list/show/cat/is-active/is-enabled, journalctl, coredumpctl, loginctl, systemd-analyze, hyprctl, lsblk/lscpu/lspci/lsusb/free/sensors, omarchy version/commands/debug/theme list/plugin list. Use them freely.
+- Everything that mutates state — pacman -S/-R/-Syu, systemctl start/stop/restart/enable/disable, omarchy install/refresh/restart/theme set/pkg, sudo, kills, power operations — prompts the user first. Do not batch a mutation inside a longer command to dodge the prompt; propose it plainly.
 - You can call multiple tools in a single response; do not call the same tool twice with identical arguments.
 - Use think to reason through long, costly, or sequential steps before acting.
 </tool_calling>
@@ -185,6 +187,18 @@ const SYSTEM_SCOPE_BASE: &str = r#"You are an operating-system administration ag
 - Base every claim on what a tool actually returned; if an output is missing or truncated, say so.
 - Do not claim a change is done unless you observed the command succeed.
 </accuracy>
+"#;
+
+/// Prompt fragment appended in system scope when `confirm_shell` is off
+/// (`--system --yolo`): the user has opted into full autonomy on a trusted
+/// machine, so the model should act directly instead of narrating intent.
+const SYSTEM_YOLO_APPENDIX: &str = r#"
+<autonomy>
+- This session runs with confirmations disabled (--yolo): you are trusted to execute directly. Do not ask for permission before acting — state what you are doing and do it.
+- The destructive-command denylist still applies (recursive root deletes, mkfs, fork bombs are blocked by the sandbox filter regardless).
+- Back up configs before editing (`cp file file.bak.$(date +%s)`), verify each change took effect, and if a command fails, diagnose before retrying.
+- Prefer the smallest state change that accomplishes the task; avoid reboot/shutdown unless explicitly requested.
+</autonomy>
 "#;
 
 /// Rebuild the system message (goal/todos, repo map, memory) from disk.
@@ -296,6 +310,9 @@ fn build_system_message(settings: &Settings) -> ChatMessage {
 /// the repo-only blocks (workspace root, git status, repo map, AGENTS.md).
 fn build_system_scope_message(settings: &Settings) -> ChatMessage {
     let mut system = SYSTEM_SCOPE_BASE.to_string();
+    if !settings.confirm_shell {
+        system.push_str(SYSTEM_YOLO_APPENDIX);
+    }
 
     system.push_str("\n--- System ---\n");
     system.push_str(&format!("Model: {}\n", settings.model));
@@ -417,10 +434,11 @@ impl Agent {
     /// `AGENTS.md` content + optional `--rules`. The workspace must exist.
     pub fn new(settings: Settings) -> Result<Self> {
         settings.ensure_workspace()?;
-        let sandbox = Sandbox::with_extra_rw(
-            settings.workspace.clone(),
-            settings.sandbox_extra_rw.clone(),
-        );
+        let sandbox = Sandbox::with_scope(settings.workspace.clone(), settings.scope);
+        let sandbox = Sandbox {
+            extra_rw: settings.sandbox_extra_rw.clone(),
+            ..sandbox
+        };
         let messages = vec![build_system_message(&settings)];
         let usage_supported = load_usage_supported(settings.base_url());
         Ok(Self {

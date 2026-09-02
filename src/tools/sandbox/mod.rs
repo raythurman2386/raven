@@ -143,6 +143,66 @@ pub fn safe_command_re() -> &'static Regex {
     })
 }
 
+/// System-scope allowlist: commands the system agent may run without a
+/// confirmation prompt. Tiered on top of [`safe_command_re`] (which still
+/// applies — dev commands stay safe in system scope too).
+///
+/// Autonomous in system scope:
+/// - Read-only diagnostics: `systemctl`/`journalctl`/`coredumpctl`/`loginctl`
+///   status+list+show, `pacman`/`pacman-conf` query+search+info,
+///   `systemd-analyze` read-only subcommands, `ip`, `ss`, `df`, `free`,
+///   `lscpu`, `lsblk`, `lspci`, `lsusb`, `uptime`, `vmstat`, `top`-style
+///   readers, `bluetoothctl`/`nmcli`/`resolvectl` info, `hyprctl` reads,
+///   `gum`-free text tools, `omarchy-*` informational helpers.
+/// - The `omarchy <group> <action>` CLI where the action is informational
+///   (`omarchy debug`, `omarchy commands`, `omarchy version`, `omarchy
+///   <group> --help`, `omarchy bar list`, `omarchy plugin list`, …).
+///
+/// Still confirmed (never autonomous): package install/remove/upgrade,
+/// `systemctl start/stop/restart/enable/disable/mask`, `omarchy install/refresh/
+/// restart/theme set/pkg/remove`, anything matching `safe_command_re`'s
+/// destructive denylist (`dangerous_re`), `sudo`/`su`, power operations
+/// (`reboot`/`shutdown`/`poweroff`), process kills, and raw config writes
+/// outside the sandbox's file tools.
+///
+/// The split mirrors the omarchy skill's own guidance: inspect first,
+/// propose, confirm, then apply.
+pub fn system_safe_command_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        // Verbose mode (?x): whitespace/comments in the pattern are ignored.
+        // Read-only only: the `regex` crate has no lookahead, so pacman's
+        // sync flags are enumerated explicitly (query/search/info only —
+        // install (-S pkg), refresh (-Sy), upgrade (-Su) are NOT listed).
+        Regex::new(
+            r"(?xi)^\s*(?:
+            pacman\s+(?:-[Qq](?:[SiIlodtu]*)|-Q[a-z]*|-Ss|-Si|-Sg|-Sl|-Sg|-Sp|-Sn|-F[a-z]*|--query|--sync|--search|--info)\b|
+            pacman-conf|
+            # systemd read-only
+            systemctl\s+(?:status|list-|show|is-active|is-enabled|is-failed|cat|get-default|list-dependencies)|
+            journalctl|
+            coredumpctl\s+(?:list|info|dump)|
+            loginctl\s+(?:list|show|status)|
+            systemd-analyze\s+(?:blame|critical-chain|security|time|dump)|
+            busctl\s+(?:list|status|tree)|
+            # desktop / hardware state readers
+            hyprctl\s+(?:monitors|workspaces|clients|activewindow|activeworkspace|version|getoption|decos|devices|binds|layers|splash|cursorinfo)|
+            nmcli\s+(?:device|connection|general|networking)\s+(?:status|show|list)?|
+            resolvectl\s+(?:status|query)|
+            bluetoothctl\s+(?:info|devices|list)|
+            upower\s+-[id]|
+            # resource / hardware readers
+            free|vmstat|iostat|mpstat|pidstat|sensors|lscpu|lsblk|lspci|lsusb|lsmem|lsscsi|
+            # omarchy informational
+            omarchy\s+(?:--help|-h|version|commands|debug)|
+            omarchy\s+\S+\s+--help|
+            omarchy\s+(?:theme\s+list|plugin\s+list|bar\s+list|menu\s+show)
+            )",
+        )
+        .expect("valid regex")
+    })
+}
+
 /// Normalize a path by resolving `.` and `..` components lexically.
 ///
 /// Does not touch the filesystem — purely lexical normalization. This lets
@@ -185,14 +245,18 @@ pub struct Sandbox {
     /// is never implied (see `confinement::FsPolicy`). Never granted on
     /// Windows (no Landlock).
     pub extra_rw: Vec<PathBuf>,
+    /// The operational scope. System scope (workspace `/`) redirects
+    /// `.raven` scratch/state dirs to `~/.raven` via [`Sandbox::raven_dir`].
+    pub scope: crate::config::Scope,
 }
 
 impl Sandbox {
-    /// Create a sandbox rooted at `workspace`.
+    /// Create a sandbox rooted at `workspace` (repo scope).
     pub fn new(workspace: PathBuf) -> Self {
         Self {
             workspace,
             extra_rw: Vec::new(),
+            scope: crate::config::Scope::Repo,
         }
     }
 
@@ -203,6 +267,31 @@ impl Sandbox {
         Self {
             workspace,
             extra_rw,
+            scope: crate::config::Scope::Repo,
+        }
+    }
+
+    /// The `.raven` directory for scratch/state (pinned caches, temp dir,
+    /// patch staging). Repo scope keeps it in the workspace; system scope
+    /// moves it under `$HOME/.raven` because the workspace is `/` and
+    /// `/.raven` is neither writable nor meaningful for a per-user agent.
+    pub fn raven_dir(&self) -> PathBuf {
+        if self.scope.is_system() {
+            match std::env::var_os("HOME") {
+                Some(home) => PathBuf::from(home).join(".raven"),
+                None => self.workspace.join(".raven"),
+            }
+        } else {
+            self.workspace.join(".raven")
+        }
+    }
+
+    /// Create a sandbox rooted at `workspace` with an explicit scope.
+    pub fn with_scope(workspace: PathBuf, scope: crate::config::Scope) -> Self {
+        Self {
+            workspace,
+            extra_rw: Vec::new(),
+            scope,
         }
     }
 }

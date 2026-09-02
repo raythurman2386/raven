@@ -49,7 +49,7 @@ CLI (main.rs)
 
 | Path | Purpose |
 |------|---------|
-| `src/main.rs` | CLI entry, headless runner, session management |
+| `src/main.rs` | CLI entry, headless runner (repo + system scope), session management |
 | `src/lib.rs` | Library crate re-exports for benchmarks/integration tests |
 | `src/agent/` | Streaming loop (`core.rs`), stream parse, tool exec, loop control, parallel sub-agents |
 | `src/commands.rs` | Slash-command registry + parsing for the TUI |
@@ -60,7 +60,7 @@ CLI (main.rs)
 | `src/plan.rs` | Structured plan mode, `parse_plan`, `format_plan` |
 | `src/repomap/mod.rs` | Cached, walk-capped repo symbol map (`<repo_map>`); `patterns.rs` holds the language regexes |
 | `src/runner.rs` | Shared event-draining and plan-approval flow |
-| `src/session.rs` | JSONL session persistence, resume, list (atomic writes) |
+| `src/session.rs` | JSONL session persistence, resume, list (atomic writes); scope-aware store (`for_settings`: repo → `{workspace}/.raven/sessions`, system → `~/.raven/system/sessions`) |
 | `src/skills.rs` | `SKILL.md` discovery + `skill_search`/`skill_load` |
 | `src/state.rs` | Persistent agent state — `.raven/state/todos.json` + `goal.json`, injected into the system prompt |
 | `src/tokenizer.rs` | Pure-Rust BPE token estimator (no external vocab) |

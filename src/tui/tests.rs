@@ -675,6 +675,26 @@ fn test_settings(workspace: &std::path::Path) -> Settings {
     }
 }
 
+#[test]
+fn workspace_label_shows_workspace_in_repo_scope() {
+    let tmp = tempfile::tempdir().unwrap();
+    let settings = test_settings(tmp.path());
+    assert_eq!(
+        workspace_label(&settings),
+        format!("workspace {}", tmp.path().display())
+    );
+}
+
+#[test]
+fn workspace_label_shows_system_notice_in_system_scope() {
+    let mut settings = test_settings(std::path::Path::new("/"));
+    settings.scope = Scope::System;
+    assert_eq!(
+        workspace_label(&settings),
+        "scope system · full machine access (sandbox root /)"
+    );
+}
+
 #[tokio::test]
 async fn model_switch_updates_settings_compact_and_header_blocks() {
     if skip_if_outer_sandbox() {

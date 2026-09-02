@@ -6,17 +6,30 @@ Design overview for **Raven**. See the [project layout](../README.md#project-lay
 
 ```
 CLI (main.rs)
-  └─ Settings (config/mod.rs) ── named providers, context-window inference
+  └─ Settings (config/mod.rs) ── named providers, context-window inference,
+  │                              scope (repo | system) via resolve_scope
   └─ Agent (agent/)
-       ├─ system prompt (SYSTEM_BASE + AGENTS.md + repo map + --rules)
+       ├─ system prompt (SYSTEM_BASE or SYSTEM_SCOPE_BASE + AGENTS.md + repo map + --rules)
        ├─ streaming loop ── POST /v1/chat/completions (Ollama / OpenRouter / …)
        ├─ compaction (context.rs) ── estimate tokens, summarize middle
        ├─ tool dispatch (tools/) ── mutators serial; others spawn_blocking
        └─ events (mpsc) ── TextDelta, ToolStart/End, Iteration, Compacted,
                            VerifyRequired, AskUser, PlanProgress, Done, Error
   └─ TUI (tui/)  ── ratatui event loop, drains agent events
-  └─ run_parallel ── N independent Agent tasks on git worktrees
+  └─ headless_run ── one-shot tasks (repo and system scope)
+  └─ run_parallel ── N independent Agent tasks on git worktrees (repo scope)
 ```
+
+### Scope axis
+
+`Settings.scope` is `Repo` (default) or `System` (`--system`). It decides the
+sandbox root (`{workspace}` vs `/`), the system prompt
+(`SYSTEM_BASE` vs `SYSTEM_SCOPE_BASE`), the session store
+(`{workspace}/.raven/sessions` vs `~/.raven/system/sessions`), the shell
+confirmation allowlists (dev list, plus a system read-only-diagnostics list),
+and gating of sub-agents/goal/todo tools. Dispatch (TUI vs headless one-shot)
+is identical in both scopes; `--system --yolo` is an explicit full-autonomy
+opt-in (denylist + network block still apply).
 
 ### Step-by-step
 

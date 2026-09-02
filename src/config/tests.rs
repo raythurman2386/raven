@@ -6,6 +6,57 @@ use super::*;
 use crate::context::infer_context_window;
 
 #[test]
+fn resolve_scope_repo_when_not_system() {
+    assert_eq!(
+        resolve_scope(false, true, true, true, Some(std::path::Path::new("/tmp"))).unwrap(),
+        Scope::Repo
+    );
+}
+
+#[test]
+fn resolve_scope_system_with_clean_flags() {
+    assert_eq!(
+        resolve_scope(true, false, false, false, None).unwrap(),
+        Scope::System
+    );
+}
+
+#[test]
+fn resolve_scope_allows_yolo_as_explicit_trust_opt_in() {
+    // `--system --yolo` is a deliberate full-autonomy opt-in for trusted
+    // single-user machines; it must resolve rather than error.
+    assert_eq!(
+        resolve_scope(true, true, false, false, None).unwrap(),
+        Scope::System
+    );
+}
+
+#[test]
+fn resolve_scope_rejects_acp() {
+    let err = resolve_scope(true, false, true, false, None).unwrap_err();
+    assert!(err.to_string().contains("--acp"));
+}
+
+#[test]
+fn resolve_scope_rejects_parallel() {
+    let err = resolve_scope(true, false, false, true, None).unwrap_err();
+    assert!(err.to_string().contains("--parallel"));
+}
+
+#[test]
+fn resolve_scope_rejects_workspace() {
+    let err = resolve_scope(
+        true,
+        false,
+        false,
+        false,
+        Some(std::path::Path::new("/tmp")),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("--workspace"));
+}
+
+#[test]
 fn resolve_mode_yolo_forces_agent_when_no_explicit_mode() {
     // Regression for issue #126: `raven --yolo` (no --mode) must expose the
     // full (non-read-only) toolset, i.e. resolve to Mode::Agent.

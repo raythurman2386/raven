@@ -13,7 +13,10 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 
 use crate::error::ToolError;
-use crate::tools::{dispatch, safe_command_re, validate_tool_call, Sandbox, MAX_ARGUMENTS_BYTES};
+use crate::tools::{
+    dispatch, safe_command_re, system_safe_command_re, validate_tool_call, Sandbox,
+    MAX_ARGUMENTS_BYTES,
+};
 
 use super::core::Agent;
 use super::types::{AgentEvent, ChatMessage, ToolCall};
@@ -168,15 +171,24 @@ impl Agent {
             // every run_shell command is confirmed with the user first,
             // reusing the ask_user oneshot path. Commands matching the
             // safe_command_re allowlist (cargo, git, ls, etc.) skip the
-            // prompt. If the user declines, the command is replaced with a
-            // no-op explanation the model can see.
+            // prompt; in system scope the system allowlist additionally
+            // autoruns read-only diagnostics (pacman queries, systemctl
+            // status, omarchy info) so the agent can inspect freely. If the
+            // user declines, the command is replaced with a no-op
+            // explanation the model can see.
             if self.settings.confirm_shell && tc.function.name == "run_shell" {
                 let command = args
                     .get("command")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                if !safe_command_re().is_match(&command) {
+                let pre_approved = if self.settings.scope.is_system() {
+                    safe_command_re().is_match(&command)
+                        || system_safe_command_re().is_match(&command)
+                } else {
+                    safe_command_re().is_match(&command)
+                };
+                if !pre_approved {
                     let (confirm_tx, confirm_rx) = tokio::sync::oneshot::channel::<String>();
                     let question = format!("Allow this shell command?\n\n$ {command}\n\n(type 'y' to allow, anything else to deny)");
                     let _ = tx

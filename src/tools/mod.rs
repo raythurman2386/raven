@@ -22,7 +22,7 @@ use std::path::Path;
 pub use crate::state::TodoItem;
 pub use definitions::{chat_tool_definitions, plan_tool_definitions, tool_definitions};
 pub use dispatch::dispatch;
-pub use sandbox::{safe_command_re, Sandbox};
+pub use sandbox::{safe_command_re, system_safe_command_re, Sandbox};
 pub use validate::{validate_tool_call, MAX_ARGUMENTS_BYTES};
 
 /// Minimal glob matcher: supports `*` and `?` against the file name.

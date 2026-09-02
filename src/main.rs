@@ -43,7 +43,7 @@ use raven::agent::{run_parallel, Agent, ChatMessage};
 use raven::config::{
     default_max_iter, env_compact_threshold, env_context_window, env_searxng_engines,
     env_searxng_url, load_config_file, load_dotenv_from, load_global_dotenv, needs_onboarding,
-    resolve_mode, resolve_provider, run_onboarding, Mode, Scope, Settings,
+    resolve_mode, resolve_provider, resolve_scope, run_onboarding, Mode, Settings,
 };
 use raven::context::{fetch_context_window, infer_context_window};
 use raven::runner;
@@ -260,6 +260,7 @@ async fn main() -> Result<()> {
         }
     }
 
+    let cli_workspace_arg = cli.workspace.clone();
     let workspace = cli
         .workspace
         .map(|p| p.canonicalize().unwrap_or(p))
@@ -345,17 +346,13 @@ async fn main() -> Result<()> {
     // System scope is opt-in and mutually exclusive with --yolo: a system-admin
     // agent must always confirm state-changing commands. Reject the combination
     // up front with a clear error instead of silently weakening the gate.
-    let scope = if cli.system {
-        if cli.yolo {
-            anyhow::bail!(
-                "--system forces confirmation of state-changing commands and is not \
-                 compatible with --yolo. Run without --yolo, or omit --system."
-            );
-        }
-        Scope::System
-    } else {
-        Scope::Repo
-    };
+    let scope = resolve_scope(
+        cli.system,
+        cli.yolo,
+        cli.acp,
+        cli.parallel.is_some(),
+        cli_workspace_arg.as_deref(),
+    )?;
 
     let temperature = cfg.temperature.unwrap_or(0.2);
 
@@ -381,8 +378,9 @@ async fn main() -> Result<()> {
         no_stream: cli.no_stream || cfg.no_stream.unwrap_or(false),
         // System scope: no workspace test runner, so no enforced-verify gate.
         verify: !scope.is_system() && !cli.no_verify && cfg.verify.unwrap_or(true),
-        // System scope always confirms shell commands (never autonomous).
-        confirm_shell: scope.is_system() || !cli.yolo,
+        // confirm_shell when: repo scope without --yolo (the dev default), or
+        // system scope without --yolo (system + yolo = explicit autonomy).
+        confirm_shell: !cli.yolo,
         theme: cli
             .theme
             .or(cfg.theme)
@@ -396,11 +394,6 @@ async fn main() -> Result<()> {
 
     if cli.acp {
         return raven::acp::run_stdio(settings, cfg_for_acp).await;
-    }
-
-    if scope.is_system() {
-        let task = cli.prompt.unwrap_or_else(|| cli.task.join(" "));
-        return raven::system::run(settings, &task).await;
     }
 
     if let Some(tasks) = cli.parallel {
@@ -435,7 +428,7 @@ async fn main() -> Result<()> {
 
     // ── Session management ─────────────────────────────────────────────
 
-    let store = SessionStore::for_workspace(&settings.workspace)?;
+    let store = raven::session::SessionStore::for_settings(&settings)?;
 
     // --list-sessions: print sessions and exit
     if cli.list_sessions {
@@ -443,7 +436,11 @@ async fn main() -> Result<()> {
         if sessions.is_empty() {
             println!("No saved sessions in this workspace.");
         } else {
-            println!("Sessions in {}:\n", settings.workspace.display());
+            if settings.scope.is_system() {
+                println!("System sessions (~/.raven/system/sessions):\n");
+            } else {
+                println!("Sessions in {}:\n", settings.workspace.display());
+            }
             for m in &sessions {
                 println!("  {}  {}  [{}]", m.updated_at, m.id, m.model);
                 if !m.title.is_empty() {
@@ -537,7 +534,11 @@ async fn headless_run(
     let compact_at = ((settings.context_window - settings.context_window / 8) as f32
         * settings.compact_threshold) as usize;
 
-    println!("Raven (headless)");
+    if settings.scope.is_system() {
+        println!("Raven (system scope)");
+    } else {
+        println!("Raven (headless)");
+    }
     println!("Model:     {}", settings.model);
     println!("Host:      {}", settings.base_url());
     println!(
@@ -552,7 +553,12 @@ async fn headless_run(
         "Context:   {} tokens (compact @ ~{})",
         settings.context_window, compact_at
     );
-    println!("Workspace: {}\n", settings.workspace.display());
+    if settings.scope.is_system() {
+        println!("Scope:     system (sandbox root /)");
+    } else {
+        println!("Workspace: {}", settings.workspace.display());
+    }
+    println!();
 
     let mut session = if let Some(s) = resume_session {
         s
