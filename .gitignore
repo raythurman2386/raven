@@ -21,6 +21,9 @@ Thumbs.db
 .raven/state/
 .ollama-grok/sessions/
 .hermes/
+
+# Scratch directories (throwaway test/eval sandboxes created during dev)
+.tmp-*/
 # Environment / secrets
 .env
 .env.local
@@ -38,4 +41,7 @@ Thumbs.db
 evals/out/
 evals/__pycache__/
 .tmp/
+# Per-workspace memory file (agent-managed, like sessions) — the trailing
+# slash here only matches a directory, so keep both forms.
+.raven/MEMORY.md
 .raven/MEMORY.md/
