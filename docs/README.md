@@ -11,7 +11,7 @@ User and contributor guides for **Raven**. Start with the [root README](../READM
 | [example.config.toml](example.config.toml) | Users | Fully-commented reference config |
 | [zed_connection.md](zed_connection.md) | Users | Connect Raven to Zed as an ACP external agent |
 | [omarchy.md](omarchy.md) | Users (Omarchy Linux) | Default agent + Agents bar panel: wrappers, usage collector, Raven-only setup |
-| [troubleshooting.md](troubleshooting.md) | Users | Common failure modes: Windows `.exe`, stream errors, sandbox denies, SearXNG fallback, ACP |
+| [troubleshooting.md](troubleshooting.md) | Users | Common failure modes: stream errors, sandbox denies, SearXNG fallback, ACP |
 | [tools.md](tools.md) | Users + Contributors | Tool contracts, parameters, sandbox rules, blocked commands |
 | [architecture.md](architecture.md) | Contributors | Design, agent loop, compaction, sandbox, module map |
 | [contributing.md](contributing.md) | Contributors | Build, style, how to add a tool or event |

@@ -443,13 +443,8 @@ fn round_temperature_normalizes_negative_zero() {
 }
 
 #[test]
-#[cfg(not(windows))]
 fn load_global_dotenv_reads_home_env() {
-    // Isolate HOME so a real user ~/.raven/.env doesn't leak in. Unix-only:
-    // `dirs::home_dir()` reads `HOME` on Unix but a different set of vars on
-    // Windows, so the home-dir redirection is not portable (same reason the
-    // global-config merge test is gated). The `load_dotenv` no-overwrite and
-    // HOME-path logic it exercises is covered cross-platform elsewhere.
+    // Isolate HOME so a real user ~/.raven/.env doesn't leak in.
     let original_home = std::env::var_os("HOME");
     // Unset any pre-existing OLLAMA_API_KEY so the no-overwrite loader is the
     // one that sets it (and we can assert n==1). Restored afterwards.

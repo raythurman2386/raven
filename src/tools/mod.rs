@@ -14,8 +14,6 @@ mod git;
 mod patch;
 mod sandbox;
 mod validate;
-#[cfg(windows)]
-mod windows;
 
 use std::path::Path;
 

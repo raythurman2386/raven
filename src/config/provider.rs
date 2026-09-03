@@ -202,7 +202,6 @@ pub fn is_known_provider(cfg: &ConfigFile, name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(not(windows))]
     use crate::config::load_config_file;
     use crate::config::ConfigFile;
 
@@ -457,16 +456,11 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(windows))]
     fn load_config_file_merges_provider_tables_fieldwise() {
         // Workspace only overrides base_url; global api_key_env + default_model
         // must survive (not wiped by a full HashMap replace).
         //
-        // Isolate HOME so a real user global config doesn't leak in. This test
-        // is Unix-only: `dirs::home_dir()` reads `HOME` on Unix but a different
-        // set of vars on Windows, so the home-dir redirection is not portable.
-        // The merge logic itself is covered cross-platform by
-        // `provider_config_merge_overlay_wins_per_field`.
+        // Isolate HOME so a real user global config doesn't leak in.
         let original_home = std::env::var_os("HOME");
         let home = tempfile::tempdir().unwrap();
         std::env::set_var("HOME", home.path());

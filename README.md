@@ -40,12 +40,6 @@ Daily driver is the TUI, usually attached to Zed over ACP (`raven --acp`) so mod
 curl -fsSL https://raw.githubusercontent.com/raythurman2386/raven/master/install.sh | sh
 ```
 
-**Windows (PowerShell):**
-
-```powershell
-irm https://raw.githubusercontent.com/raythurman2386/raven/master/install.ps1 | iex
-```
-
 The script detects your platform, downloads the latest prebuilt binary from GitHub Releases, verifies the SHA-256 checksum against a manifest signed with a pinned Ed25519 key (a bad signature refuses the install), and installs to `~/.cargo/bin`. Build from source with `cargo build --release` or `cargo install --path .`.
 
 **Requirements:** Rust 1.88+ (MSRV) and a model endpoint — local Ollama, [Ollama Cloud](https://ollama.ai/cloud), [OpenRouter](https://openrouter.ai), or any OpenAI-compatible `/v1` API.
@@ -99,7 +93,7 @@ switch providers and models from the editor's model selector. See
 | Small footprint — runs on a Raspberry Pi | Personality / "soul file" |
 | Document extraction (`read_file` → Markdown via `anydoc`: `.docx`, `.pdf`, `.xlsx`, …) | Multi-model routing |
 | Workspace sandbox (path confinement + dangerous-command filter) | GUI / web frontend |
-| OS-level subprocess confinement (Landlock, seccomp, rlimits; Windows Job Object) | Container/VM isolation |
+| OS-level subprocess confinement (Landlock, seccomp, rlimits) | Container/VM isolation |
 | Git worktree isolation (isolated branches per task) | Cloud sync of sessions |
 | Structured plan mode (parse → approve → revise → execute) | Native IDE integration beyond ACP |
 | Skills (`SKILL.md` discovery + `skill_search`/`skill_load`) | Plugin marketplace / auth |
@@ -122,7 +116,7 @@ switch providers and models from the editor's model selector. See
 | [docs/example.config.toml](docs/example.config.toml) | Users | Fully-commented reference config |
 | [docs/zed_connection.md](docs/zed_connection.md) | Users | Connect Raven to Zed via ACP |
 | [docs/omarchy.md](docs/omarchy.md) | Users (Omarchy Linux) | Default agent + Agents bar panel integration |
-| [docs/troubleshooting.md](docs/troubleshooting.md) | Users | Common failure modes (Windows, streams, sandbox, ACP) |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | Users | Common failure modes (streams, sandbox, ACP) |
 | [docs/tools.md](docs/tools.md) | Users + Contributors | Tool contracts, parameters, sandbox rules |
 | [docs/security.md](docs/security.md) | Security reviewers | Threat model, defense layers, platform caveats |
 | [docs/architecture.md](docs/architecture.md) | Contributors | Design, agent loop, compaction, sandbox |
@@ -283,7 +277,7 @@ The `run_shell` tool uses two complementary filters, neither of which is a secur
 
 2. **Allowlist** — a regex that matches known-safe development commands (`cargo`, `git`, `npm`, `ls`, `grep`, etc.). When `confirm_shell` is enabled (the default, non-`--yolo` path), commands matching the allowlist run without a confirmation prompt. Anything outside the allowlist requires explicit user approval. Commands whose first token is allowlisted and contain no shell metacharacters run via **direct exec** (no `sh -c`), removing the shell-injection surface for the common case.
 
-The `--yolo` flag disables confirmation entirely, but the denylist still applies as a last-resort filter. In addition to these filters, confined subprocesses run under OS-level sandboxing: **Landlock** (filesystem confinement) and **seccomp** (network-block) on Linux, plus **resource limits** (CPU / file size / fds) on Linux + macOS, and **Job Object** confinement on Windows. See [`docs/security.md`](docs/security.md) for the full threat model.
+The `--yolo` flag disables confirmation entirely, but the denylist still applies as a last-resort filter. In addition to these filters, confined subprocesses run under OS-level sandboxing: **Landlock** (filesystem confinement) and **seccomp** (network-block) on Linux, plus **resource limits** (CPU / file size / fds) on Linux + macOS. See [`docs/security.md`](docs/security.md) for the full threat model.
 
 ---
 
@@ -325,8 +319,8 @@ cat evals/out/<run-id>.md
 
 See `docs/testing.md` for coverage and mutation testing details.
 
-**Troubleshooting:** common failure modes (Windows `.exe`, stream errors,
-sandbox denies, SearXNG fallback, ACP) are covered in
+**Troubleshooting:** common failure modes (stream errors, sandbox denies,
+SearXNG fallback, ACP) are covered in
 [`docs/troubleshooting.md`](docs/troubleshooting.md).
 
 ---

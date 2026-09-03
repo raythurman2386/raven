@@ -525,8 +525,17 @@ impl Agent {
 
     /// Attach a plan to this agent so step statuses are updated during
     /// execution and emitted as [`AgentEvent::PlanProgress`] events.
+    ///
+    /// Only used once the plan is APPROVED, so the agent must behave as an
+    /// executor: switch the settings to Agent mode so the system prompt's
+    /// mode section ("you have full access...") matches the full toolset the
+    /// executor advertises. Without this, the model is told it "CANNOT edit
+    /// files or run shell commands" while holding write tools mid-execution
+    /// — the mode-confusion failure weak models exhibit.
     pub fn with_plan(mut self, plan: Plan) -> Self {
         self.plan = Some(plan);
+        self.settings.mode = Mode::Agent;
+        self.messages[0] = build_system_message(&self.settings);
         self
     }
 
@@ -562,7 +571,7 @@ impl Agent {
     /// read-only subset (a fresh filtered array) during a plan-proposal turn
     /// so the model can gather context but physically cannot write files or
     /// run shell.
-    fn tools_value(&self) -> serde_json::Value {
+    pub(crate) fn tools_value(&self) -> serde_json::Value {
         let tools = if self.plan_only {
             match self.settings.mode {
                 Mode::Chat => crate::tools::chat_tool_definitions(),

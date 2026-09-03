@@ -38,27 +38,6 @@ fn safe_resolve_rejects_absolute_outside() {
 }
 
 #[test]
-#[cfg(windows)]
-fn write_file_rejects_windows_absolute_outside() {
-    let sb = sandbox();
-    let probe = r"C:\Windows\Temp\raven_eval_win_escape.txt";
-    let _ = std::fs::remove_file(probe);
-    let res = sb.write_file(probe, "pwned");
-    let msg = match res {
-        Ok(s) => s,
-        Err(e) => e.to_string(),
-    };
-    assert!(
-        msg.contains("outside") || msg.contains("Error") || msg.contains("relative"),
-        "absolute Windows path must be rejected: {msg}"
-    );
-    assert!(
-        !std::path::Path::new(probe).exists(),
-        "file tool must not create {probe}"
-    );
-}
-
-#[test]
 fn safe_resolve_blocks_symlink_escape_write() {
     let tmp = tempfile::tempdir().unwrap();
     #[cfg(unix)]

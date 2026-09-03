@@ -61,7 +61,9 @@ mod theme;
 
 pub use theme::Theme;
 
-use blocks::{AssistantBlock, BlockKind, ErrorBlock, SystemBlock, ToolBlock, UserBlock};
+use blocks::{
+    AssistantBlock, BlockKind, ErrorBlock, PermissionBlock, SystemBlock, ToolBlock, UserBlock,
+};
 use completion::{apply as apply_completion, candidates_for, Completion};
 use render::{
     message_to_block, prewrap_visible, render_assistant_lines, render_blocks, total_rows,
@@ -281,6 +283,9 @@ struct TuiState {
     turn_tool_count: usize,
     pending_question: Option<tokio::sync::oneshot::Sender<String>>,
     pending_question_text: Option<String>,
+    /// The shell command awaiting a y/n permission decision, when the current
+    /// prompt is a `confirm_shell` gate (rather than a free-form ask_user).
+    pending_permission: Option<String>,
     session_messages: Vec<ChatMessage>,
     task_handle: Option<tokio::task::JoinHandle<anyhow::Result<Vec<ChatMessage>>>>,
     /// Receiver for the in-flight turn only. Replaced on every send so a
@@ -297,6 +302,15 @@ struct TuiState {
     last_click: Option<(u64, DisplayPos)>,
     copy_status: Option<(u64, String)>,
     theme: Theme,
+    /// Set when the user dismissed the completion popup with Esc. While set,
+    /// further typing does not reopen it; deleting back below the dismissal
+    /// point does. `None` means the popup may open normally.
+    completion_dismissed_at: Option<usize>,
+    /// When the first Ctrl+C / idle Esc was pressed, to require a second
+    /// press within [`QUIT_CONFIRM_WINDOW`] to actually quit (Grok
+    /// Build-style): an accidental single press interrupts or shows a hint
+    /// instead of killing the session.
+    quit_armed: Option<std::time::Instant>,
     /// Most-recently-submitted prompts, oldest first. Bounded to HISTORY_MAX.
     prompt_history: Vec<String>,
     /// Recall cursor into `prompt_history`; `== prompt_history.len()` means
@@ -314,23 +328,23 @@ impl TuiState {
         Self {
             blocks: vec![
                 BlockKind::System(SystemBlock::new(format!(
-                    "{app_name} · {} · {}",
+                    "{app_name} v{} · {} · {}",
+                    env!("CARGO_PKG_VERSION"),
                     settings.model,
-                    settings.base_url()
+                    settings.provider.name
                 ))),
-                BlockKind::System(SystemBlock::new(workspace_label(settings))),
                 BlockKind::System(SystemBlock::new(format!(
-                    "context {} · compact ~{}",
+                    "{} · context {} · compact ~{}",
+                    workspace_label(settings),
                     fmt_tokens(settings.context_window as u64),
                     fmt_tokens(compact_at as u64),
                 ))),
                 BlockKind::System(SystemBlock::new(String::new())),
                 BlockKind::System(SystemBlock::new(if settings.mode == Mode::Chat {
-                    "chat is read-only · Shift+Tab to agent to edit · /help for commands"
+                    "chat is read-only · shift+tab to switch to agent mode · /help for commands"
                         .to_string()
                 } else {
-                    "try: describe a task, e.g. \"add auth middleware\" · /help for commands"
-                        .to_string()
+                    "describe a task to get started · /help · esc interrupts · y/n answers permission prompts".to_string()
                 })),
             ],
             log_dirty: true,
@@ -366,6 +380,7 @@ impl TuiState {
             turn_tool_count: 0,
             pending_question: None,
             pending_question_text: None,
+            pending_permission: None,
             session_messages: Vec::new(),
             task_handle: None,
             event_rx: None,
@@ -375,6 +390,8 @@ impl TuiState {
             last_click: None,
             copy_status: None,
             theme: Theme::by_name(&settings.theme).unwrap_or_else(Theme::default_theme),
+            completion_dismissed_at: None,
+            quit_armed: None,
             prompt_history: Vec::new(),
             hist_idx: 0,
             last_turn: None,
@@ -428,6 +445,29 @@ impl TuiState {
         self.log_dirty = true;
     }
 
+    /// Push a permission prompt block for a confirm_shell gate.
+    fn push_permission_prompt(&mut self, command: &str) {
+        self.blocks.push(BlockKind::Permission(PermissionBlock::new(
+            command.to_string(),
+        )));
+        self.log_dirty = true;
+    }
+
+    /// Recompute the completion popup for the current input, honoring a
+    /// prior Esc dismissal: once dismissed at N chars, the popup stays closed
+    /// while the input is at or past N chars and only reopens after the user
+    /// deletes back below the dismissal point.
+    fn recompute_completion(&mut self, arg_candidates: &dyn Fn(&str) -> Vec<String>) {
+        let len = self.input.chars().count();
+        let dismissed = matches!(self.completion_dismissed_at, Some(at) if len >= at);
+        if dismissed {
+            self.completion = None;
+        } else {
+            self.completion_dismissed_at = None;
+            self.completion = candidates_for(&self.input, arg_candidates);
+        }
+    }
+
     /// Recompute the cached total row count when the log content or viewport
     /// width changes. Call this after any log re-render or terminal resize.
     fn refresh_log_rows(&mut self, width: usize) {
@@ -458,14 +498,6 @@ impl Command for EnableMouseCaptureLite {
             "\x1b[?1006h",
         ))
     }
-
-    // Required on Windows by crossterm's Command trait. Prefer ANSI (default
-    // `is_ansi_code_supported`) on modern consoles; legacy WinAPI has no
-    // equivalent of these selective DECSET modes, so this is a no-op there.
-    #[cfg(windows)]
-    fn execute_winapi(&self) -> std::io::Result<()> {
-        Ok(())
-    }
 }
 
 /// Disable xterm alternate-scroll (`?1007`). When enabled, the wheel is
@@ -477,13 +509,6 @@ struct DisableAlternateScroll;
 impl Command for DisableAlternateScroll {
     fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
         f.write_str("\x1b[?1007l")
-    }
-
-    // Alternate-scroll is an xterm/DEC private mode; legacy WinAPI consoles
-    // have nothing to toggle. ANSI path handles Windows Terminal / VT hosts.
-    #[cfg(windows)]
-    fn execute_winapi(&self) -> std::io::Result<()> {
-        Ok(())
     }
 }
 
@@ -604,15 +629,19 @@ pub async fn run_tui(
         }
 
         // Draw when dirty, when animating (running / live tool / ask_user /
-        // copy toast), or on the throttled interval while a turn is in flight.
-        // Idle with nothing to animate must NOT spin a full redraw every 40ms.
+        // copy toast / quit-confirm countdown), or on the throttled interval
+        // while a turn is in flight. Idle with nothing to animate must NOT
+        // spin a full redraw every 40ms.
         let animating = state.running
             || state.live_tool.is_some()
             || state.pending_question.is_some()
             || state
                 .copy_status
                 .as_ref()
-                .is_some_and(|(start, _)| state.tick.wrapping_sub(*start) < 50);
+                .is_some_and(|(start, _)| state.tick.wrapping_sub(*start) < 50)
+            || state
+                .quit_armed
+                .is_some_and(|t| t.elapsed() <= QUIT_CONFIRM_WINDOW);
         let force_draw = dirty || animating;
         if force_draw || (state.running && last_draw.elapsed() >= DRAW_INTERVAL) {
             if animating {
@@ -628,15 +657,47 @@ pub async fn run_tui(
         // Input + mouse. Drain every pending event each tick so a flood of
         // motion/scroll reports cannot starve wheel or key handling (the old
         // one-event-per-poll path did exactly that under mouse tracking).
+        // The zero-timeout poll at the TOP of the drain loop is what keeps
+        // handler `continue`s safe: they re-check for pending input instead
+        // of falling back into a blocking `event::read()`. Reading without
+        // that guard parked the whole UI (no draws, no agent-event drains)
+        // until the next keypress — the "answer a permission prompt and the
+        // UI freezes until you scroll" bug.
         if event::poll(std::time::Duration::from_millis(40))? {
             loop {
+                if !event::poll(std::time::Duration::from_millis(0))? {
+                    break;
+                }
                 match event::read()? {
                     Event::Key(key)
                         if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat =>
                     {
                         match key.code {
                             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                                break 'ui
+                                // Grok Build-style Ctrl+C: while a turn runs,
+                                // the first press interrupts it (same as Esc);
+                                // while idle, quit requires a second press
+                                // within QUIT_CONFIRM_WINDOW so an accidental
+                                // hit doesn't kill the session.
+                                if state.running {
+                                    let had_question = state.pending_question.is_some();
+                                    interrupt_running_turn(&mut state, &store, &mut session);
+                                    state.push_system(if had_question {
+                                        "✗ denied (ctrl+c)"
+                                    } else {
+                                        "⏹ interrupted (ctrl+c)"
+                                    });
+                                    state.log_dirty = true;
+                                } else if state
+                                    .quit_armed
+                                    .is_some_and(|t| t.elapsed() <= QUIT_CONFIRM_WINDOW)
+                                {
+                                    break 'ui;
+                                } else {
+                                    state.quit_armed = Some(std::time::Instant::now());
+                                    state.push_system("press ctrl+c again to quit");
+                                    state.log_dirty = true;
+                                }
                             }
                             KeyCode::BackTab => {
                                 // Only when idle: completion prev, else mode cycle.
@@ -648,6 +709,13 @@ pub async fn run_tui(
                                         state.input_dirty = true;
                                     } else {
                                         let m = state.cycle_mode();
+                                        // `settings.mode` is what the agent
+                                        // builds the system prompt's mode
+                                        // section from; keeping it in lockstep
+                                        // with the displayed mode prevents the
+                                        // "model thinks it's in chat/agent
+                                        // when it isn't" drift after a cycle.
+                                        settings.mode = m;
                                         state.push_system(format!("mode: {}", m.label()));
                                         state.log_dirty = true;
                                     }
@@ -660,6 +728,7 @@ pub async fn run_tui(
                                     &store,
                                     &settings,
                                     app_name,
+                                    compact_at,
                                 )?;
                             }
                             KeyCode::Up => {
@@ -813,6 +882,27 @@ pub async fn run_tui(
                                 }
                             }
                             KeyCode::Char(c) => {
+                                // Permission gates: y/n answer in one
+                                // keystroke (no Enter needed).
+                                if state.pending_permission.is_some()
+                                    && state.input.is_empty()
+                                    && matches!(c, 'y' | 'Y' | 'n' | 'N')
+                                {
+                                    if let Some(reply) = state.pending_question.take() {
+                                        let allowed = permission_allowed_answer(&c.to_string());
+                                        let _ =
+                                            reply.send(if allowed { "y" } else { "n" }.to_string());
+                                        state.pending_permission = None;
+                                        state.status = "running".into();
+                                        state.push_system(if allowed {
+                                            "✓ allowed"
+                                        } else {
+                                            "✗ denied"
+                                        });
+                                        state.log_dirty = true;
+                                    }
+                                    continue;
+                                }
                                 // Typing stays live while a turn runs: the text
                                 // becomes a queued steer on Enter (see the Enter
                                 // handler) instead of being locked out.
@@ -824,7 +914,7 @@ pub async fn run_tui(
                                     state.input_dirty = true;
                                 }
                                 state.hist_idx = state.prompt_history.len();
-                                state.completion = candidates_for(&state.input, &arg_candidates);
+                                state.recompute_completion(&arg_candidates);
                             }
                             KeyCode::Backspace => {
                                 if state.pending_question.is_some() || !state.input.is_empty() {
@@ -838,7 +928,7 @@ pub async fn run_tui(
                                         state.input_dirty = true;
                                     }
                                 }
-                                state.completion = candidates_for(&state.input, &arg_candidates);
+                                state.recompute_completion(&arg_candidates);
                             }
                             KeyCode::Enter => {
                                 // Smart submit: when the completion popup is
@@ -869,8 +959,11 @@ pub async fn run_tui(
                                     // Span already holds a complete candidate:
                                     // fall through and submit the input.
                                 }
-                                if state.input.trim().is_empty() && state.pending_question.is_none()
-                                {
+                                // Permission gates: bare Enter = allow (y).
+                                // Free-form ask_user and normal submits still
+                                // require non-empty input.
+                                let is_permission = state.pending_permission.is_some();
+                                if state.input.trim().is_empty() && !is_permission {
                                     continue;
                                 }
                                 let text = state.input.trim().to_string();
@@ -898,30 +991,36 @@ pub async fn run_tui(
                                 }
 
                                 if let Some(reply) = state.pending_question.take() {
-                                    // Empty input while a question is pending
-                                    // means "no": the agent sees a denial and
-                                    // moves on, matching the headless runner
-                                    // (empty stdin answer = not confirmed).
-                                    let answer = if text.is_empty() {
+                                    // Permission gates: Enter on empty input
+                                    // (or a bare y/yes) allows; n or anything
+                                    // else denies. The gate's allowlist parse
+                                    // only honors y/yes, so pass the raw text.
+                                    // Free-form ask_user: an empty submit means
+                                    // "no" (matching the headless runner), and
+                                    // the answer is surfaced immediately so the
+                                    // screen shows the decision at once.
+                                    let answer = if state.pending_permission.is_some() {
+                                        let allowed = permission_allowed_answer(&text);
+                                        state.push_system(if allowed {
+                                            "✓ allowed"
+                                        } else {
+                                            "✗ denied"
+                                        });
+                                        if allowed {
+                                            "y".to_string()
+                                        } else {
+                                            "n".to_string()
+                                        }
+                                    } else if text.is_empty() {
                                         "n".to_string()
                                     } else {
                                         text.clone()
                                     };
-                                    let _ = reply.send(answer);
+                                    let _ = reply.send(answer.clone());
                                     state.pending_question_text = None;
+                                    state.pending_permission = None;
                                     state.status = "running".into();
-                                    // Surface the acceptance immediately: the
-                                    // next visible event (model response) can
-                                    // be many seconds away, and without this
-                                    // the screen shows no change at all.
-                                    state.push_system(format!(
-                                        "→ answered: {}",
-                                        if text.is_empty() {
-                                            "n".to_string()
-                                        } else {
-                                            text.clone()
-                                        }
-                                    ));
+                                    state.push_system(format!("→ answered: {answer}"));
                                     state.log_dirty = true;
                                     continue;
                                 }
@@ -971,26 +1070,49 @@ pub async fn run_tui(
                                 }
                             }
                             KeyCode::Esc => {
-                                // Layered dismiss: completion → selection → ask_user → quit.
-                                if state.completion.take().is_some()
-                                    || state.selection.take().is_some()
-                                {
+                                // Layered dismiss: completion → selection →
+                                // pending answer → interrupt a running turn →
+                                // double-press quit. Esc is the primary
+                                // interrupt key (Grok Build-style); Enter while
+                                // running steers instead.
+                                if state.completion.take().is_some() {
+                                    state.completion_dismissed_at =
+                                        Some(state.input.chars().count());
+                                    state.input_dirty = true;
+                                } else if state.selection.take().is_some() {
                                     state.input_dirty = true;
                                 } else if let Some(reply) = state.pending_question.take() {
-                                    // Dismissing a question counts as a denial:
-                                    // send it so the agent proceeds instead of
-                                    // seeing a dropped channel.
+                                    let was_permission = state.pending_permission.is_some();
+                                    // Dismissing counts as a denial so the agent
+                                    // proceeds instead of waiting on a dropped
+                                    // channel (headless parity).
                                     let _ = reply.send("n".to_string());
                                     state.pending_question_text = None;
+                                    state.pending_permission = None;
                                     state.status = if state.running {
                                         "running".into()
                                     } else {
                                         "ready".into()
                                     };
-                                    state.push_system("question dismissed — command denied");
+                                    state.push_system(if was_permission {
+                                        "✗ denied"
+                                    } else {
+                                        "question dismissed"
+                                    });
                                     state.log_dirty = true;
-                                } else {
+                                } else if state.running {
+                                    interrupt_running_turn(&mut state, &store, &mut session);
+                                    state.push_system("⏹ interrupted (esc)");
+                                    state.log_dirty = true;
+                                } else if state
+                                    .quit_armed
+                                    .is_some_and(|t| t.elapsed() <= QUIT_CONFIRM_WINDOW)
+                                {
                                     break 'ui;
+                                } else {
+                                    state.quit_armed = Some(std::time::Instant::now());
+                                    state.push_system("press esc again to quit");
+                                    state.log_dirty = true;
                                 }
                             }
                             _ => {}
@@ -1017,7 +1139,7 @@ pub async fn run_tui(
                                 state.cursor = at + pasted.len();
                                 state.input_dirty = true;
                                 state.hist_idx = state.prompt_history.len();
-                                state.completion = candidates_for(&state.input, &arg_candidates);
+                                state.recompute_completion(&arg_candidates);
                             }
                         }
                     }
@@ -1038,9 +1160,6 @@ pub async fn run_tui(
                         handle_mouse_event(&m, &mut state, size, log_rect, &store, &mut session);
                     }
                     _ => {}
-                }
-                if !event::poll(std::time::Duration::from_millis(0))? {
-                    break;
                 }
             }
         }
@@ -1173,7 +1292,17 @@ pub async fn run_tui(
                     state.log_dirty = true;
                     state.pending_question = Some(reply);
                     state.pending_question_text = Some(question);
+                    state.pending_permission = None;
                     state.status = "awaiting answer".into();
+                    state.input.clear();
+                    state.scroll = 0;
+                }
+                AgentEvent::AskPermission { command, reply } => {
+                    state.push_permission_prompt(&command);
+                    state.pending_question = Some(reply);
+                    state.pending_question_text = None;
+                    state.pending_permission = Some(command);
+                    state.status = "permission required".into();
                     state.input.clear();
                     state.scroll = 0;
                 }
@@ -1181,6 +1310,7 @@ pub async fn run_tui(
                     // Drop any unanswered ask_user channel (agent is finished).
                     state.pending_question = None;
                     state.pending_question_text = None;
+                    state.pending_permission = None;
                     if let Some(handle) = state.task_handle.take() {
                         // Prefer try_join-style: the agent task should already
                         // be finished when Done is emitted; await is then cheap.
@@ -1257,6 +1387,7 @@ pub async fn run_tui(
                 AgentEvent::Error(e) => {
                     state.pending_question = None;
                     state.pending_question_text = None;
+                    state.pending_permission = None;
                     abort_current_turn(&mut state);
                     state.push_error(e);
                     state.plan_preview.clear();
@@ -1445,16 +1576,18 @@ fn format_tool_args(args: &serde_json::Value) -> String {
 
 /// Context-sensitive keyhint footer text, shown in the bottom row.
 fn keyhint(state: &TuiState) -> String {
-    if state.pending_question_text.is_some() {
+    if state.pending_permission.is_some() {
+        "y allow · n deny · enter allow · esc deny".to_string()
+    } else if state.pending_question_text.is_some() {
         "enter answer · esc dismiss".to_string()
     } else if state.plan_pending {
         "yes approve · type revise · esc dismiss".to_string()
     } else if state.running {
-        "enter interrupt · ctrl+c quit".to_string()
+        "esc interrupt · enter steer · ctrl+c interrupt".to_string()
     } else if state.mode == Mode::Chat {
-        "chat is read-only · shift+tab agent to edit · enter send · /help · ctrl+c quit".to_string()
+        "chat is read-only · shift+tab agent to edit · enter send · /help".to_string()
     } else {
-        "enter send · /help · /model · /new · shift+tab mode · ctrl+c quit · up/down recall · wheel/pgup scroll · home/end jump · ↑/↓ completion when popup open".to_string()
+        "enter send · /help · /model · /new · shift+tab mode · esc esc quit · up/down recall · wheel/pgup scroll".to_string()
     }
 }
 
@@ -1526,8 +1659,8 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &mut TuiSt
 
     let chunks = compute_layout(f.area(), state);
 
-    // Top bar — product · model · context
-    let top = Line::from(vec![
+    // Top bar — product · model · provider | context meter (right-aligned)
+    let left = Line::from(vec![
         Span::styled(
             format!(" {app_name} "),
             Style::default()
@@ -1547,16 +1680,6 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &mut TuiSt
         ),
         Span::styled("  ·  ", Style::default().fg(theme.dim)),
         Span::styled(
-            format!(
-                "{}/{} ({:.0}%)",
-                fmt_tokens(state.cached_est_tokens as u64),
-                fmt_tokens(settings.context_window as u64),
-                pct
-            ),
-            Style::default().fg(usage_color(pct, theme)),
-        ),
-        Span::styled("  ·  ", Style::default().fg(theme.dim)),
-        Span::styled(
             state.mode.label(),
             Style::default().fg(match state.mode {
                 Mode::Plan => theme.plan,
@@ -1565,6 +1688,47 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &mut TuiSt
             }),
         ),
     ]);
+    let meter_cells = 20usize;
+    let filled = ((pct / 100.0) * meter_cells as f64).round() as usize;
+    let meter = format!(
+        "{}{}",
+        "━".repeat(filled.min(meter_cells)),
+        "─".repeat(meter_cells.saturating_sub(filled)),
+    );
+    let right = Line::from(vec![
+        Span::styled(
+            format!(
+                " {}/{} ",
+                fmt_tokens(state.cached_est_tokens as u64),
+                fmt_tokens(settings.context_window as u64),
+            ),
+            Style::default().fg(usage_color(pct, theme)),
+        ),
+        Span::styled(meter, Style::default().fg(usage_color(pct, theme))),
+        Span::raw(" "),
+    ]);
+    let span_width = |l: &Line| {
+        l.spans
+            .iter()
+            .map(|s| s.content.chars().count())
+            .sum::<usize>()
+    };
+    let left_w = span_width(&left);
+    let right_w = span_width(&right);
+    let avail = chunks[0].width as usize;
+    let pad = avail.saturating_sub(left_w + right_w);
+    // Only right-align the meter when both sides fit; on a narrow terminal
+    // the meter is dropped rather than truncating the model/mode mid-word.
+    let spans = if left_w + right_w <= avail {
+        left.spans
+            .into_iter()
+            .chain(std::iter::once(Span::raw(" ".repeat(pad))))
+            .chain(right.spans)
+            .collect::<Vec<_>>()
+    } else {
+        left.spans
+    };
+    let top = Line::from(spans);
     f.render_widget(Paragraph::new(top), chunks[0]);
 
     // Log
@@ -1669,7 +1833,7 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &mut TuiSt
             Style::default().fg(theme.plan),
         ));
     }
-    if state.pending_question_text.is_some() {
+    if state.pending_question_text.is_some() || state.pending_permission.is_some() {
         status_line.push(Span::styled(
             format!(" {}", waiting_diamond(state.tick)),
             Style::default().fg(theme.plan),
@@ -1694,6 +1858,24 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &mut TuiSt
         }
         status_line.push(Span::raw(" "));
         status_line.push(stop_span(theme));
+    } else if state
+        .quit_armed
+        .is_some_and(|t| t.elapsed() <= QUIT_CONFIRM_WINDOW)
+    {
+        let status_row_w = chunks[3].width;
+        let hint = " ctrl+c/esc again to quit ";
+        let hint_w = hint.chars().count() as u16;
+        let line_w: usize = status_line.iter().map(|s| s.content.chars().count()).sum();
+        let pad = status_row_w.saturating_sub(line_w as u16 + hint_w + 1);
+        if pad > 0 {
+            status_line.push(Span::raw(" ".repeat(pad as usize)));
+        }
+        status_line.push(Span::styled(
+            hint.to_string(),
+            Style::default()
+                .fg(theme.error)
+                .add_modifier(Modifier::BOLD),
+        ));
     }
 
     f.render_widget(
@@ -1741,14 +1923,18 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &mut TuiSt
     }
 
     // Input
-    let title = if let Some(q) = &state.pending_question_text {
+    let title = if state.pending_permission.is_some() {
+        " allow shell? ".to_string()
+    } else if let Some(q) = &state.pending_question_text {
         format!(" answer: {q} ")
     } else if state.plan_pending {
         " approve / revise ".into()
     } else {
         " task ".into()
     };
-    let prompt = if state.pending_question_text.is_some() {
+    let prompt = if state.pending_permission.is_some() {
+        "▸ y/n "
+    } else if state.pending_question_text.is_some() {
         "▸ "
     } else if state.plan_pending {
         "? "
@@ -1757,7 +1943,10 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &mut TuiSt
     };
     let prompt_style = Style::default()
         .fg(
-            if state.pending_question_text.is_some() || state.plan_pending {
+            if state.pending_question_text.is_some()
+                || state.plan_pending
+                || state.pending_permission.is_some()
+            {
                 theme.plan
             } else {
                 theme.accent
@@ -1786,6 +1975,8 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &mut TuiSt
             .borders(Borders::ALL)
             .border_style(Style::default().fg(if state.plan_pending {
                 theme.plan
+            } else if state.pending_permission.is_some() {
+                theme.tool
             } else {
                 theme.border
             }))
@@ -2046,21 +2237,9 @@ fn handle_mouse_event(
                 && m.row == status_y
                 && m.column >= size.width.saturating_sub(STOP_BTN.len() as u16)
             {
-                if state.task_handle.is_some() {
-                    abort_current_turn(state);
-                    let _ = store.save_all_messages(session, &state.session_messages);
-                    let _ = store.update_summary(session, None);
-                    state.push_system("⏹ stopped (click)");
-                    state.log_dirty = true;
-                }
-                state.pending_question = None;
-                state.pending_question_text = None;
-                state.running = false;
-                state.agent_state = AgentState::Idle;
-                state.status = "ready".into();
-                state.assistant_text.clear();
-                state.live_tool = None;
-                state.turn_tool_count = 0;
+                interrupt_running_turn(state, store, session);
+                state.push_system("⏹ stopped (click)");
+                state.log_dirty = true;
                 return;
             }
 
@@ -2183,7 +2362,8 @@ fn reset_session(
     session: &mut Session,
     store: &SessionStore,
     settings: &Settings,
-    app_name: &str,
+    _app_name: &str,
+    compact_at: usize,
 ) -> Result<()> {
     abort_current_turn(state);
     let _ = store.save_all_messages(session, &state.session_messages);
@@ -2193,13 +2373,21 @@ fn reset_session(
     state.blocks.clear();
     state.pending_question = None;
     state.pending_question_text = None;
+    state.pending_permission = None;
     state.push_system(format!(
-        "{app_name} · {} · {}",
+        "raven v{} · {} · {}",
+        env!("CARGO_PKG_VERSION"),
         settings.model,
-        settings.base_url()
+        settings.provider.name
     ));
-    state.push_system(workspace_label(settings));
+    state.push_system(format!(
+        "{} · context {} · compact ~{}",
+        workspace_label(settings),
+        fmt_tokens(settings.context_window as u64),
+        fmt_tokens(compact_at as u64),
+    ));
     state.push_system(String::new());
+    state.push_system("describe a task to get started · /help for commands".to_string());
     state.log_dirty = true;
     state.plan_preview.clear();
     state.plan_pending = false;
@@ -2211,10 +2399,12 @@ fn reset_session(
     state.input.clear();
     state.cursor = 0;
     state.completion = None;
+    state.completion_dismissed_at = None;
     state.selection = None;
     state.live_tool = None;
     state.turn_tool_count = 0;
     state.last_turn = None;
+    state.pending_late_steer = None;
     state.scroll = 0;
     state.auto_scroll = true;
     Ok(())
@@ -2232,8 +2422,12 @@ fn start_task(
     state.push_user(text.to_string());
     state.log_dirty = true;
 
+    // `settings.mode` is canonical: the agent builds both the system
+    // prompt's mode section and the advertised toolset from it. `state.mode`
+    // is kept in lockstep by the Shift+Tab handler.
+    state.mode = settings.mode;
     let mut prompt = text.to_string();
-    if state.mode.plans_first() {
+    if settings.mode.plans_first() {
         prompt.push_str(
             "\n\nFirst propose a concise step-by-step plan. You may use read-only tools (list_dir, read_file, grep, search_code, git_status, git_diff, git_log) to inspect the workspace, but you CANNOT edit files or run shell until the plan is approved. Just list the numbered steps.",
         );
@@ -2263,7 +2457,7 @@ fn start_task(
     // workspace walk + sandboxed git; a parent folder of many repos used
     // to freeze Enter→paint. The walk is now cached/capped, and this
     // construction must not block the next frame.
-    let read_only = state.mode.read_only();
+    let read_only = settings.mode.read_only();
     // Remember this turn so `/retry` can re-fire it after a failure.
     state.last_turn = Some((preload.clone(), prompt.clone(), read_only));
     begin_agent_turn(state, settings.clone(), preload, prompt, move |agent| {
@@ -2341,6 +2535,38 @@ fn abort_current_turn(state: &mut TuiState) {
     if let Some(handle) = state.title_handle.take() {
         handle.abort();
     }
+}
+
+/// Classify a typed answer at a permission gate. Bare Enter (empty) allows;
+/// `y`/`yes` (any case) allows; anything else denies.
+fn permission_allowed_answer(text: &str) -> bool {
+    let t = text.trim();
+    t.is_empty() || t.eq_ignore_ascii_case("y") || t.eq_ignore_ascii_case("yes")
+}
+
+/// How long a first Esc / Ctrl+C "press again to quit" hint stays armed.
+const QUIT_CONFIRM_WINDOW: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Interrupt the running turn: abort the agent task, persist the partial
+/// session, and reset the transient turn state (shared by Esc, Ctrl+C, the
+/// [stop] button, and /stop).
+fn interrupt_running_turn(state: &mut TuiState, store: &SessionStore, session: &mut Session) {
+    if state.task_handle.is_some() {
+        abort_current_turn(state);
+        let _ = store.save_all_messages(session, &state.session_messages);
+        let _ = store.update_summary(session, None);
+    }
+    // Drop ask_user oneshot so the agent (if still winding down) sees cancel.
+    state.pending_question = None;
+    state.pending_question_text = None;
+    state.pending_permission = None;
+    state.running = false;
+    state.agent_state = AgentState::Idle;
+    state.status = "ready".into();
+    state.assistant_text.clear();
+    state.live_tool = None;
+    state.turn_tool_count = 0;
+    state.input_dirty = true;
 }
 
 /// Bind a fresh channel to this turn and spawn the agent off the TUI thread.

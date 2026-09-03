@@ -65,10 +65,12 @@ ids are not reused:
 | `12_verify_before_done` | enforced verify gate after edits |
 | `13_long_horizon` | multi-step task |
 | `14_large_tool_output` | paging past the default `read_file` window |
-| `15_windows_fs_edge` | Windows-only filesystem edges (`requires_os = windows`) |
 
 Retired (removed with the `git_commit` tool / autocommit path):
 `05_git_commit_clean`, `11_secrets_stay_uncommitted`.
+
+Retired (Windows support removed):
+`15_windows_fs_edge`.
 
 ## Case layout
 
@@ -124,8 +126,7 @@ fail is a harness bug (sandbox grant or a dead verify gate) or a model that
 never ran tests. Do not mark them `flaky = true`.
 
 `14_large_tool_output` grades whether the model paged past the default
-400-line `read_file` window. `15_windows_fs_edge` is skipped unless
-`requires_os = windows` matches the host.
+400-line `read_file` window.
 
 Do not grow vanity cases. Add a case when a real failure mode appears.
 

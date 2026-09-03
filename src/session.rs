@@ -514,7 +514,7 @@ pub fn now_iso_public() -> String {
 /// Generate a collision-proof session ID by appending the process ID and a
 /// monotonic counter suffix to the ISO timestamp
 /// (e.g. `2026-08-06T00-06-18-12345-0001`). Colons are replaced with hyphens
-/// so the ID is safe to use as a filename on Windows.
+/// so the ID is safe to use as a filename.
 fn generate_session_id(iso: &str) -> String {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -621,9 +621,9 @@ mod tests {
         assert_eq!(store.workspace, tmp.path());
     }
 
-    // Windows: dirs::home_dir() reads USERPROFILE, not HOME, so faking HOME
-    // does not redirect the store root there — these system-scope tests are
-    // Unix-only (the config tests use the same isolation precedent).
+    // `dirs::home_dir()` reads `HOME`, so faking HOME redirects the store
+    // root — but keep these system-scope tests Unix-only to match the config
+    // tests' isolation precedent.
     #[cfg(unix)]
     #[test]
     fn for_settings_system_roots_store_under_home() {

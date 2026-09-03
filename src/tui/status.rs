@@ -67,6 +67,7 @@ pub fn state_label(
         _ if status.starts_with("tool:") || status.starts_with("⇢") => ("tool", theme.tool),
         _ if status.starts_with("thinking") => ("thinking", theme.dim),
         _ if status.starts_with("awaiting answer") => ("awaiting answer", theme.plan),
+        _ if status.starts_with("permission") => ("permission", theme.tool),
         _ if status.starts_with("awaiting plan") => ("awaiting approval", theme.plan),
         _ if running || status.starts_with("running") => ("running", theme.accent),
         _ => ("ready", theme.user),

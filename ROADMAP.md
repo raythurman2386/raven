@@ -6,7 +6,7 @@ monorepo). Design decisions are grounded in `xai-org/grok-build` source and in
 cross-agent research (Aider/Goose/Cline/Continue).
 
 **Guiding principles:**
-- Zero dead code, zero `unreachable!()`, comprehensive offline tests. `unsafe` is allowed only where the platform requires it (Linux `pre_exec`, Windows Job Object FFI), each block carrying a sound SAFETY comment.
+- Zero dead code, zero `unreachable!()`, comprehensive offline tests. `unsafe` is allowed only where the platform requires it (Linux `pre_exec`), each block carrying a sound SAFETY comment.
 - Clean full transitions — never leave fallback flags or conditional cruft behind.
 - Focused conventional commits (`feat:`/`fix:`/`perf:`/`chore:`), one per logical change.
 - Every change: `cargo test` → `cargo clippy --all-targets -- -D warnings` → `cargo fmt`, then `cargo install --path . --force`.
@@ -27,7 +27,7 @@ cross-agent research (Aider/Goose/Cline/Continue).
 
 The mini-harness rework against Grok Build is complete. All phases below are
 shipped and verified by `cargo test` (593 offline tests), clippy `-D warnings`,
-fmt, and `cargo check --target x86_64-pc-windows-gnu`.
+fmt.
 
 ### Agent loop & context
 - **Streaming agent loop** — OpenAI-compatible `/v1/chat/completions`, incremental SSE parsing (UTF-8-safe across TCP chunks), non-streaming fallback (`--no-stream`).
@@ -56,7 +56,7 @@ fmt, and `cargo check --target x86_64-pc-windows-gnu`.
 - **Path confinement** — `openat2`/`RESOLVE_BENEATH` on Linux (atomic, no TOCTOU); lexical `..` rejection + canonicalization elsewhere.
 - **Landlock filesystem confinement** (Linux) — RW under workspace, RO for `/usr`/`/bin`/`/lib`/`/etc`/`/proc`/`$HOME`; `TMPDIR` pinned under `.raven/tmp` (closes the `/tmp` escape).
 - **seccomp network block** (Linux) — denies `AF_INET`/`AF_INET6` sockets; sanctioned test runners exempted.
-- **Resource limits** — `RLIMIT_CPU`/`RLIMIT_FSIZE`/`RLIMIT_NOFILE` (Linux + macOS); Windows Job Objects (process-tree + memory caps + kill-on-close).
+- **Resource limits** — `RLIMIT_CPU`/`RLIMIT_FSIZE`/`RLIMIT_NOFILE` (Linux + macOS).
 - **Shell safety** — denylist + allowlist + direct-exec (no shell for safe single-binary commands), `confirm_shell` gate, never-execute patterns even under `--yolo`, `run_shell` logged to session debug-events.
 - **No harness commits** — the agent never auto-commits; dirty work stays in the working tree for the user to review.
 
@@ -72,7 +72,7 @@ fmt, and `cargo check --target x86_64-pc-windows-gnu`.
 
 ### Eval suite
 - **Layer A** — offline fake-model harness (`cargo test eval_suite`) covering blank-stall, verify gate, sandbox escape, edits-finish-uncommitted, goal persistence, large tool-output caps, same-file serial edits.
-- **Layer B/C** — live fixtures (`evals/run.py`) + batch runner (`evals/run_all_models.py`); recommended-model table with Recommended / Passing / Partial / Flaky status. Cases include `14_large_tool_output` and Windows-only `15_windows_fs_edge`.
+- **Layer B/C** — live fixtures (`evals/run.py`) + batch runner (`evals/run_all_models.py`); recommended-model table with Recommended / Passing / Partial / Flaky status. Cases include `14_large_tool_output` (`15_windows_fs_edge` was retired with Windows support).
 
 ### Recovery visibility
 - Recovery-patch events for failed sub-agent applies; `.raven/RECOVERY.md` index with `git apply` instructions; TUI `last.patch` snapshot after dirty turns.
@@ -87,7 +87,7 @@ boringly reliable. See `docs/troubleshooting.md` for the operational notes.
 - [ ] **A4** — Stream mid-response failure keeps partial assistant text + a one-line "stream interrupted — retry or `--no-stream`" hint. *(Implemented; verify in a live run.)*
 - [ ] **A6** — `raven --help` / README install snippets match the current version and flags. *(README stale flags fixed; re-verify after each release.)*
 - [ ] **F1** — ROADMAP stays in Done / Next / Non-goals shape; no "build X" fiction for shipped features. *(This rewrite.)*
-- [ ] **F2** — Troubleshooting page covers Windows `.exe`, stream decode error, sandbox deny, SearXNG fallback, ACP one-liner. *(Added.)*
+- [ ] **F2** — Troubleshooting page covers stream decode error, sandbox deny, SearXNG fallback, ACP one-liner. *(Added.)*
 - [ ] **E3** — Re-run the eval suite after prompt/tool changes that could affect pass rate.
 - [ ] **G3** — CHANGELOG **0.3.0** section written in user language (polish/fixes, not only internals).
 - [ ] **G4** — Run Raven on a real repo for a full session without a "I don't trust this" moment.

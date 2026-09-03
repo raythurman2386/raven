@@ -101,6 +101,13 @@ pub async fn drain_events_logged(
                     .unwrap_or_default();
                 let _ = reply.send(answer);
             }
+            AgentEvent::AskPermission { command, reply } => {
+                eprintln!("\n── allow shell? $ {command} ──");
+                let answer = read_line_if_tty()
+                    .map(|l| l.trim().to_string())
+                    .unwrap_or_default();
+                let _ = reply.send(answer);
+            }
             AgentEvent::Steered(text) => {
                 eprintln!("[steered: {text}]");
             }

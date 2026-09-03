@@ -138,8 +138,7 @@ pub fn write_global_env(dir: &std::path::Path, contents: &str) -> std::io::Resul
 /// file is never exposed at default (umask) perms. On Unix the 0600 mode is
 /// set at open/creation time, not via a post-write chmod — that avoids the
 /// TOCTOU window where a freshly-written secrets file would be world-readable
-/// before its permissions are tightened. On Windows we rely on the user
-/// profile's default ACLs (mirroring the existing convention).
+/// before its permissions are tightened.
 fn write_private(dir: &std::path::Path, file: &str, contents: &str) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     let path = dir.join(file);

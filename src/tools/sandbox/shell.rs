@@ -129,42 +129,9 @@ pub(crate) fn is_direct_exec_command(command: &str) -> bool {
     safe_command_re().is_match(first)
 }
 
-/// Build a platform-aware shell command.
-///
-/// On Unix: `sh -c <command>`. On Windows: `cmd /C <command>`, falling back
-/// to the `COMSPEC` environment variable if set.
+/// Build a shell command: `sh -c <command>`.
 fn shell_command(command: &str) -> Command {
-    #[cfg(windows)]
-    {
-        let shell = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd".into());
-        let mut cmd = Command::new(&shell);
-        cmd.arg("/C").arg(command);
-        cmd
-    }
-    #[cfg(not(windows))]
-    {
-        let mut cmd = Command::new("sh");
-        cmd.arg("-c").arg(command);
-        cmd
-    }
-}
-
-/// Resolve a command name to its platform-appropriate executable.
-///
-/// On Windows, `npm`, `cargo`, `npx`, `python`, and `pytest` are often
-/// `.cmd` or `.exe` shims. This function appends `.cmd` when the bare name
-/// is not found but `<name>.cmd` exists on `PATH`. On Unix the name is
-/// returned unchanged.
-pub(crate) fn resolve_command(name: &str) -> String {
-    #[cfg(windows)]
-    {
-        let cmd_name = format!("{}.cmd", name);
-        if std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-            .any(|p| p.join(&cmd_name).exists())
-        {
-            return cmd_name;
-        }
-    }
-    let _ = name;
-    name.to_string()
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c").arg(command);
+    cmd
 }

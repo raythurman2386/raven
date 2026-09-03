@@ -13,7 +13,7 @@ All file paths are **relative to the workspace root** and confined to it. See [a
 | `search_replace` | Edit a file by replacing an exact string | Workspace-confined; rejects directories |
 | `write_file` | Full file write (create/overwrite) | Workspace-confined; creates parent dirs |
 | `grep` | Regex content search with optional glob filter | Read-only; skips hidden dirs and build artifacts |
-| `run_shell` | Run a shell command | `cwd` forced to workspace; dangerous patterns blocked; secret env vars stripped; direct-exec for safe commands; OS-level confinement (Landlock/seccomp/rlimits/Job Object); Landlock writes are workspace + extras + `/dev` only (`TMPDIR` pinned under `.raven/tmp`); 60s default timeout; output capped at 12 000 chars |
+| `run_shell` | Run a shell command | `cwd` forced to workspace; dangerous patterns blocked; secret env vars stripped; direct-exec for safe commands; OS-level confinement (Landlock/seccomp/rlimits); Landlock writes are workspace + extras + `/dev` only (`TMPDIR` pinned under `.raven/tmp`); 60s default timeout; output capped at 12 000 chars |
 | `search_code` | Literal case-insensitive search across source files | Read-only; source extensions only |
 | `todo_write` | Create/replace a structured task list (full-replace) | Persists to `.raven/state/todos.json`; injected into the system prompt |
 | `goal_set` | Set/update the current goal for a task | Persists to `.raven/state/goal.json`; injected into the system prompt |
@@ -113,7 +113,7 @@ The `include` glob supports `*` and `?` against the file name only (not the full
 }
 ```
 
-Runs the command with `cwd` forced to the workspace. Allowlisted commands with no shell metacharacters run via **direct exec** (`Command::new(bin).args(...)`); everything else runs via `sh -c <command>`. Output format: `exit=<code>\n<stdout><stderr>`. Output capped at 12 000 chars (truncated with `...[truncated]`). Confined subprocesses additionally run under OS-level sandboxing (Landlock, seccomp, rlimits, or Windows Job Objects — see [security.md](security.md)). Commands matching the verification-gate predicate (`cargo test`, `cargo clippy`, `cargo fmt --check`, `npm test`, `pytest`, `tsc`, `eslint`, …) skip both the seccomp network block and rlimits, since sanctioned test/lint/format commands legitimately need network sockets and large linker outputs.
+Runs the command with `cwd` forced to the workspace. Allowlisted commands with no shell metacharacters run via **direct exec** (`Command::new(bin).args(...)`); everything else runs via `sh -c <command>`. Output format: `exit=<code>\n<stdout><stderr>`. Output capped at 12 000 chars (truncated with `...[truncated]`). Confined subprocesses additionally run under OS-level sandboxing (Landlock, seccomp, rlimits — see [security.md](security.md)). Commands matching the verification-gate predicate (`cargo test`, `cargo clippy`, `cargo fmt --check`, `npm test`, `pytest`, `tsc`, `eslint`, …) skip both the seccomp network block and rlimits, since sanctioned test/lint/format commands legitimately need network sockets and large linker outputs.
 
 ### `search_code`
 
@@ -330,13 +330,11 @@ This catches:
 - `dd if=/dev/zero|random|urandom`
 - `chmod -R 777 /`
 - `curl ... | sh` and `wget ... | sh` (pipe-to-shell)
-- Windows destructive patterns: `format <drive>:`, `del /f/s/q <drive>:\`, `rd /s/q <drive>:\`, `rmdir /s/q <drive>:\`, `powershell -Command ... Remove-Item -Recurse -Force`, `Remove-Item -Recurse -Force <drive>:\`, and `diskpart`
 - Reverse-shell primitives: `/dev/tcp`, `bash -i`, `nc -e` / `ncat -e`, `mkfifo`
 - Encoded or decoded droppers: `powershell -enc`, `certutil -decode`, `base64 … | sh`
-- PowerShell `Invoke-Expression` / `iex (`
-- Pipe-to-shell via `pwsh` / `powershell` / `cmd` as well as `sh`/`bash`
+- Pipe-to-shell via `pwsh` / `powershell` as well as `sh`/`bash`
 
-These patterns are blocked even under `--yolo`. This is a **guardrail, not a complete blocklist**. A determined model can craft commands that evade it. For untrusted models, use a container or VM. Tool arguments are also length-capped and schema-checked before dispatch (see [security.md §8](security.md)).
+These patterns are blocked even under `--yolo`. This is a **guardrail, not a complete blocklist**. A determined model can craft commands that evade it. For untrusted models, use a container or VM. Tool arguments are also length-capped and schema-checked before dispatch (see [security.md §6](security.md)).
 
 ---
 

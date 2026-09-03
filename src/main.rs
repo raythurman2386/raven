@@ -10,8 +10,8 @@
 //! with tools, plan mode, context compaction, and parallel sub-agents, talking
 //! to any OpenAI-compatible `/v1/chat/completions` endpoint (local Ollama by
 //! default, Ollama Cloud with a Bearer token optionally). Subprocesses are
-//! confined with Landlock, seccomp, rlimits, and openat2 (Linux) or Job
-//! Objects (Windows).
+//! confined with Landlock, seccomp, rlimits, and openat2 (Linux) or rlimits
+//! (macOS).
 //!
 //! ## Modules
 //!

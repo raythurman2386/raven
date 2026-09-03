@@ -52,6 +52,94 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pseudo-filesystems (`/proc`, `/sys`, `/dev`, `/run`, `/boot`), reporting
   the cap in results so the model narrows the search.
 
+### Changed
+
+- **Sandbox file-size cap raised 64 MiB → 248 MiB** — the inner sandbox's
+  `RLIMIT_FSIZE` now allows 248 MiB writes per confined child. The old 64 MiB
+  cap SIGXFSZ-killed real toolchain work (a debug test binary with full
+  debuginfo can exceed it; raven's own is ~280 MiB). The cap remains a
+  bounded guardrail, and sanctioned verification commands (`cargo test`,
+  `cargo clippy`, `npm test`, `pytest`, …) still skip rlimits entirely.
+
+### Fixed
+
+- **Compound verification commands were killed by the rlimit cap** —
+  `cd <workspace> && cargo test` did not match the sanctioned-command
+  exemption (the predicate required the test command at the start of the
+  line), so the linker was file-size-killed. The exemption now tolerates
+  inert prefixes — a single leading `cd <dir> &&` and leading `VAR=value`
+  environment assignments — plus a single trailing pipe into a read-only
+  output consumer (`tail`, `head`, `grep`, `sed -n`, `sort`, `uniq`, `wc`).
+  Anything executable chained after the sanctioned command (`&&`, `;`, a
+  non-reader pipe) still does not match; this also closes a pre-existing
+  over-broad match where `cargo test && rm -rf /` was counted as sanctioned.
+- **Verify gate credited piped failures as passes** — `verification_passed`
+  now fails closed on `ld terminated with signal`, `error: linking with`,
+  and `could not compile` payload markers. A piped `cargo test | tail`
+  reports the pipeline's `exit=0` while the payload shows the real
+  linker/compiler death; the gate previously credited those as verified.
+- **`cargo doc` warnings fixed** — the stale intra-doc link in
+  `testutil.rs`'s module docs and the private-item link in `memory.rs` are
+  resolved; docs build warning-free.
+
+### Fixed (earlier in this cycle)
+
+- **Mode confusion after Shift+Tab** — the TUI's mode cycle only updated the
+  display; the agent's system prompt (`--- Mode ---` section) and, separately,
+  the advertised toolset kept the *startup* mode. A session started/resumed in
+  chat mode and cycled to agent would tell the model "you are in CHAT mode …
+  CANNOT run shell commands" while handing it `run_shell`. `settings.mode` is
+  now updated in lockstep with the displayed mode, so the prompt, the toolset,
+  and the top bar always agree. `/retry` and idle `/steer` likewise re-fire
+  with the *current* mode instead of the capability frozen at send time.
+- **Plan executor advertised the wrong mode** — after approving a plan, the
+  execution turn held the full write/shell toolset but its system prompt still
+  said "PLAN mode … CANNOT edit files or run shell commands" (the mode it was
+  proposed in). `Agent::with_plan` now switches the executor to agent mode and
+  rebuilds its system message, matching the toolset it advertises.
+
+### Added
+
+- **Grok Build-style interrupt & quit keybinds** — `Esc` now interrupts a running
+  turn (persisting the partial transcript) and is the layered dismiss key
+  (completion → selection → pending prompt → interrupt). Quitting requires a
+  second `Esc`/`Ctrl+C` within 3 seconds ("press again to quit"), and `Ctrl+C`
+  while a turn runs interrupts instead of exiting. While a turn runs, `Enter`
+  steers (queues a mid-turn direction) rather than interrupting.
+- **One-keystroke shell permission prompts** — the `confirm_shell` gate renders
+  as a distinct bordered permission block (`y allow · n deny`): `y`/`n` answer
+  instantly, bare `Enter` allows, `Esc` denies. The headless and ACP paths keep
+  their existing flows (the ACP adapter now relays both ask-user and shell
+  permission gates through `session/request_permission`).
+- **Context meter in the top bar** — a `12.4K/128K` readout plus a 20-cell
+  `━━─` gauge colored by usage, replacing the old percentage text.
+
+### Fixed
+
+- **TUI froze after answering a permission/ask_user prompt** — key handlers
+  that `continue`d back into the drain loop fell into a blocking
+  `event::read()`, parking the whole UI (no redraws, no agent-event drains)
+  until the next keypress. The drain loop now polls with a zero timeout before
+  each read, so answering a prompt immediately resumes painting and streaming.
+- **Completion popup reopened after Esc** — dismissing the popup now keeps it
+  closed while typing at or past the dismissal point; it reopens only after
+  deleting back below it.
+- Header blocks (model/provider/context readouts) now stay in sync after
+  `/model`, `/provider`, and `/new` with the compacted banner layout.
+
+### Removed
+
+- **Windows support** — `src/tools/windows.rs` (Job Object confinement) is
+  deleted along with every `#[cfg(windows)]` gate, the `windows-sys`
+  dependency, `install.ps1`, the Windows CI test job, and the
+  `x86_64-pc-windows-msvc` release target. `run_shell` now always uses
+  `sh -c`, `install.sh` rejects non-Linux platforms with a clear error, and
+  the `15_windows_fs_edge` eval case is retired. Raven targets Linux
+  (x86_64/aarch64/armv7) and Raspberry Pi; macOS code paths (rlimits) remain
+  but macOS is dropped from release builds to save CI minutes. **Breaking** if
+  you were running raven on Windows — migrate to the Linux binary under WSL
+  or a container.
+
 ## [0.5.18] - 2026-09-01
 
 ### Added

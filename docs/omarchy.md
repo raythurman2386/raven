@@ -12,7 +12,7 @@ update. Everything below stays in your home directory and survives
 `omarchy update`.
 
 > **Audience:** Omarchy Linux users who already have `raven` on `PATH`.
-> Not applicable to macOS / Windows desktop shells.
+> Not applicable to macOS desktop shells.
 
 ## Prerequisites
 

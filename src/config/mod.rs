@@ -236,7 +236,7 @@ pub struct Settings {
     /// Extra Landlock RW roots granted to every confined subprocess (e.g. a
     /// git worktree sub-agent's shared main repo, which lives as a sibling
     /// under the temp dir). Defaults to empty; only set by parallel sub-agent
-    /// orchestration. Linux-only (no effect on Windows).
+    /// orchestration. Linux-only (no effect on macOS, which has no Landlock).
     pub sandbox_extra_rw: Vec<PathBuf>,
     /// When false, `delegate_task` / `goal_set` / `todo_write` are rejected.
     /// Cleared on spawned sub-agents so they cannot nest or overwrite the

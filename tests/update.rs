@@ -20,9 +20,6 @@ fn raven_bin() -> &'static str {
     env!("CARGO_BIN_EXE_raven")
 }
 
-/// The platform's executable suffix (`.exe` on Windows, empty elsewhere).
-const EXE_SUFFIX: &str = std::env::consts::EXE_SUFFIX;
-
 /// Skip a test that binds a local `TcpListener` (AF_INET socket) when running
 /// under a restrictive outer sandbox that SIGSYS-kills sockets. Returns `true`
 /// when the test should skip.
@@ -35,14 +32,14 @@ fn skip_if_outer_sandbox() -> bool {
     }
 }
 
-/// The raven binary filename on this platform (`raven` / `raven.exe`).
+/// The raven binary filename on this platform.
 fn raven_name() -> String {
-    format!("raven{EXE_SUFFIX}")
+    "raven".to_string()
 }
 
-/// The `.old` backup filename for the raven binary on this platform.
+/// The `.old` backup filename for the raven binary.
 fn raven_backup_name() -> String {
-    format!("raven{EXE_SUFFIX}.old")
+    "raven.old".to_string()
 }
 
 /// Copy the compiled raven binary to `dst`, ready to be executed.
@@ -185,12 +182,7 @@ impl ReleaseServer {
 /// Returns the public key PEM (to pass via `RAVEN_SIGNING_PUBLIC_KEY`) and the
 /// artifact name.
 fn build_release(dir: &Path, version: &str, triple: &str, binary: &[u8]) -> (String, String) {
-    // Match the binary's artifact naming: Windows triples get a `.exe` suffix.
-    let artifact = if triple.contains("windows") {
-        format!("raven-{version}-{triple}.exe")
-    } else {
-        format!("raven-{version}-{triple}")
-    };
+    let artifact = format!("raven-{version}-{triple}");
     std::fs::create_dir_all(dir.join(format!("v{version}"))).unwrap();
     std::fs::write(dir.join(format!("v{version}/{artifact}")), binary).unwrap();
 
@@ -217,8 +209,6 @@ fn host_triple() -> &'static str {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
         ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
-        ("windows", "x86_64") => "x86_64-pc-windows-msvc",
-        ("windows", "aarch64") => "aarch64-pc-windows-msvc",
         ("macos", "aarch64") => "aarch64-apple-darwin",
         ("macos", "x86_64") => "x86_64-apple-darwin",
         _ => panic!("unsupported test host"),

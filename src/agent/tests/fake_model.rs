@@ -642,83 +642,253 @@ async fn tool_round_emits_checkpoint_with_tool_result() {
 }
 
 #[tokio::test]
-async fn confirm_shell_denies_on_n_and_runs_on_yes() {
+async fn confirm_shell_gate_emits_ask_permission_and_denies_by_default() {
+    // confirm_shell on + a non-allowlisted command (openssl is not in
+    // safe_command_re) must gate through AgentEvent::AskPermission. Denying
+    // (dropping the sender / empty answer) replaces the tool result with a
+    // "declined" message the model can see — no child ever spawns, so this
+    // runs safely even under the restrictive outer sandbox.
+    let tmp = tempfile::tempdir().unwrap();
+    let mut s = settings_for(tmp.path());
+    s.yolo = false;
+    s.confirm_shell = true;
+
+    let mut agent = Agent::new(s).unwrap().with_completion_source(scripted(vec![
+        sse_tool_call("call_c", "run_shell", r#"{"command":"openssl version"}"#),
+        sse_text("Understood, skipping the command."),
+    ]));
+    let (tx, mut rx) = mpsc::channel(64);
+    let run = tokio::spawn(async move {
+        let _ = agent.run("run openssl version", tx).await;
+        agent.messages
+    });
+
+    let mut saw_gate = false;
+    let mut done = false;
+    while let Some(ev) = rx.recv().await {
+        match ev {
+            AgentEvent::AskPermission { reply, .. } => {
+                saw_gate = true;
+                // Explicit denial — the gate parses y/yes as allow,
+                // everything else as deny.
+                let _ = reply.send("n".to_string());
+            }
+            AgentEvent::Done => {
+                done = true;
+                break;
+            }
+            _ => {}
+        }
+    }
+    let messages = run.await.unwrap();
+
+    assert!(saw_gate, "confirm_shell must emit AskPermission");
+    assert!(done, "turn must finish after the denied command");
+    assert!(
+        messages.iter().any(|m| m.role == "tool"
+            && m.content
+                .as_deref()
+                .unwrap_or("")
+                .contains("declined permission")),
+        "denied gate must record a declined tool result"
+    );
+}
+
+#[tokio::test]
+async fn confirm_shell_gate_allows_on_y_answer() {
+    // Answering y at the AskPermission gate must run the command and record
+    // its real output. The test drains the event channel and answers the
+    // gate exactly the way the TUI loop does.
     if skip_if_outer_sandbox() {
         return;
     }
-    // Round 1: model issues a non-allowlisted shell command. With
-    // confirm_shell on, the loop must emit AskUser and NOT execute yet.
-    // Round 2 (after "n"): the model re-issues with a different command.
-    // Round 3: answer "y" → the command really runs (assert via the file
-    // marker the command creates).
     let tmp = tempfile::tempdir().unwrap();
-    let mut settings = settings_for(tmp.path());
-    settings.yolo = false;
-    settings.confirm_shell = true;
+    let mut s = settings_for(tmp.path());
+    s.yolo = false;
+    s.confirm_shell = true;
 
-    // Answerer: intercept AskUser events from a spawned run and reply.
-    async fn answer_ask_user(rx: &mut mpsc::Receiver<AgentEvent>, reply: &str) -> bool {
-        loop {
-            tokio::select! {
-                ev = rx.recv() => {
-                    match ev {
-                        Some(AgentEvent::AskUser { reply: tx, .. }) => {
-                            let _ = tx.send(reply.to_string());
-                            return true;
-                        }
-                        Some(_) => continue,
-                        None => return false,
-                    }
-                }
-                _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {
-                    return false;
+    let mut agent = Agent::new(s).unwrap().with_completion_source(scripted(vec![
+        sse_tool_call("call_c", "run_shell", r#"{"command":"openssl version"}"#),
+        sse_text("Ran it."),
+    ]));
+    let (tx, mut rx) = mpsc::channel(64);
+    let run = tokio::spawn(async move {
+        let _ = agent.run("run openssl version", tx).await;
+        agent.messages
+    });
+
+    let mut answered = false;
+    let mut saw_run_shell = false;
+    let mut done = false;
+    while let Some(ev) = rx.recv().await {
+        match ev {
+            AgentEvent::AskPermission { reply, .. } => {
+                let _ = reply.send("y".into());
+                answered = true;
+            }
+            AgentEvent::ToolStart { name, .. } => {
+                if name == "run_shell" {
+                    saw_run_shell = true;
                 }
             }
+            AgentEvent::Done => {
+                done = true;
+                break;
+            }
+            _ => {}
         }
     }
+    let messages = run.await.unwrap();
 
-    // ── Deny path ──────────────────────────────────────────────
-    let bodies = vec![
-        sse_tool_call("c1", "run_shell", r#"{"command":"pkill -f nothing-real"}"#),
-        sse_text("Declined."),
-    ];
-    let mut agent = Agent::new(settings.clone())
-        .unwrap()
-        .with_completion_source(scripted(bodies));
-    let (tx, mut rx) = mpsc::channel(64);
-    let run = tokio::spawn(async move { agent.run("run a command", tx).await });
-    let asked = answer_ask_user(&mut rx, "n").await;
-    let _ = run.await;
-    assert!(asked, "AskUser must fire for a non-allowlisted command");
+    assert!(answered, "gate should have been answered with y");
+    assert!(saw_run_shell, "allowed command must dispatch");
+    assert!(done, "turn must finish after the allowed command");
     assert!(
-        !tmp.path().join("deny-marker.txt").exists(),
-        "denied command must not execute"
+        messages
+            .iter()
+            .any(|m| m.role == "tool" && m.content.as_deref().unwrap_or("").contains("OpenSSL")),
+        "tool result should carry the command output, got {:?}",
+        messages
+            .iter()
+            .filter(|m| m.role == "tool")
+            .map(|m| m.content.as_deref())
+            .collect::<Vec<_>>()
     );
+}
 
-    // ── Allow path ─────────────────────────────────────────────
-    let tmp2 = tempfile::tempdir().unwrap();
-    std::fs::write(tmp2.path().join("real.txt"), "x").unwrap();
-    let mut settings2 = settings_for(tmp2.path());
-    settings2.yolo = false;
-    settings2.confirm_shell = true;
-    let bodies = vec![
-        sse_tool_call(
-            "c1",
-            "run_shell",
-            r#"{"command":"ln -s real.txt allow-marker.txt"}"#,
-        ),
-        sse_text("Done."),
-    ];
-    let mut agent = Agent::new(settings2)
-        .unwrap()
-        .with_completion_source(scripted(bodies));
-    let (tx, mut rx) = mpsc::channel(64);
-    let run = tokio::spawn(async move { agent.run("run a command", tx).await });
-    let asked = answer_ask_user(&mut rx, "y").await;
-    let _ = run.await;
-    assert!(asked, "AskUser must fire on the allow path too");
+// ── Mode / system-prompt / toolset consistency ─────────────────────────────
+
+/// Extract the `--- Mode ---` section text from a system message.
+fn mode_section(sys: &str) -> &str {
+    let start = sys
+        .find("--- Mode ---")
+        .expect("system message has a Mode section")
+        + "--- Mode ---".len();
+    let end = sys[start..]
+        .find("\n\nWorkspace root:")
+        .map(|i| start + i)
+        .unwrap_or(sys.len());
+    sys[start..end].trim()
+}
+
+fn tool_names(tools: &Value) -> Vec<String> {
+    tools
+        .as_array()
+        .expect("tools is an array")
+        .iter()
+        .map(|t| {
+            t.get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+                .unwrap_or_default()
+                .to_string()
+        })
+        .collect()
+}
+
+#[test]
+fn plan_mode_agent_advertises_read_only_and_prompt_says_plan() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut s = settings_for(tmp.path());
+    s.mode = Mode::Plan;
+    let agent = Agent::new(s).unwrap().plan_only();
+
+    let sys = agent.messages[0].content.as_deref().unwrap_or_default();
+    let mode = mode_section(sys);
     assert!(
-        tmp2.path().join("allow-marker.txt").exists(),
-        "approved command must execute"
+        mode.contains("PLAN mode") && mode.contains("CANNOT edit"),
+        "plan mode prompt must forbid edits, got: {mode}"
+    );
+    let names = tool_names(&agent.tools_value());
+    assert!(
+        !names.iter().any(|n| n == "write_file" || n == "run_shell"),
+        "plan toolset must exclude write/shell, got {names:?}"
+    );
+}
+
+#[test]
+fn chat_mode_agent_advertises_read_only_and_prompt_says_chat() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut s = settings_for(tmp.path());
+    s.mode = Mode::Chat;
+    let agent = Agent::new(s).unwrap().plan_only();
+
+    let sys = agent.messages[0].content.as_deref().unwrap_or_default();
+    let mode = mode_section(sys);
+    assert!(
+        mode.contains("CHAT mode") && mode.contains("CANNOT edit"),
+        "chat mode prompt must forbid edits, got: {mode}"
+    );
+    let names = tool_names(&agent.tools_value());
+    assert!(
+        !names.iter().any(|n| n == "write_file" || n == "run_shell"),
+        "chat toolset must exclude write/shell, got {names:?}"
+    );
+    assert!(
+        names.iter().any(|n| n == "ask_user"),
+        "chat toolset must include ask_user, got {names:?}"
+    );
+}
+
+#[test]
+fn agent_mode_advertises_full_toolset_and_prompt_says_agent() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut s = settings_for(tmp.path());
+    s.mode = Mode::Agent;
+    let agent = Agent::new(s).unwrap();
+
+    let sys = agent.messages[0].content.as_deref().unwrap_or_default();
+    let mode = mode_section(sys);
+    assert!(
+        mode.contains("AGENT mode") && mode.contains("full access"),
+        "agent mode prompt must grant full access, got: {mode}"
+    );
+    let names = tool_names(&agent.tools_value());
+    assert!(
+        names.iter().any(|n| n == "write_file"),
+        "agent toolset must include write_file, got {names:?}"
+    );
+    assert!(
+        names.iter().any(|n| n == "run_shell"),
+        "agent toolset must include run_shell, got {names:?}"
+    );
+}
+
+#[test]
+fn with_plan_switches_agent_to_executor_mode() {
+    // Regression for the mode-confusion bug: an approved-plan executor
+    // advertises the full toolset, so its system prompt must not still say
+    // "PLAN mode ... CANNOT edit files or run shell commands".
+    let tmp = tempfile::tempdir().unwrap();
+    let mut s = settings_for(tmp.path());
+    s.mode = Mode::Plan;
+    let plan = crate::plan::Plan {
+        title: "t".into(),
+        created_at: "now".into(),
+        steps: vec![crate::plan::PlanStep {
+            description: "do it".into(),
+            status: crate::plan::PlanStepStatus::Pending,
+        }],
+    };
+    let agent = Agent::new(s).unwrap().with_plan(plan);
+
+    let sys = agent.messages[0].content.as_deref().unwrap_or_default();
+    let mode = mode_section(sys);
+    assert!(
+        mode.contains("AGENT mode") && mode.contains("full access"),
+        "plan executor must see the agent-mode prompt, got: {mode}"
+    );
+    assert!(
+        !mode.contains("CANNOT edit"),
+        "plan executor prompt must not forbid edits, got: {mode}"
+    );
+    let names = tool_names(&agent.tools_value());
+    assert!(
+        names.iter().any(|n| n == "write_file"),
+        "plan executor toolset must include write_file, got {names:?}"
+    );
+    assert!(
+        names.iter().any(|n| n == "run_shell"),
+        "plan executor toolset must include run_shell, got {names:?}"
     );
 }

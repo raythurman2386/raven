@@ -116,6 +116,28 @@ pub fn render_blocks(blocks: &[BlockKind], tick: u64, theme: Theme) -> (Vec<Line
                 )));
                 last_assistant_start = None;
             }
+            BlockKind::Permission(p) => {
+                lines.push(Line::from(Span::styled(
+                    "┌─ permission",
+                    Style::default().fg(theme.plan),
+                )));
+                lines.push(Line::from(vec![
+                    Span::styled("│ $ ", Style::default().fg(theme.dim)),
+                    Span::styled(
+                        p.command().to_string(),
+                        Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("│ ", Style::default().fg(theme.dim)),
+                    Span::styled("y allow · n deny", Style::default().fg(theme.dim)),
+                ]));
+                lines.push(Line::from(Span::styled(
+                    "└─",
+                    Style::default().fg(theme.plan),
+                )));
+                last_assistant_start = None;
+            }
         }
     }
     let tail_count = match last_assistant_start {

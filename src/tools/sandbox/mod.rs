@@ -287,8 +287,7 @@ pub struct Sandbox {
     pub workspace: PathBuf,
     /// Extra Landlock RW roots granted to every confined child (e.g. a git
     /// worktree's shared main repo). Defaults to empty. The process temp dir
-    /// is never implied (see `confinement::FsPolicy`). Never granted on
-    /// Windows (no Landlock).
+    /// is never implied (see `confinement::FsPolicy`).
     pub extra_rw: Vec<PathBuf>,
     /// The operational scope. System scope (workspace `/`) redirects
     /// `.raven` scratch/state dirs to `~/.raven` via [`Sandbox::raven_dir`].

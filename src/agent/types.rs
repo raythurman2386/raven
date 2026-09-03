@@ -101,6 +101,16 @@ pub enum AgentEvent {
         question: String,
         reply: tokio::sync::oneshot::Sender<String>,
     },
+    /// A permission gate (e.g. `confirm_shell` on a non-allowlisted
+    /// `run_shell`). Renders as a yes/no prompt: the answer is `y`/`yes` to
+    /// allow, anything else (or a dropped sender) to deny. The consumer may
+    /// style this differently from a free-form [`AgentEvent::AskUser`].
+    AskPermission {
+        /// The action being approved, e.g. the shell command to run.
+        command: String,
+        /// The oneshot back to the agent; `y`/`yes` allows.
+        reply: tokio::sync::oneshot::Sender<String>,
+    },
     /// A queued mid-turn direction (steering) was injected into the running
     /// turn as a `[steer]` user message.
     Steered(String),

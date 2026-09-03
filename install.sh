@@ -157,10 +157,6 @@ main() {
     local version_no_v="${version_tag#v}"
     local artifact="${BINARY}-${version_no_v}-${triple}"
 
-    if [[ "$triple" == *"windows"* ]]; then
-        artifact="${artifact}.exe"
-    fi
-
     download_url="${RELEASE_BASE_URL}/${version_tag}/${artifact}"
     checksum_url="${RELEASE_BASE_URL}/${version_tag}/checksums.txt"
     signature_url="${RELEASE_BASE_URL}/${version_tag}/checksums.txt.sig"

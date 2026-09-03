@@ -4,15 +4,14 @@ set -euo pipefail
 # Package a directory of built raven binaries into a release layout.
 #
 # Input:  a directory containing the raw release binaries, named
-#         `raven-{version}-{triple}` (`.exe` on Windows).
+#         `raven-{version}-{triple}`.
 # Output (written into the same directory):
 #   - checksums.txt        SHA-256 of every raw binary, then of every archive
-#   - raven-*.tar.gz       per-binary archive (unix), containing a stable
-#                          `raven` entry so consumers stay version-independent
-#   - raven-*.zip          per-binary archive (windows), containing `raven.exe`
+#   - raven-*.tar.gz       per-binary archive, containing a stable `raven`
+#                          entry so consumers stay version-independent
 #   - checksums.txt.sig    Ed25519 signature (only when a secret key is given)
 #
-# The raw binaries are kept alongside the archives (the installers download
+# The raw binaries are kept alongside the archives (the installer downloads
 # those directly). Archive checksums are appended to checksums.txt so the ACP
 # registry's agent.json can pin them.
 
@@ -22,7 +21,7 @@ Usage: $0 BIN_DIR [SECRET_KEY]
 
 Package the raven binaries in BIN_DIR into a release layout.
 
-  BIN_DIR     Directory of built binaries (raven-{version}-{triple}[.exe])
+  BIN_DIR     Directory of built binaries (raven-{version}-{triple})
   SECRET_KEY  Optional path to the Ed25519 secret key; when given, the
               resulting checksums.txt is signed via scripts/sign-release.sh
 EOF
@@ -51,27 +50,21 @@ fi
 cd "$BIN_DIR"
 
 # Integrity: checksum every raw binary. Two spaces between hash and name
-# (matches the installers' parsing).
+# (matches the installer's parsing).
 sha256sum raven-* > checksums.txt
 
-# Build a per-binary archive with a stable inner name (`raven` / `raven.exe`).
+# Build a per-binary archive with a stable inner name (`raven`).
 for f in raven-*; do
     [[ "$f" == "checksums.txt" ]] && continue
-    [[ "$f" == *.tar.gz || "$f" == *.zip ]] && continue
+    [[ "$f" == *.tar.gz ]] && continue
     mkdir -p stage
-    if [[ "$f" == *.exe ]]; then
-        cp "$f" stage/raven.exe
-        (cd stage && zip -q "../${f}.zip" raven.exe)
-    else
-        cp "$f" stage/raven
-        (cd stage && tar -czf "../${f}.tar.gz" raven)
-    fi
+    cp "$f" stage/raven
+    (cd stage && tar -czf "../${f}.tar.gz" raven)
     rm -rf stage
 done
 
 # Append archive checksums so the ACP registry can pin them.
 sha256sum raven-*.tar.gz >> checksums.txt 2>/dev/null || true
-sha256sum raven-*.zip >> checksums.txt 2>/dev/null || true
 
 echo "--- checksums.txt (raw + archives) ---"
 cat checksums.txt

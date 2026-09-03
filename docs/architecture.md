@@ -170,15 +170,15 @@ resolved via `Sandbox::safe_resolve`, which applies two defenses:
 - Forces `cwd` to the workspace.
 - Strips secret env vars (`RAVEN_API_KEY`, `OLLAMA_API_KEY`, `OPENAI_API_KEY`, `XAI_API_KEY`, `ANTHROPIC_API_KEY`, `AWS_SECRET_ACCESS_KEY`).
 - Blocks destructive command patterns even under `--yolo` (see [tools.md#blocked-commands](tools.md#blocked-commands)).
-- Runs allowlisted, metacharacter-free commands via **direct exec** (`Command::new(bin).args(...)`, no `sh -c`) — see [security.md §6](security.md).
+- Runs allowlisted, metacharacter-free commands via **direct exec** (`Command::new(bin).args(...)`, no `sh -c`) — see [security.md §5](security.md).
 - Tool-call arguments are length-capped and schema-checked before dispatch.
 - Enforces a timeout (default 60s, overridable per call).
 - Caps output at 12 000 chars.
-- Every confined subprocess additionally runs under OS-level confinement: **Landlock** (filesystem) + **seccomp** (network-block) + **rlimits** (CPU/file-size/fds) on Linux; rlimits on macOS; **Job Object** (process-tree + committed-memory) on Windows. Landlock write roots are the workspace, explicit extras (git worktrees), and `/dev` — never the process temp dir. `TMPDIR` is pinned under `.raven/tmp`. See [security.md](security.md) for the full defense layers.
+- Every confined subprocess additionally runs under OS-level confinement: **Landlock** (filesystem) + **seccomp** (network-block) + **rlimits** (CPU/file-size/fds) on Linux; rlimits on macOS. Landlock write roots are the workspace, explicit extras (git worktrees), and `/dev` — never the process temp dir. `TMPDIR` is pinned under `.raven/tmp`. See [security.md](security.md) for the full defense layers.
 
 ### Honest limits
 
-The sandbox confines the agent's subprocesses at the OS level (Landlock, seccomp, rlimits, Job Objects) and confines file-path resolution with `openat2`/`safe_resolve`. It does **not** use containers or VMs. These layers are best-effort on some platforms and each has documented caveats (see [security.md](security.md)); defense-in-depth is the point. For the strongest isolation, run Raven inside a container or VM.
+The sandbox confines the agent's subprocesses at the OS level (Landlock, seccomp, rlimits) and confines file-path resolution with `openat2`/`safe_resolve`. It does **not** use containers or VMs. These layers are best-effort on some platforms and each has documented caveats (see [security.md](security.md)); defense-in-depth is the point. For the strongest isolation, run Raven inside a container or VM.
 
 ---
 

@@ -15,6 +15,7 @@ pub enum BlockKind {
     Tool(ToolBlock),
     System(SystemBlock),
     Error(ErrorBlock),
+    Permission(PermissionBlock),
 }
 
 /// A user prompt: bold green "You" tag + indented text.
@@ -139,6 +140,25 @@ impl ErrorBlock {
 
     pub fn text(&self) -> &str {
         &self.text
+    }
+}
+
+/// A permission gate (confirm_shell). Rendered as a distinct bordered prompt
+/// asking the user to allow a shell command.
+#[derive(Clone)]
+pub struct PermissionBlock {
+    command: String,
+}
+
+impl PermissionBlock {
+    pub fn new(command: impl Into<String>) -> Self {
+        Self {
+            command: command.into(),
+        }
+    }
+
+    pub fn command(&self) -> &str {
+        &self.command
     }
 }
 

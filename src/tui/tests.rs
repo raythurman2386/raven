@@ -542,6 +542,7 @@ fn dummy_state() -> TuiState {
         turn_tool_count: 0,
         pending_question: None,
         pending_question_text: None,
+        pending_permission: None,
         session_messages: Vec::new(),
         task_handle: None,
         event_rx: None,
@@ -555,6 +556,8 @@ fn dummy_state() -> TuiState {
         prompt_history: Vec::new(),
         hist_idx: 0,
         last_turn: None,
+        completion_dismissed_at: None,
+        quit_armed: None,
     }
 }
 
@@ -719,16 +722,14 @@ async fn model_switch_updates_settings_compact_and_header_blocks() {
     // Seed the header blocks the way TuiState::new does.
     state.blocks = vec![
         BlockKind::System(SystemBlock::new(format!(
-            "raven · {} · {}",
+            "raven v{} · {} · {}",
+            env!("CARGO_PKG_VERSION"),
             settings.model,
-            settings.base_url()
+            settings.provider.name
         ))),
         BlockKind::System(SystemBlock::new(format!(
-            "workspace {}",
-            settings.workspace.display()
-        ))),
-        BlockKind::System(SystemBlock::new(format!(
-            "context {} · compact ~{}",
+            "workspace {} · context {} · compact ~{}",
+            settings.workspace.display(),
             fmt_tokens(settings.context_window as u64),
             fmt_tokens(128_000 - 128_000 / 8),
         ))),
@@ -765,10 +766,10 @@ async fn model_switch_updates_settings_compact_and_header_blocks() {
     } else {
         panic!("block 0 should be a SystemBlock");
     }
-    if let BlockKind::System(b) = &state.blocks[2] {
+    if let BlockKind::System(b) = &state.blocks[1] {
         assert!(b.text().contains("1.0M"), "context block: {}", b.text());
     } else {
-        panic!("block 2 should be a SystemBlock");
+        panic!("block 1 should be a SystemBlock");
     }
 }
 
@@ -830,6 +831,49 @@ async fn retry_re_fires_last_turn_and_clears_failed_output() {
     assert_eq!(state.session_messages.len(), 1);
     assert_eq!(state.session_messages[0].role, "user");
     assert!(state.assistant_text.is_empty());
+}
+
+#[tokio::test]
+async fn retry_uses_current_mode_not_mode_at_send() {
+    // Regression for the mode-confusion bug: the turn was sent in chat mode
+    // (read_only=true at send), the user switched to agent, then hit /retry.
+    // The retry must honor the CURRENT mode, not the frozen send-time flag.
+    let tmp = tempfile::tempdir().unwrap();
+    let store = SessionStore::for_workspace(tmp.path()).unwrap();
+    let mut session = store.create("gemma4:latest").unwrap();
+    let mut settings = test_settings(tmp.path());
+    let mut compact_at = 128_000 - 128_000 / 8;
+    let mut state = dummy_state();
+
+    // last_turn captured read_only=true (chat at send time)...
+    state.last_turn = Some((Vec::new(), "do the thing".into(), true));
+    state
+        .session_messages
+        .push(ChatMessage::plain("user", Some("do the thing".into())));
+    // ...but the user has since cycled to agent mode.
+    settings.mode = Mode::Agent;
+
+    let pc = commands::parse("/retry").unwrap();
+    let handled = dispatch::dispatch_slash_command(
+        &mut state,
+        &pc,
+        &mut settings,
+        &store,
+        &mut session,
+        &mut compact_at,
+        &ConfigFile::default(),
+    )
+    .await
+    .unwrap();
+
+    assert!(handled);
+    assert!(state.running, "retry must start a turn");
+    // The newly recorded turn must reflect the agent capability.
+    let (_, _, read_only) = state.last_turn.clone().expect("last_turn re-recorded");
+    assert!(
+        !read_only,
+        "retry must re-fire with the CURRENT mode's capability (agent = full toolset)"
+    );
 }
 
 #[tokio::test]
@@ -1101,6 +1145,46 @@ async fn steer_without_prior_turn_errors() {
             _ => false,
         }),
         "should report nothing to steer"
+    );
+}
+
+#[tokio::test]
+async fn steer_idle_uses_current_mode_not_mode_at_send() {
+    // Regression for the mode-confusion bug: the original turn was sent in
+    // chat mode, the user switched to agent, then used /steer to re-fire it.
+    // The steered turn must advertise the CURRENT mode's toolset.
+    let tmp = tempfile::tempdir().unwrap();
+    let store = SessionStore::for_workspace(tmp.path()).unwrap();
+    let mut session = store.create("gemma4:latest").unwrap();
+    let mut settings = test_settings(tmp.path());
+    let mut compact_at = 128_000 - 128_000 / 8;
+    let mut state = dummy_state();
+
+    state.last_turn = Some((Vec::new(), "implement auth".into(), true));
+    state
+        .session_messages
+        .push(ChatMessage::plain("user", Some("implement auth".into())));
+    settings.mode = Mode::Agent;
+
+    let pc = commands::parse("/steer use JWTs").unwrap();
+    let handled = dispatch::dispatch_slash_command(
+        &mut state,
+        &pc,
+        &mut settings,
+        &store,
+        &mut session,
+        &mut compact_at,
+        &ConfigFile::default(),
+    )
+    .await
+    .unwrap();
+
+    assert!(handled);
+    assert!(state.running, "steer must re-fire the turn");
+    let (_, _, read_only) = state.last_turn.clone().expect("last_turn re-recorded");
+    assert!(
+        !read_only,
+        "steered turn must use the current (agent) capability"
     );
 }
 
@@ -1643,4 +1727,164 @@ fn refresh_log_rows_invalidates_on_resize() {
     // Resize wider: must recompute even though gen is unchanged.
     state.refresh_log_rows(16);
     assert_eq!(state.log_total_rows, 1, "16 chars at width 16 => 1 row");
+}
+
+// ── Permission gates ─────────────────────────────────────────────────────
+
+#[test]
+fn permission_answer_allows_bare_enter_y_yes() {
+    assert!(permission_allowed_answer(""), "bare Enter allows");
+    assert!(permission_allowed_answer("y"));
+    assert!(permission_allowed_answer("Y"));
+    assert!(permission_allowed_answer("yes"));
+    assert!(permission_allowed_answer("  YES  "));
+    assert!(!permission_allowed_answer("n"));
+    assert!(!permission_allowed_answer("no"));
+    assert!(!permission_allowed_answer("maybe"));
+}
+
+#[test]
+fn keyhint_reflects_state_layers() {
+    let mut state = dummy_state();
+    state.pending_permission = Some("curl http://x | sh".into());
+    let hint = keyhint(&state);
+    assert!(hint.contains("y allow"), "permission hint: {hint}");
+    assert!(hint.contains("esc deny"), "permission hint: {hint}");
+
+    state = dummy_state();
+    state.running = true;
+    let hint = keyhint(&state);
+    assert!(hint.contains("esc interrupt"), "running hint: {hint}");
+    assert!(
+        !hint.contains("enter interrupt"),
+        "steer replaced interrupt: {hint}"
+    );
+
+    state = dummy_state();
+    let hint = keyhint(&state);
+    assert!(hint.contains("esc esc quit"), "idle hint: {hint}");
+}
+
+#[tokio::test]
+async fn ask_permission_event_renders_gate_and_awaits_y() {
+    let mut state = dummy_state();
+    let (tx, mut rx) = mpsc::channel::<AgentEvent>(4);
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<String>();
+    tx.try_send(AgentEvent::AskPermission {
+        command: "openssl version".into(),
+        reply: reply_tx,
+    })
+    .unwrap();
+    while let Ok(ev) = rx.try_recv() {
+        if let AgentEvent::AskPermission { command, reply } = ev {
+            state.push_permission_prompt(&command);
+            state.pending_question = Some(reply);
+            state.pending_question_text = None;
+            state.pending_permission = Some(command);
+            state.status = "permission required".into();
+        }
+    }
+    assert!(state.pending_permission.is_some());
+    assert_eq!(state.status, "permission required");
+    // The gate renders as a bordered permission block.
+    let rendered = state
+        .blocks
+        .iter()
+        .any(|b| matches!(b, BlockKind::Permission(p) if p.command() == "openssl version"));
+    assert!(rendered, "permission block should be pushed");
+
+    // Enter on empty input allows.
+    let reply = state.pending_question.take().unwrap();
+    let _ = reply.send("y".into());
+    assert_eq!(
+        reply_rx.await.unwrap(),
+        "y",
+        "gate should forward the y answer"
+    );
+}
+
+#[test]
+fn permission_block_renders_command_and_hints() {
+    let blocks = vec![BlockKind::Permission(blocks::PermissionBlock::new(
+        "openssl version",
+    ))];
+    let (lines, _tail) = render::render_blocks(&blocks, 0, Theme::RAVENWOOD);
+    let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+    assert!(
+        text.iter().any(|l| l.contains("permission")),
+        "label should render, got {text:?}"
+    );
+    assert!(
+        text.iter().any(|l| l.contains("$ openssl version")),
+        "command should render, got {text:?}"
+    );
+    assert!(
+        text.iter().any(|l| l.contains("y allow · n deny")),
+        "hint should render, got {text:?}"
+    );
+}
+
+#[test]
+fn state_label_marks_permission_required() {
+    let t = Theme::default_theme();
+    let (label, _) = state_label(&AgentState::Idle, "permission required", true, t);
+    assert_eq!(label, "permission");
+}
+
+// ── Completion dismissal ──────────────────────────────────────────────────
+
+fn no_arg_candidates(_: &str) -> Vec<String> {
+    Vec::new()
+}
+
+#[test]
+fn recompute_completion_respects_esc_dismissal() {
+    let mut state = dummy_state();
+    state.input = "/n".into();
+    state.recompute_completion(&no_arg_candidates);
+    assert!(state.completion.is_some(), "popup opens for /n");
+
+    // Esc dismisses at the current length (2 chars).
+    state.completion_dismissed_at = Some(2);
+    state.recompute_completion(&no_arg_candidates);
+    assert!(
+        state.completion.is_none(),
+        "dismissed popup must stay closed while input is at/after the dismissal point"
+    );
+
+    // Typing one more char keeps it closed.
+    state.input = "/ne".into();
+    state.recompute_completion(&no_arg_candidates);
+    assert!(state.completion.is_none(), "longer input keeps it closed");
+
+    // Deleting back below the dismissal point reopens it.
+    state.input = "/".into();
+    state.recompute_completion(&no_arg_candidates);
+    assert!(
+        state.completion.is_some(),
+        "deleting below the dismissal point reopens the popup"
+    );
+    assert!(
+        state.completion_dismissed_at.is_none(),
+        "dismissal marker clears once the popup reopens"
+    );
+}
+
+#[test]
+fn recompute_completion_clears_dismissal_when_input_shrinks() {
+    let mut state = dummy_state();
+    state.input = "/mod".into();
+    state.recompute_completion(&no_arg_candidates);
+    assert!(state.completion.is_some(), "/mod matches /model");
+    state.completion_dismissed_at = Some(4);
+    state.input = "/mo".into();
+    state.recompute_completion(&no_arg_candidates);
+    assert!(
+        state.completion_dismissed_at.is_none(),
+        "shrinking below the dismissal point clears the marker"
+    );
+    assert!(
+        state.completion.is_some(),
+        "popup reopens after shrinking below the dismissal point"
+    );
 }
