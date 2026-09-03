@@ -1,11 +1,13 @@
-# Connecting Zed to Raven via ACP
+# Connecting Zed / Hearth to Raven via ACP
 
 Raven speaks **Agent Client Protocol (ACP) v1** over stdio, so you can run it
-directly inside [Zed](https://zed.dev) as an *external agent*. Zed hosts the
-thread in the Agent Panel and Threads Sidebar; Raven owns its own runtime,
-model selection, provider auth, and tools. All the usual Raven features work
-from the editor — plan mode, verification gates, workspace isolation,
-`.raven/MEMORY.md`, skills, and the full tool set.
+directly inside [Zed](https://zed.dev) or
+[Hearth](https://github.com/raythurman2386/hearth) as an *external agent*. The
+editor hosts the thread; Raven owns its own runtime, model selection, provider
+auth, and tools. All the usual Raven features work from the editor — plan
+mode, verification gates, workspace isolation, `.raven/MEMORY.md`, skills, and
+the full tool set. The examples below use Zed's config surface; Hearth
+discovers ACP agents on its own — point it at the same `raven --acp` command.
 
 > **ACP registry install (when available).** Raven is not yet in the official
 > [ACP registry](https://agentclientprotocol.com/registry) — the config below

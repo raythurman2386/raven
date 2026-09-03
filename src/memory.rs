@@ -54,7 +54,9 @@ fn load_system_memory_from(home: &Path) -> String {
 }
 
 /// Load system-scope memory from `~/.raven/system/MEMORY.md`.
-/// See [`load_system_memory_from`].
+///
+/// Reads the system file via the home-rooted loader and falls back to the
+/// global `~/.raven/MEMORY.md` when the system file is absent.
 pub fn load_system_memory() -> String {
     match dirs::home_dir() {
         Some(home) => load_system_memory_from(&home),

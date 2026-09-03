@@ -1,17 +1,18 @@
 //! # Raven
 //!
-//! Privacy-first local coding-agent harness for [Ollama](https://ollama.com)
-//! and any OpenAI-compatible `/v1/chat/completions` endpoint.
+//! An opinionated, personal coding-agent harness for [Ollama](https://ollama.com)
+//! and any OpenAI-compatible `/v1/chat/completions` endpoint. Linux (x86_64,
+//! aarch64) and Raspberry Pi are the target platforms.
 //!
 //! Inspired by the agent-harness ideas in xAI's [Grok Build](https://github.com/xai-org/grok-build);
 //! not affiliated.
 //!
-//! One binary, no cloud auth, no MCP marketplace — just a streaming agent loop
+//! One binary, no cloud auth, no MCP — just a streaming agent loop
 //! with tools, plan mode, context compaction, and parallel sub-agents, talking
 //! to any OpenAI-compatible `/v1/chat/completions` endpoint (local Ollama by
 //! default, Ollama Cloud with a Bearer token optionally). Subprocesses are
-//! confined with Landlock, seccomp, rlimits, and openat2 (Linux) or Job
-//! Objects (Windows).
+//! confined with Landlock, seccomp, rlimits, and openat2 (Linux) or rlimits
+//! (macOS).
 //!
 //! ## Modules
 //!
@@ -71,7 +72,7 @@ impl From<ModeArg> for Mode {
 #[command(
     name = "raven",
     version,
-    about = "Privacy-first local coding-agent harness for Ollama / OpenAI-compatible endpoints"
+    about = "Opinionated personal coding-agent harness for Linux and Raspberry Pi (Ollama / OpenAI-compatible endpoints)"
 )]
 struct Cli {
     /// Task description (positional args, joined with spaces).

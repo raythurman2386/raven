@@ -272,7 +272,7 @@ pub fn tool_definitions() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "web_search",
-                "description": "Search the web and return a ranked list of result titles and URLs (10 per page). Uses a self-hosted SearXNG instance when RAVEN_SEARXNG_URL is set, otherwise DuckDuckGo. No API key required. Use for current, factual, or unfamiliar topics. Use the page parameter to fetch subsequent pages.",
+                "description": "Search the web and return a ranked list of result titles and URLs (10 per page). Uses a self-hosted SearXNG instance when RAVEN_SEARXNG_URL is set, otherwise DuckDuckGo. No API key required. Use for current, factual, or unfamiliar topics. Use the page parameter to fetch subsequent pages. If the backend rate-limits you with a challenge error, wait a minute before retrying.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -287,7 +287,7 @@ pub fn tool_definitions() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "web_fetch",
-                "description": "Fetch a URL and return its readable text (HTML stripped). Use to read a page found via web_search or a known URL. Only http/https is allowed.",
+                "description": "Fetch an http(s) URL and return its readable text (HTML stripped, entities decoded). Use to read a page found via web_search or a known URL. Only http/https and HTML/text content types are allowed; binary URLs error out.",
                 "parameters": {
                     "type": "object",
                     "properties": {

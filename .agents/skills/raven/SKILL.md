@@ -1,6 +1,6 @@
 ---
 name: raven
-description: "Use when developing the Raven coding-agent harness — a privacy-first local coding-agent CLI in Rust for Ollama / OpenAI-compatible endpoints. Provides architecture, module map, conventions, verify commands, and the enforced-verification gate."
+description: "Use when developing the Raven coding-agent harness — an opinionated personal coding-agent CLI in Rust for Linux/Pi (Ollama / OpenAI-compatible endpoints). Provides architecture, module map, conventions, verify commands, and the enforced-verification gate."
 version: 1.1.0
 author: Hermes Agent
 license: MIT
@@ -12,11 +12,11 @@ metadata:
 
 # Raven — Development Skill
 
-Raven is a privacy-first local coding-agent harness written in Rust. It runs a
-streaming agent loop against a local (or cloud) Ollama / OpenAI-compatible
-`/v1/chat/completions` endpoint, with tools, plan mode, context compaction, and
-parallel sub-agents. This skill gives you the full context to work on it
-correctly.
+Raven is an opinionated, personal coding-agent harness written in Rust for
+Linux and Raspberry Pi. It runs a streaming agent loop against a local (or
+cloud) Ollama / OpenAI-compatible `/v1/chat/completions` endpoint, with tools,
+plan mode, context compaction, and parallel sub-agents. This skill gives you
+the full context to work on it correctly.
 
 ## When to Use
 
@@ -64,7 +64,7 @@ CLI (main.rs)
 | `src/skills.rs` | `SKILL.md` discovery + `skill_search`/`skill_load` |
 | `src/state.rs` | Persistent agent state — `.raven/state/todos.json` + `goal.json`, injected into the system prompt |
 | `src/tokenizer.rs` | Pure-Rust BPE token estimator (no external vocab) |
-| `src/tools/` | 24 tools + sandbox — `mod.rs`, `definitions.rs`, `dispatch.rs`, `sandbox/` (`mod.rs` + `confinement.rs`), `document.rs`, `git.rs`, `patch.rs`, `windows.rs` |
+| `src/tools/` | 24 tools + sandbox — `mod.rs`, `definitions.rs`, `dispatch.rs`, `sandbox/` (`mod.rs` + `confinement.rs`), `document.rs`, `git.rs`, `patch.rs` |
 | `src/tui/` | ratatui TUI with status bar, streaming, scrollback, /commands |
 | `src/web.rs` | Web tools (`web_search`, `web_fetch`) |
 | `src/acp/` | ACP v1 stdio adapter (`raven acp`) — protocol + server, no MCP |
@@ -131,7 +131,7 @@ test`, `cargo clippy`, `cargo fmt`) — do not rely on the agent's simulated
    (`mod.rs` + `confinement.rs`), `document.rs`, `git.rs`, `patch.rs`. When
    adding a tool, keep the existing structure; definitions go in
    `definitions.rs`, dispatch in `dispatch.rs`. OS confinement (Landlock /
-   seccomp / rlimits / Job Objects) lives in `sandbox/confinement.rs`.
+   seccomp / rlimits) lives in `sandbox/confinement.rs`.
 2. **Tokenizer is a fast estimator, not exact** — it over-estimates tiktoken counts by roughly 10–35% (mean ~28%), biased slightly high so compaction triggers early. It treats non-newline whitespace as free and applies a ~12% structural-overhead factor. Don't "fix" it to be exact without a real tokenizer to validate against.
 3. **Compaction invariants** — `messages[0]` is always the system message;
    tool-call/tool-result pairs are never split. Don't break these.

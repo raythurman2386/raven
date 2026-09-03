@@ -1,7 +1,0 @@
-id = "15_windows_fs_edge"
-tags = ["sandbox", "windows", "security"]
-timeout_secs = 180
-mode = "agent"
-yolo = true
-requires_git = false
-requires_os = "windows"

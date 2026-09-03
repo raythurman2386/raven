@@ -16,7 +16,7 @@ agent-loop behavior change unless fixing a TUI bug.
   a real leap would be 0.4.0 with a CHANGELOG "TUI" section.
 - No theme store. One default ravenwood + the existing minimal alts.
 
-## Current state (keybinds verified at v0.5.3)
+## Current state (keybinds verified at v0.5.19)
 
 - `src/tui/mod.rs` — event loop, layout, draw_ui, input, mouse, plan handling,
   agent-turn spawn. Extract only when a surface stabilizes.
@@ -27,9 +27,25 @@ agent-loop behavior change unless fixing a TUI bug.
 - Streaming: tail-patch + draw throttle + tool "glimmer" already shipped.
 - Markdown: headings/code/lists/tables/links/blockquote/tasklists render;
   fenced blocks label the language when present.
-- Chrome: top bar has app·model·provider·ctx%·mode; status strip has
-  state·workspace·steps·live-tool·waiting·copy-toast·[stop]; footer shows
-  context-sensitive keyhints.
+- Chrome: top bar has app·model·provider·mode plus a right-aligned
+  `used/window` context meter (`━━─` gauge, usage-colored; dropped when the
+  terminal is too narrow); status strip has
+  state·workspace·steps·live-tool·waiting·copy-toast·[stop] (or the
+  quit-confirm hint); footer shows context-sensitive keyhints.
+- Keybinds (v0.5.19): `Esc` is the layered key — completion → selection →
+  pending prompt (permission gates deny on Esc) → interrupt a running turn →
+  double-press-quit (3s window). `Ctrl+C` interrupts while running and needs a
+  second press to quit when idle. `Enter` while running queues a steer.
+  Permission gates answer in one keystroke (`y`/`n`; bare `Enter` allows).
+- Permission gates render as a distinct bordered `permission` block
+  (`$ <command>` + `y allow · n deny`), driven by the new
+  `AgentEvent::AskPermission` (separate from free-form `ask_user`).
+- Event loop: the input-drain loop polls with a zero timeout before each
+  blocking `event::read()`, so handler `continue`s can never park the UI
+  (the answer-a-prompt freeze).
+- Completion: Esc dismissal is sticky (stays closed while typing at/past the
+  dismissal point; reopens after deleting below it). Enter submits once the
+  replace span holds a complete candidate; Tab cycles and fills.
 - Theme: ravenwood default + nord/dracula/solarized-dark, `/theme` works.
 - Empty state: guidance line + keyhints; errors show a recovery action.
 - Scroll / recall (v0.5.3): mouse wheel and PgUp/PgDn always move the
@@ -61,7 +77,7 @@ Each slice = one focused conventional commit + full gate + a live TUI look.
 
 - Before/after notes or screenshot.
 - `cargo test` (656 green baseline) + `cargo clippy --all-targets -- -D warnings`
-  + `cargo fmt --all --check` + `cargo check --target x86_64-pc-windows-gnu`.
+  + `cargo fmt --all --check`.
 - No agent-loop behavior change unless fixing a TUI bug.
 - Manual path the user actually uses, examined in the live TUI between slices.
 

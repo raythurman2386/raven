@@ -73,16 +73,16 @@ fn run_shell_blocks_fork_bomb() {
 fn confined_child_oversized_write_capped_by_fsize() {
     let tmp = tempfile::tempdir().unwrap();
     let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
-    // RLIMIT_FSIZE caps writes at 64 MiB. Writing 128 MiB of zeros should
+    // RLIMIT_FSIZE caps writes at 248 MiB. Writing 300 MiB of zeros should
     // fail (SIGXFSZ / EFBIG), not succeed. This verifies the rlimit is
     // actually applied to confined children.
     let out = sb
         .run_shell(
-            "head -c 134217728 /dev/zero > big.bin 2>&1; echo EXIT=$?",
+            "head -c 314572800 /dev/zero > big.bin 2>&1; echo EXIT=$?",
             10,
         )
         .unwrap();
-    // The write must be capped by RLIMIT_FSIZE (64 MiB). This surfaces in
+    // The write must be capped by RLIMIT_FSIZE (248 MiB). This surfaces in
     // one of several ways: the shell survives and reports a non-zero
     // `EXIT` (or an EFBIG/"File too large" message), the confined child is
     // killed outright by SIGXFSZ (reported as `exit=-1` or
@@ -424,13 +424,13 @@ fn run_shell_network_kill_explains_sigsys() {
 #[cfg(target_os = "linux")]
 fn run_shell_verification_command_skips_rlimits() {
     let _home_guard = crate::testutil::home_env_lock();
-    // Regression: `run_shell` applied RLIMIT_FSIZE (64 MiB) to every command,
+    // Regression: `run_shell` applied RLIMIT_FSIZE to every command,
     // including sanctioned verification commands like `cargo test`. A test
-    // that writes a large file (or a linker emitting a >64 MiB binary) was
+    // that writes a large file (or a linker emitting a >248 MiB binary) was
     // SIGXFSZ-killed. Verification commands must skip rlimits the same way
     // they skip the seccomp network block.
     if super::outer_sandbox_restrictive() {
-        eprintln!("outer sandbox caps RLIMIT_FSIZE below 70 MiB; skipping rlimit regression test");
+        eprintln!("outer sandbox caps RLIMIT_FSIZE below 300 MiB; skipping rlimit regression test");
         return;
     }
     let tmp = tempfile::tempdir().unwrap();
@@ -458,8 +458,8 @@ edition = "2021"
              fn writes_large_file() {\n\
                  let mut f = std::fs::File::create(\"big.bin\").unwrap();\n\
                  use std::io::Write;\n\
-                 let chunk = vec![0u8; 1 << 20];\n\
-                 for _ in 0..70 { f.write_all(&chunk).unwrap(); }\n\
+                 let chunk = vec![0u8; 4 << 20];\n\
+                 for _ in 0..75 { f.write_all(&chunk).unwrap(); }\n\
                  assert!(ok());\n\
              }\n\
          }\n",

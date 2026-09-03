@@ -5,32 +5,6 @@ an issue with the `RUST_LOG=raven=debug` output from a repro.
 
 ---
 
-## Windows: `raven` isn't found / "open with?" prompt
-
-The Windows installer (`install.ps1`) installs **`raven.exe`** to
-`%USERPROFILE%\.cargo\bin` and adds that directory to your **user** PATH. A few
-things to check:
-
-- **New terminal required.** PATH changes from the installer only apply to
-  terminals opened *after* the install. Reopen your shell (or run
-  `refreshenv` in a new PowerShell) before trying `raven`.
-- **Bare `raven` on PATH.** If you type `raven` and Windows shows an "open
-  with?" dialog instead of running it, the extensionless `raven` (left by an
-  older install) is shadowing `raven.exe`. The installer removes the old
-  extensionless binary, but if you installed manually, delete it:
-  ```powershell
-  Remove-Item "$env:USERPROFILE\.cargo\bin\raven" -Force
-  ```
-  Then run `raven` again — it should resolve to `raven.exe`.
-- **PATH not updated.** Verify the directory is on your user PATH:
-  ```powershell
-  [Environment]::GetEnvironmentVariable("PATH", "User")
-  ```
-  If `.cargo\bin` is missing, re-run `install.ps1` (it adds it) or add it
-  manually.
-
----
-
 ## Stream decode / "stream interrupted" errors
 
 Raven streams SSE from the model endpoint. A mid-stream failure (connection

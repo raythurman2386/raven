@@ -163,14 +163,87 @@ fn is_verification_command_rejects_non_test_commands() {
 }
 
 #[test]
+fn is_verification_command_accepts_cd_prefix() {
+    // Models routinely anchor a sanctioned command to the workspace with a
+    // leading `cd <dir> &&`. run_shell already forces cwd to the workspace,
+    // so the prefix must not disqualify the exemption.
+    let tests = [
+        "cd /home/ret/Work/raven && cargo test",
+        "cd repo && cargo test --lib",
+        "cd /tmp/x && cargo clippy --all-targets -- -D warnings",
+        "cd app && npm test",
+        "cd . && pytest -x",
+    ];
+    for cmd in tests {
+        assert!(
+            Sandbox::is_verification_command(cmd),
+            "cd-prefixed verification command should match: {cmd}"
+        );
+    }
+}
+
+#[test]
+fn is_verification_command_accepts_piped_output_reader() {
+    // Piping sanctioned output into a read-only consumer cannot execute
+    // anything; the model uses these to stay under the tool-output cap.
+    let tests = [
+        "cargo test 2>&1 | tail -25",
+        "cargo test | head -20",
+        "cargo clippy --all-targets -- -D warnings 2>&1 | tail -3",
+        "cargo test 2>&1 | grep -E 'test result'",
+        "cd /repo && cargo test --lib 2>&1 | tail -25",
+        "pytest -q | tail -5",
+        "npm test 2>&1 | grep 'FAIL'",
+        // The exact form verification sessions use: cd anchor + env config +
+        // piped tail. All inert prefixes/readers around a sanctioned command.
+        "cd /home/ret/Work/raven && CARGO_HOME=/home/ret/.cargo CARGO_INCREMENTAL=0 cargo test --lib 2>&1 | tail -25",
+        "CARGO_PROFILE_DEV_DEBUG=0 cargo test 2>&1 | tail -25",
+    ];
+    for cmd in tests {
+        assert!(
+            Sandbox::is_verification_command(cmd),
+            "piped verification command should match: {cmd}"
+        );
+    }
+}
+
+#[test]
+fn is_verification_command_rejects_cd_prefix_with_junk() {
+    // Only ONE leading cd is tolerated, and the sanctioned command must be
+    // the rest of the line — compound/piped forms still do not match.
+    let non_tests = [
+        "cd x && cd y && cargo test",
+        "cd x && ls -la",
+        "cd x &&",
+        "cd && cargo test",
+        "cargo test && rm -rf /",
+        "echo hi && cargo test",
+        // A pipe into something that can execute is NOT a read-only reader.
+        "cargo test | sh",
+        "cargo test | bash",
+        "cargo test | xargs rm",
+        "cargo test > /tmp/f && sh /tmp/f",
+        // Env prefixes configure the sanctioned command but a compound
+        // continuation after it still disqualifies.
+        "CARGO_HOME=/x cargo test && rm -rf /",
+    ];
+    for cmd in non_tests {
+        assert!(
+            !Sandbox::is_verification_command(cmd),
+            "should not be a verification command: {cmd}"
+        );
+    }
+}
+
+#[test]
 #[cfg(target_os = "linux")]
 fn run_tests_skips_rlimits_for_large_linker_outputs() {
-    // Regression: RLIMIT_FSIZE (64 MiB) was applied to `run_tests`, so a
-    // debug test binary larger than 64 MiB (or a test that writes a large
-    // file) was SIGXFSZ-killed. Sanctioned test runners must skip rlimits
+    // Regression: RLIMIT_FSIZE was applied to `run_tests`, so a debug test
+    // binary larger than the cap (or a test that writes a large file) was
+    // SIGXFSZ-killed. Sanctioned test runners must skip rlimits
     // the same way they skip the seccomp network block.
     if super::outer_sandbox_restrictive() {
-        eprintln!("outer sandbox caps RLIMIT_FSIZE below 70 MiB; skipping rlimit regression test");
+        eprintln!("outer sandbox caps RLIMIT_FSIZE below 300 MiB; skipping rlimit regression test");
         return;
     }
     let tmp = tempfile::tempdir().unwrap();
@@ -198,8 +271,8 @@ edition = "2021"
              fn writes_large_file() {\n\
                  let mut f = std::fs::File::create(\"big.bin\").unwrap();\n\
                  use std::io::Write;\n\
-                 let chunk = vec![0u8; 1 << 20];\n\
-                 for _ in 0..70 { f.write_all(&chunk).unwrap(); }\n\
+                 let chunk = vec![0u8; 4 << 20];\n\
+                 for _ in 0..75 { f.write_all(&chunk).unwrap(); }\n\
                  assert!(ok());\n\
              }\n\
          }\n",

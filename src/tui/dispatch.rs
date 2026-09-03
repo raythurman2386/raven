@@ -16,7 +16,7 @@ use crate::config::Settings;
 use crate::session::{Session, SessionStore};
 
 use super::blocks::BlockKind;
-use super::{begin_agent_turn, theme_name, AgentState, Theme, TuiState};
+use super::{begin_agent_turn, theme_name, Theme, TuiState};
 
 /// Dispatch a parsed slash command, mutating TUI state as needed.
 ///
@@ -44,32 +44,21 @@ pub(super) async fn dispatch_slash_command(
             state.log_dirty = true;
         }
         "new" => {
-            super::reset_session(state, session, store, settings, "raven")?;
+            super::reset_session(state, session, store, settings, "raven", *compact_at)?;
         }
         "clear" => {
             state.blocks.clear();
             state.log_dirty = true;
         }
         "stop" => {
-            if state.task_handle.is_some() {
-                super::abort_current_turn(state);
-                let _ = store.save_all_messages(session, &state.session_messages);
-                let _ = store.update_summary(session, None);
+            if state.running {
+                super::interrupt_running_turn(state, store, session);
                 state.push_system("⏹ stopped (partial turn saved)");
                 state.log_dirty = true;
             } else {
                 state.push_system("nothing running to stop");
                 state.log_dirty = true;
             }
-            // Drop ask_user oneshot so the agent (if still winding down) sees cancel.
-            state.pending_question = None;
-            state.pending_question_text = None;
-            state.running = false;
-            state.agent_state = AgentState::Idle;
-            state.status = "ready".into();
-            state.assistant_text.clear();
-            state.live_tool = None;
-            state.turn_tool_count = 0;
         }
         "model" => {
             let name = pc.args.trim();
@@ -95,14 +84,16 @@ pub(super) async fn dispatch_slash_command(
                 // Refresh the static header blocks (model + context/compact).
                 if let Some(BlockKind::System(b)) = state.blocks.get_mut(0) {
                     b.set_text(format!(
-                        "raven · {} · {}",
+                        "raven v{} · {} · {}",
+                        env!("CARGO_PKG_VERSION"),
                         settings.model,
-                        settings.base_url()
+                        settings.provider.name
                     ));
                 }
-                if let Some(BlockKind::System(b)) = state.blocks.get_mut(2) {
+                if let Some(BlockKind::System(b)) = state.blocks.get_mut(1) {
                     b.set_text(format!(
-                        "context {} · compact ~{}",
+                        "workspace {} · context {} · compact ~{}",
+                        settings.workspace.display(),
                         super::fmt_tokens(settings.context_window as u64),
                         super::fmt_tokens(*compact_at as u64),
                     ));
@@ -153,14 +144,16 @@ pub(super) async fn dispatch_slash_command(
                 // Refresh the static header blocks (model + context/compact).
                 if let Some(BlockKind::System(b)) = state.blocks.get_mut(0) {
                     b.set_text(format!(
-                        "raven · {} · {}",
+                        "raven v{} · {} · {}",
+                        env!("CARGO_PKG_VERSION"),
                         settings.model,
-                        settings.base_url()
+                        settings.provider.name
                     ));
                 }
-                if let Some(BlockKind::System(b)) = state.blocks.get_mut(2) {
+                if let Some(BlockKind::System(b)) = state.blocks.get_mut(1) {
                     b.set_text(format!(
-                        "context {} · compact ~{}",
+                        "workspace {} · context {} · compact ~{}",
+                        settings.workspace.display(),
                         super::fmt_tokens(settings.context_window as u64),
                         super::fmt_tokens(*compact_at as u64),
                     ));
@@ -205,7 +198,7 @@ pub(super) async fn dispatch_slash_command(
             state.log_dirty = true;
         }
         "retry" => {
-            let Some((preload, prompt, read_only)) = state.last_turn.clone() else {
+            let Some((preload, prompt, _read_only_at_send)) = state.last_turn.clone() else {
                 state.push_system("nothing to retry — send a task first");
                 state.log_dirty = true;
                 return Ok(true);
@@ -227,6 +220,12 @@ pub(super) async fn dispatch_slash_command(
             }
             // Mirror `start_task`'s running-state setup (the stored preload is
             // history *before* the user message, so Agent::run re-appends it).
+            // The CURRENT mode decides the capability — a mode switch after
+            // the failed turn must not replay it with the old toolset.
+            let read_only = settings.mode.read_only();
+            // Re-record with the current capability so a back-to-back /retry
+            // and the display stay consistent with what was actually sent.
+            state.last_turn = Some((preload.clone(), prompt.clone(), read_only));
             state.running = true;
             state.status = "running…".into();
             state.messages_dirty = true;
@@ -287,13 +286,20 @@ pub(super) async fn dispatch_slash_command(
                 return Ok(true);
             }
             // Idle: re-fire the last turn with the direction appended,
-            // preserving prior context so the model picks up mid-task.
-            let Some((preload, prompt, read_only)) = state.last_turn.clone() else {
+            // preserving prior context so the model picks up mid-task. The
+            // current mode decides the capability — NOT the mode the last
+            // turn was sent in, or a mode switch between send and /steer
+            // would silently replay with the old toolset.
+            let Some((preload, prompt, _read_only_at_send)) = state.last_turn.clone() else {
                 state.push_system("nothing to steer — send a task first");
                 state.log_dirty = true;
                 return Ok(true);
             };
+            let read_only = settings.mode.read_only();
             let steer_prompt = format!("{prompt}\n\n[steer] {msg}");
+            // Re-record with the current capability so the display and any
+            // subsequent /retry stay consistent with what was sent.
+            state.last_turn = Some((preload.clone(), prompt.clone(), read_only));
             state.running = true;
             state.status = "running…".into();
             state.messages_dirty = true;

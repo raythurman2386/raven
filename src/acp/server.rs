@@ -639,6 +639,55 @@ async fn on_set_config_option(srv: &mut AcpServer, id: &Value, params: &Value) -
     result_msg(id, json!({"configOptions": config_options}))
 }
 
+/// Relay an ask_user / shell-permission gate to the ACP client as a
+/// `session/request_permission` request, translating the chosen option back
+/// into `y` (allowed) or empty (denied / dismissed).
+async fn ask_permission(
+    writer: &Arc<Mutex<dyn FrameWrite>>,
+    server: &Arc<Mutex<AcpServer>>,
+    sid: &str,
+    title: String,
+    reply: oneshot::Sender<String>,
+) {
+    let rpc_id = {
+        let srv = server.lock().await;
+        srv.alloc_rpc_id()
+    };
+    let (perm_tx, perm_rx) = oneshot::channel::<Value>();
+    {
+        let mut srv = server.lock().await;
+        srv.pending.insert(rpc_id, perm_tx);
+    }
+    let req = json!({
+        "jsonrpc": "2.0",
+        "id": rpc_id,
+        "method": "session/request_permission",
+        "params": {
+            "sessionId": sid,
+            "toolCall": {
+                "toolCallId": format!("ask_{rpc_id}"),
+                "title": title
+            },
+            "options": [
+                {"optionId": "allow-once", "name": "Yes", "kind": "allow_once"},
+                {"optionId": "reject-once", "name": "No", "kind": "reject_once"}
+            ]
+        }
+    });
+    if writer.lock().await.write_frame(&req).is_err() {
+        let _ = reply.send(String::new());
+        return;
+    }
+    match perm_rx.await {
+        Ok(result) if permission_allowed(&result) => {
+            let _ = reply.send("y".into());
+        }
+        _ => {
+            let _ = reply.send(String::new());
+        }
+    }
+}
+
 async fn run_prompt(
     server: Arc<Mutex<AcpServer>>,
     id: Value,
@@ -726,43 +775,11 @@ async fn run_prompt_inner(
     while let Some(ev) = rx.recv().await {
         match ev {
             AgentEvent::AskUser { question, reply } => {
-                let rpc_id = {
-                    let srv = server.lock().await;
-                    srv.alloc_rpc_id()
-                };
-                let (perm_tx, perm_rx) = oneshot::channel::<Value>();
-                {
-                    let mut srv = server.lock().await;
-                    srv.pending.insert(rpc_id, perm_tx);
-                }
-                let req = json!({
-                    "jsonrpc": "2.0",
-                    "id": rpc_id,
-                    "method": "session/request_permission",
-                    "params": {
-                        "sessionId": sid,
-                        "toolCall": {
-                            "toolCallId": format!("ask_{rpc_id}"),
-                            "title": question
-                        },
-                        "options": [
-                            {"optionId": "allow-once", "name": "Yes", "kind": "allow_once"},
-                            {"optionId": "reject-once", "name": "No", "kind": "reject_once"}
-                        ]
-                    }
-                });
-                if writer.lock().await.write_frame(&req).is_err() {
-                    let _ = reply.send(String::new());
-                    continue;
-                }
-                match perm_rx.await {
-                    Ok(result) if permission_allowed(&result) => {
-                        let _ = reply.send("y".into());
-                    }
-                    _ => {
-                        let _ = reply.send(String::new());
-                    }
-                }
+                ask_permission(&writer, &server, &sid, question, reply).await;
+            }
+            AgentEvent::AskPermission { command, reply } => {
+                let title = format!("run shell: {command}");
+                ask_permission(&writer, &server, &sid, title, reply).await;
             }
             AgentEvent::Done => {
                 stop = StopReason::EndTurn;

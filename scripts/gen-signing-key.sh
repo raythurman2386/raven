@@ -5,7 +5,7 @@ set -euo pipefail
 #
 # The secret key MUST be kept offline: never commit it, never put it in CI,
 # never upload it to a release. Only the public key is committed and pinned
-# in the installers (install.sh / install.ps1).
+# in the installer (install.sh).
 #
 # The same Ed25519 primitive is used by minisign; OpenSSL is used here so the
 # whole flow is testable locally with no external tooling.
@@ -25,7 +25,7 @@ Writes:
   OUT_DIR/public.pem   Public key — commit and pin in the installers
 
 After generating, copy the contents of public.pem into the pinned public key
-in install.sh and install.ps1 (or the raven-signing-key.pub file).
+in install.sh (or the raven-signing-key.pub file).
 EOF
 }
 

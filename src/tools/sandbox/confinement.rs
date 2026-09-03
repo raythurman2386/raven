@@ -2,7 +2,7 @@
 //!
 //! Every tool that execs (`run_shell`, `run_tests`, `run_lint`, git) goes
 //! through [`spawn_confined`]. On Linux that applies Landlock + seccomp +
-//! rlimits in `pre_exec`. On macOS, rlimits only. On Windows, a Job Object.
+//! rlimits in `pre_exec`. On macOS, rlimits only.
 //!
 //! # Filesystem policy
 //!
@@ -174,6 +174,15 @@ impl FsPolicy {
     }
 }
 
+/// RLIMIT_FSIZE applied to confined children, in bytes (248 MiB).
+///
+/// Bounds a runaway write while staying above real toolchain outputs: a
+/// debug test binary with full debuginfo can exceed 60 MiB (280 MiB for
+/// raven's own), and release/linker temporaries land in the same range.
+/// Sanctioned verification commands skip rlimits entirely (see
+/// [`apply_rlimits`]).
+pub(crate) const RLIMIT_FSIZE_BYTES: u64 = 248 << 20;
+
 /// Apply resource limits (RLIMIT_*) to the calling process.
 ///
 /// Linux + macOS. Caps oversized writes (RLIMIT_FSIZE), runaway CPU
@@ -183,7 +192,7 @@ impl FsPolicy {
 /// `skip_rlimits` is set for sanctioned verification commands (`run_tests`,
 /// `run_lint`, and `run_shell` test/lint/format invocations). Those commands
 /// legitimately need to write large linker outputs (a debug test binary can
-/// exceed 64 MiB, which `RLIMIT_FSIZE` would SIGXFSZ-kill) and to burn more
+/// exceed the RLIMIT_FSIZE cap, which would SIGXFSZ-kill it) and to burn more
 /// than 30s of CPU on a clean build. The exemption mirrors the seccomp
 /// network-block exemption already granted to the same sanctioned commands.
 ///
@@ -214,8 +223,8 @@ fn apply_rlimits(skip_rlimits: bool) {
         (
             Resource::Fsize,
             Rlimit {
-                current: Some(64 << 20),
-                maximum: Some(64 << 20),
+                current: Some(RLIMIT_FSIZE_BYTES),
+                maximum: Some(RLIMIT_FSIZE_BYTES),
             },
         ),
         (
@@ -392,53 +401,31 @@ fn apply_os_confinement(
 
 /// Set up a clean-but-usable environment for a shell subprocess.
 ///
-/// On Unix: clears the environment and passes through `PATH`, `HOME`, `PWD`,
-/// and `LANG`. On Windows: clears the environment and passes through the
-/// vars `cmd.exe` and common tools need to start.
+/// Clears the environment and passes through `PATH`, `HOME`, `PWD`, and
+/// `LANG`.
 ///
 /// Also pins build-tool caches (`CARGO_HOME`, `TMPDIR`, npm cache, …) under
 /// `raven_dir` — see [`pin_build_tool_dirs`]. System scope passes
 /// `~/.raven` there; repo scope the workspace's own `.raven`.
 pub(crate) fn setup_shell_env(cmd: &mut Command, workspace: &Path, raven_dir: &Path) {
     cmd.env_clear();
-    #[cfg(windows)]
-    {
-        for key in &[
-            "SystemRoot",
-            "PATH",
-            "USERPROFILE",
-            "HOMEDRIVE",
-            "HOMEPATH",
-            "TEMP",
-            "TMP",
-            "COMSPEC",
-            "PATHEXT",
-        ] {
-            if let Ok(val) = std::env::var(key) {
-                cmd.env(key, val);
-            }
+    cmd.env("PWD", workspace);
+    for key in &["PATH", "HOME", "LANG", "TERM", "USER", "LOGNAME"] {
+        if let Ok(val) = std::env::var(key) {
+            cmd.env(key, val);
         }
     }
-    #[cfg(not(windows))]
-    {
-        cmd.env("PWD", workspace);
-        for key in &["PATH", "HOME", "LANG", "TERM", "USER", "LOGNAME"] {
-            if let Ok(val) = std::env::var(key) {
-                cmd.env(key, val);
-            }
+    for key in &["RUSTUP_HOME", "RUSTUP_TOOLCHAIN"] {
+        if let Ok(val) = std::env::var(key) {
+            cmd.env(key, val);
         }
-        for key in &["RUSTUP_HOME", "RUSTUP_TOOLCHAIN"] {
-            if let Ok(val) = std::env::var(key) {
-                cmd.env(key, val);
-            }
-        }
-        // Pin git's global config to a raven-local file so `git config`
-        // (without `--local`) doesn't try to write `~/.gitconfig`, which the
-        // narrowed Landlock grant no longer makes writable. Mirrors the
-        // `GIT_CONFIG_NOSYSTEM=1` isolation in the git tools.
-        let git_config = raven_dir.join("gitconfig");
-        cmd.env("GIT_CONFIG_GLOBAL", &git_config);
     }
+    // Pin git's global config to a raven-local file so `git config`
+    // (without `--local`) doesn't try to write `~/.gitconfig`, which the
+    // narrowed Landlock grant no longer makes writable. Mirrors the
+    // `GIT_CONFIG_NOSYSTEM=1` isolation in the git tools.
+    let git_config = raven_dir.join("gitconfig");
+    cmd.env("GIT_CONFIG_GLOBAL", &git_config);
     pin_build_tool_dirs(cmd, workspace, raven_dir);
 }
 
@@ -478,14 +465,10 @@ pub(crate) fn pin_build_tool_dirs(cmd: &mut Command, workspace: &Path, raven_dir
     }
     cmd.env("MISE_CACHE_DIR", &mise_cache);
     cmd.env("MISE_STATE_DIR", &mise_state);
-    // Pin the temp dir only on Unix. Windows has no Landlock, and overriding
-    // TEMP/TMP there breaks MSVC link.exe (UTF-16LE response-file parse).
-    #[cfg(not(windows))]
-    {
-        cmd.env("TMPDIR", &tmp_dir);
-        cmd.env("TEMP", &tmp_dir);
-        cmd.env("TMP", &tmp_dir);
-    }
+    // Pin the temp dir so rustc/cargo/npm write under the workspace rule.
+    cmd.env("TMPDIR", &tmp_dir);
+    cmd.env("TEMP", &tmp_dir);
+    cmd.env("TMP", &tmp_dir);
     cmd.env_remove("RUSTC_WRAPPER");
     cmd.env_remove("CARGO_INCREMENTAL");
 }
@@ -519,117 +502,13 @@ fn seed_cargo_home(cargo_home: &Path) {
         if let Some(parent) = dst.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        #[cfg(unix)]
-        {
-            let _ = std::os::unix::fs::symlink(&src, &dst);
-        }
-        #[cfg(windows)]
-        {
-            let _ = create_dir_junction(&src, &dst);
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = std::fs::copy(&src, &dst);
-        }
+        let _ = std::os::unix::fs::symlink(&src, &dst);
     }
-}
-
-/// Create an NTFS directory junction (`dst` → `src`) on Windows.
-///
-/// Junctions need no elevated privileges unlike directory symlinks, and
-/// cargo treats them like real directories for its registry lookups.
-#[cfg(windows)]
-fn create_dir_junction(src: &Path, dst: &Path) -> std::io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-
-    // `mount point` tag: target is a volume-absolute path, no name surrogate
-    // resolution against reparse points needed for our use.
-    const IO_REPARSE_TAG_MOUNT_POINT: u32 = 0xA000_0003;
-
-    // The junction target must be absolute with \\?\ prefix semantics; the
-    // canonical absolute path works for both drive-letter and UNC sources.
-    let target = src.canonicalize().unwrap_or_else(|_| src.to_path_buf());
-    let mut target_w: Vec<u16> = target.as_os_str().encode_wide().collect();
-
-    // A junction's substitute name must not end with a backslash.
-    while target_w.last() == Some(&0x5C_u16) {
-        target_w.pop();
-    }
-
-    // Reparse data buffer layout (WIN32_REPARSE_DATA_BUFFER for mount points):
-    // tag(4) + data_len(2) + reserved(2) + substitute_offset(2) +
-    // substitute_len(2) + print_offset(2) + print_len(2), then the strings.
-    let header_len = 4 + 2 + 2 + 2 + 2 + 2 + 2;
-    let substitute_bytes: Vec<u8> = target_w.iter().flat_map(|w| w.to_le_bytes()).collect();
-    let mut buf = vec![0u8; header_len + substitute_bytes.len() + 2];
-    buf[0..4].copy_from_slice(&IO_REPARSE_TAG_MOUNT_POINT.to_le_bytes());
-    let data_len = (substitute_bytes.len() + 4 + 2) as u16;
-    buf[4..6].copy_from_slice(&data_len.to_le_bytes());
-    let substitute_offset = header_len as u16;
-    buf[8..10].copy_from_slice(&substitute_offset.to_le_bytes());
-    let substitute_len = substitute_bytes.len() as u16;
-    buf[10..12].copy_from_slice(&substitute_len.to_le_bytes());
-    // Print name: same as substitute (harmless; explorer shows it as a link).
-    buf[12..14].copy_from_slice(&substitute_offset.to_le_bytes());
-    buf[14..16].copy_from_slice(&substitute_len.to_le_bytes());
-    buf[header_len..header_len + substitute_bytes.len()].copy_from_slice(&substitute_bytes);
-
-    std::fs::create_dir(dst)?;
-    let dst_w: Vec<u16> = dst.as_os_str().encode_wide().chain(Some(0)).collect();
-
-    // DEVICE_TYPE for FSCTL_SET_REPARSE_POINT; the constant lives behind a
-    // feature flag we don't enable, so spell the value (0x9000048).
-    const FSCTL_SET_REPARSE_POINT: u32 = 0x900A8;
-    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
-    const OPEN_EXISTING: u32 = 3;
-    const INVALID_HANDLE_VALUE: isize = -1;
-
-    let handle = unsafe {
-        windows_sys::Win32::Storage::FileSystem::CreateFileW(
-            dst_w.as_ptr(),
-            (0x4000_0000u32 | 0x2000_0000u32 | 0x0080_0000u32) as u32, // GENERIC_WRITE | GENERIC_READ | WRITE_DAC
-            0,
-            std::ptr::null_mut(),
-            OPEN_EXISTING,
-            FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
-            std::ptr::null_mut(),
-        )
-    };
-    if handle as isize == INVALID_HANDLE_VALUE {
-        return Err(std::io::Error::last_os_error());
-    }
-    let mut bytes_returned: u32 = 0;
-    let set_ok = unsafe {
-        windows_sys::Win32::System::IO::DeviceIoControl(
-            handle,
-            FSCTL_SET_REPARSE_POINT,
-            buf.as_ptr() as *const _,
-            buf.len() as u32,
-            std::ptr::null_mut(),
-            0,
-            &mut bytes_returned,
-            std::ptr::null_mut(),
-        )
-    };
-    unsafe {
-        windows_sys::Win32::Foundation::CloseHandle(handle);
-    }
-    if set_ok == 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(())
 }
 
 /// A running subprocess plus its OS-level confinement guard.
-///
-/// The guard's scope is the whole subprocess lifetime: on Windows it owns the
-/// Job Object handle, which must stay open until the child is reaped (with
-/// `KILL_ON_JOB_CLOSE`, dropping it early would kill the child).
 pub(crate) struct ConfinedChild {
     pub(crate) child: std::process::Child,
-    #[cfg(windows)]
-    _job: Option<crate::tools::windows::JobObject>,
 }
 
 /// Spawn a configured `Command` under OS-level confinement.
@@ -638,40 +517,21 @@ pub(crate) struct ConfinedChild {
 /// The `Command` must already have its env, cwd, and stdio configured.
 pub(crate) fn spawn_confined(
     cmd: &mut Command,
-    #[cfg_attr(not(unix), allow(unused_variables))] workspace: &Path,
-    #[cfg_attr(not(unix), allow(unused_variables))] extra_rw: &[PathBuf],
-    #[cfg_attr(not(unix), allow(unused_variables))] skip_network_block: bool,
-    #[cfg_attr(not(unix), allow(unused_variables))] skip_rlimits: bool,
+    workspace: &Path,
+    extra_rw: &[PathBuf],
+    skip_network_block: bool,
+    skip_rlimits: bool,
 ) -> Result<ConfinedChild> {
-    #[cfg(unix)]
-    {
-        let ws = workspace.to_path_buf();
-        let extra = extra_rw.to_vec();
-        unsafe {
-            cmd.pre_exec(move || {
-                apply_os_confinement(&ws, &extra, skip_network_block, skip_rlimits);
-                Ok(())
-            });
-        }
+    let ws = workspace.to_path_buf();
+    let extra = extra_rw.to_vec();
+    unsafe {
+        cmd.pre_exec(move || {
+            apply_os_confinement(&ws, &extra, skip_network_block, skip_rlimits);
+            Ok(())
+        });
     }
 
     let child = cmd.spawn().context("spawn command")?;
-
-    #[cfg(windows)]
-    {
-        match crate::tools::windows::JobObject::new() {
-            Some(job) => {
-                job.assign_process(child.id());
-                Ok(ConfinedChild {
-                    child,
-                    _job: Some(job),
-                })
-            }
-            None => Ok(ConfinedChild { child, _job: None }),
-        }
-    }
-
-    #[cfg(not(windows))]
     Ok(ConfinedChild { child })
 }
 

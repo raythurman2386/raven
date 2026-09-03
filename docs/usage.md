@@ -197,17 +197,19 @@ raven --tui    # force TUI even with a task
 
 | Key | Action |
 |---|---|
-| Type + `Enter` | Submit a task |
+| Type + `Enter` | Submit a task (or steer a running turn — no interrupt) |
+| `Esc` | Interrupt a running turn. Otherwise dismiss (completion → selection → pending prompt). When idle, press twice within 3s to quit |
+| `Ctrl+C` | While running: interrupt the turn. When idle: press twice within 3s to quit |
+| `y` / `n` | Answer a shell-permission prompt in one keystroke (bare `Enter` allows, `Esc` denies) |
 | `Left` / `Right` | Move the edit cursor |
 | `Up` / `Down` | Recall prior prompts when the input is empty or mid-recall; otherwise scroll the transcript. With the completion popup open, move the highlight |
 | `Home` / `End` | Empty input: jump to the top of the transcript / reattach to the live tail. Otherwise: jump to start / end of the input line |
 | `PgUp` / `PgDn` | Scroll the transcript |
 | Mouse wheel | Scroll the transcript (or the plan panel when the pointer is over it). Never walks prompt history |
 | Mouse drag | Select transcript text to copy |
-| `Tab` | Cycle slash-command autocomplete (accept if one match) |
-| `Shift+Tab` | When idle: cycle completion backward, or cycle mode when no completion is open |
+| `Tab` | Cycle slash-command autocomplete (Enter submits once the value is complete) |
+| `Shift+Tab` | When idle: cycle completion backward, or cycle mode (chat → plan → agent) when no completion is open. The new mode applies to the next turn's prompt *and* toolset |
 | `Backspace` | Delete the char before the cursor |
-| `Ctrl+C` / `Esc` | Quit (Esc first dismisses completion, selection, or an `ask_user` prompt) |
 
 Assistant responses render as markdown — headings, bold/italic, code blocks,
 lists, tables, and links are styled in the terminal. Tool calls show a live
@@ -240,6 +242,15 @@ While a task is running you can keep typing as normal:
   into the running turn and lands at the next iteration boundary as a
   `[steer]` user message, so the agent redirects without losing the tool
   work already in flight. The turn is never aborted or restarted.
+
+### Modes and where the default comes from
+
+The startup mode is `--mode` > workspace `.raven/config.toml` > global
+`~/.raven/config.toml` > `agent`. A global config with `mode = "Chat"` makes
+every session start read-only — check the top bar's mode label on launch, or
+`Shift+Tab` to cycle (chat → plan → agent). The cycle updates both the
+displayed mode *and* the mode the model is told about in its system prompt,
+so what you see always matches the toolset the agent actually has.
 - `/steer <message>` does the same thing explicitly while running (and
   re-fires the last turn with your direction appended when idle).
 - A message typed just as the turn finishes is replayed as a fresh turn, so
@@ -395,9 +406,10 @@ the agent cannot "forget" to verify its changes. This mirrors Grok Build's
 Session files are written atomically with a **unique temp name**
 (`.{pid}.{counter}.tmp` + rename) so concurrent writers — like a running turn
 and a `/stop` flush — can never clobber each other's in-flight temp file.
-Interrupting a task with `/stop` now **persists the partial turn** (`/stop`
-saves what the interrupted turn already produced) instead of dropping it, and
-quitting (Ctrl+C/Esc/`/quit`) always flushes the session before exit.
+Interrupting a task with `Esc`, `Ctrl+C`, `/stop`, or the `[stop]` button
+**persists the partial turn** (saves what the interrupted turn already
+produced) instead of dropping it, and quitting (Esc Esc / Ctrl+C Ctrl+C /
+`/quit`) always flushes the session before exit.
 
 ### TUI limitations
 

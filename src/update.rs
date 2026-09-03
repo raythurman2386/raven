@@ -1,6 +1,6 @@
 //! Self-update: download, verify, and atomically replace the running binary.
 //!
-//! The security model mirrors the installers (`install.sh` / `install.ps1`):
+//! The security model mirrors the installer (`install.sh`):
 //!   - **Authenticity** — `checksums.txt` is signed with an Ed25519 key held
 //!     offline by the maintainer. The signature is verified in-process against
 //!     the pinned public key (`raven-signing-key.pub`) before anything is
@@ -10,15 +10,6 @@
 //!
 //! Both checks fail closed: a missing or invalid checksum/signature refuses the
 //! update rather than silently installing an unverified binary.
-//!
-//! # Windows
-//!
-//! A running `.exe` cannot be overwritten or deleted, but it *can* be renamed
-//! (the Windows loader opens the image with `FILE_SHARE_DELETE`). The update
-//! path therefore renames the running binary aside to `.old` and moves the new
-//! binary into place — the standard "rename dance" used by single-file
-//! updaters. The running process keeps executing the old (now-renamed) image
-//! until it exits; the next launch uses the new binary.
 
 use anyhow::{bail, Context, Result};
 use base64::Engine as _;
@@ -79,11 +70,7 @@ async fn update(pinned_version: Option<&str>) -> Result<()> {
         None => latest_version_tag().await?,
     };
     let version_no_v = version_tag.trim_start_matches('v');
-    let artifact = if triple.contains("windows") {
-        format!("raven-{version_no_v}-{triple}.exe")
-    } else {
-        format!("raven-{version_no_v}-{triple}")
-    };
+    let artifact = format!("raven-{version_no_v}-{triple}");
 
     let artifact_url = format!("{base_url}/{version_tag}/{artifact}");
     let checksums_url = format!("{base_url}/{version_tag}/checksums.txt");
@@ -151,8 +138,7 @@ pub fn verify_signature(checksums_bytes: &[u8], sig_bytes: &[u8], public_key_pem
 /// Atomically replace `target_path` with `new_path`, keeping a `.old` backup.
 ///
 /// The running binary is renamed aside (not overwritten) before the new one is
-/// moved into place. On Windows a running `.exe` cannot be overwritten or
-/// deleted, but it *can* be renamed, so this dance works on both platforms.
+/// moved into place, keeping a `.old` backup for rollback.
 pub fn atomic_replace(new_path: &Path, target_path: &Path) -> Result<()> {
     let backup = old_backup_path(target_path);
     if backup.exists() {
@@ -175,8 +161,8 @@ pub fn rollback(target_path: &Path) -> Result<()> {
         bail!("no backup binary found at {}", backup.display());
     }
     if target_path.exists() {
-        // Rename the current binary aside first (works even for a running
-        // `.exe` on Windows), then restore the backup into its place.
+        // Rename the current binary aside first, then restore the backup into
+        // its place.
         let stale = target_path.with_extension("stale");
         if stale.exists() {
             std::fs::remove_file(&stale)
@@ -184,7 +170,6 @@ pub fn rollback(target_path: &Path) -> Result<()> {
         }
         std::fs::rename(target_path, &stale)
             .with_context(|| format!("failed to move aside {}", target_path.display()))?;
-        // Best-effort: a running Windows binary may still be locked.
         let _ = std::fs::remove_file(&stale);
     }
     std::fs::rename(&backup, target_path)
@@ -199,19 +184,14 @@ fn old_backup_path(target_path: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
-/// Mark a file executable on Unix (no-op on Windows).
+/// Mark a file executable on Unix.
 fn make_executable(path: &Path) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = std::fs::metadata(path) {
-            let mut perms = meta.permissions();
-            perms.set_mode(perms.mode() | 0o755);
-            let _ = std::fs::set_permissions(path, perms);
-        }
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(meta) = std::fs::metadata(path) {
+        let mut perms = meta.permissions();
+        perms.set_mode(perms.mode() | 0o755);
+        let _ = std::fs::set_permissions(path, perms);
     }
-    #[cfg(not(unix))]
-    let _ = path;
 }
 
 /// Extract the raw 32-byte Ed25519 public key from a SubjectPublicKeyInfo PEM.
@@ -245,14 +225,12 @@ fn find_checksum(checksums: &[u8], artifact: &str) -> Result<String> {
     bail!("no checksum entry found for {artifact} in checksums.txt")
 }
 
-/// Map the current platform to the release triple used by the installers.
+/// Map the current platform to the release triple used by the installer.
 fn detect_triple() -> Result<String> {
     let triple = match (std::env::consts::OS, std::env::consts::ARCH) {
         ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
         ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
         ("linux", "arm") => "armv7-unknown-linux-gnueabihf",
-        ("windows", "x86_64") => "x86_64-pc-windows-msvc",
-        ("windows", "aarch64") => "aarch64-pc-windows-msvc",
         ("macos", "aarch64") => "aarch64-apple-darwin",
         ("macos", "x86_64") => "x86_64-apple-darwin",
         (os, arch) => bail!("unsupported platform: {os}/{arch}"),

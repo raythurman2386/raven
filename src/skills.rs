@@ -138,7 +138,7 @@ static DISCOVER_CACHE: LazyLock<Mutex<HashMap<PathBuf, CacheEntry>>> =
 ///
 /// Used as the cache key. Comparing the full set of skill files — not just the
 /// skills directory mtime — is robust to filesystems with coarse mtime
-/// granularity (e.g. some Windows setups) where creating a new skill
+/// granularity where creating a new skill
 /// directory within the same mtime tick would otherwise keep a stale cached
 /// list: adding a file changes the path set even when no mtime advances.
 fn skill_fingerprint(workspace: &Path) -> Vec<(PathBuf, Option<SystemTime>)> {

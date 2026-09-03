@@ -58,21 +58,6 @@ jobs:
       - name: Build docs
         run: cargo doc --no-deps
 
-  test-windows:
-    name: Test (Windows)
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: Swatinem/rust-cache@v2
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.97"
-      - name: Build
-        run: cargo build --all-targets
-      - name: Run tests
-        run: cargo test
-
   audit:
     name: Audit
     runs-on: ubuntu-latest

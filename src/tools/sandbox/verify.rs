@@ -6,7 +6,6 @@ use regex::Regex;
 use std::process::Command;
 use std::sync::OnceLock;
 
-use super::shell::resolve_command;
 use super::{cap_output, setup_shell_env, spawn_confined, wait_for_child, Sandbox};
 
 enum TestRunner {
@@ -54,7 +53,7 @@ impl Sandbox {
             TestRunner::Pytest => ("pytest", vec![]),
         };
 
-        let mut command = Command::new(resolve_command(cmd));
+        let mut command = Command::new(cmd);
         command
             .args(&args)
             .current_dir(&self.workspace)
@@ -74,7 +73,7 @@ impl Sandbox {
         // closure — setting it via `command.env` alone is dead code because
         // pre_exec reads the parent env, not the Command::env override.
         //
-        // rlimits are also skipped: a debug test binary can exceed the 64 MiB
+        // rlimits are also skipped: a debug test binary can exceed the
         // RLIMIT_FSIZE cap (SIGXFSZ), and a clean build can exceed the 30s
         // RLIMIT_CPU cap. The test runner is user-sanctioned, so the exemption
         // is limited to commands the enforced-verify gate would credit.
@@ -135,7 +134,7 @@ impl Sandbox {
             || self.workspace.join("pyproject.toml").exists()
             || self.workspace.join("setup.py").exists()
         {
-            return std::process::Command::new(resolve_command("pytest"))
+            return std::process::Command::new("pytest")
                 .arg("--version")
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
@@ -162,15 +161,68 @@ impl Sandbox {
     /// Used by the enforced-verify gate to credit `run_shell`-based
     /// verification (e.g. `npm test`, `cargo clippy`, `pytest`) the same
     /// way it credits the `run_tests` tool.
+    ///
+    /// A single leading `cd <dir> &&` prefix is tolerated: models routinely
+    /// anchor commands to the workspace that way, and `run_shell` already
+    /// forces `cwd` to the workspace, so the prefix does not change what
+    /// runs. Leading `VAR=value` environment assignments are likewise
+    /// tolerated (they configure the sanctioned command, e.g.
+    /// `CARGO_HOME=... cargo test`). A single trailing pipe into a
+    /// read-only output consumer (`| tail`, `| head`, `| grep`,
+    /// `| sed -n 'Np'`, `| sort`, `| uniq`, `| wc`) is also tolerated —
+    /// those cannot execute anything, and the model uses them to keep tool
+    /// output under the cap. Anything else chained after the sanctioned
+    /// command (`&&`, `;`, `||`, a second command, a non-reader pipe
+    /// target) disqualifies the exemption (`cargo test && rm -rf /` is
+    /// NOT sanctioned).
     pub fn is_verification_command(command: &str) -> bool {
+        static CD_PREFIX: OnceLock<Regex> = OnceLock::new();
+        static ENV_PREFIX: OnceLock<Regex> = OnceLock::new();
+        static PIPE_READER: OnceLock<Regex> = OnceLock::new();
+        static COMPOUND: OnceLock<Regex> = OnceLock::new();
         static RE: OnceLock<Regex> = OnceLock::new();
+        let command = command.trim();
+        // Strip one leading `cd <dir> &&` before classifying the rest.
+        let cd =
+            CD_PREFIX.get_or_init(|| Regex::new(r"(?i)^\s*cd\s+\S+\s*&&\s*").expect("valid regex"));
+        let rest = match cd.find(command) {
+            Some(m) if m.end() < command.len() => &command[m.end()..],
+            _ => command,
+        };
+        // Strip any leading `VAR=value` assignments (config for the
+        // sanctioned command; cannot execute anything on their own).
+        let env = ENV_PREFIX
+            .get_or_init(|| Regex::new(r"^[A-Za-z_][A-Za-z0-9_]*=\S+\s+").expect("valid regex"));
+        let mut rest = rest;
+        while let Some(m) = env.find(rest) {
+            rest = &rest[m.end()..];
+        }
+        // Strip one trailing `| <read-only output consumer>` so piped output
+        // management does not disqualify an otherwise sanctioned command.
+        // The regex is `$`-anchored, so a match is necessarily the tail.
+        let reader = PIPE_READER.get_or_init(|| {
+            Regex::new(
+                r#"(?i)\|\s*(tail(\s+-n?\s*\d+)?|head(\s+-n?\s*\d+)?|grep(\s+(-[aEcFfIilnOorSsvVwx]+|--?[a-z-]+\s+)*)?(\s+("([^"\\]|\\.)*"|'([^'\\]|\\.)*'|[^\s|;&]+))?|sed\s+(-n\s+)?('\d+([,]\d+)?p'|"[0-9,]+p")|sort(\s+-[ru])*|uniq(\s+-[cdu])*|wc(\s+-[lwc])*)\s*$"#,
+            )
+            .expect("valid regex")
+        });
+        let rest = match reader.find(rest) {
+            Some(m) => &rest[..m.start()],
+            None => rest,
+        };
+        // Reject compound continuations: anything still chained after the
+        // sanctioned command is arbitrary model output, not verification.
+        let compound = COMPOUND.get_or_init(|| Regex::new(r"&&|\|\||;|\|").expect("valid regex"));
+        if compound.is_match(rest) {
+            return false;
+        }
         let re = RE.get_or_init(|| {
             Regex::new(
                 r"(?i)^\s*(cargo\s+(test|clippy|fmt\s+--\s*check)|npm\s+(test|run\s+(test|typecheck|lint))|npx\s+(jest|vitest|mocha|tsc)|yarn\s+(test|typecheck|lint)|pnpm\s+(test|typecheck|lint)|pytest|python3?\s+-m\s+pytest|tsc(\s|$)|eslint(\s|$)|prettier\s+--\s*check|ruff\s+check|mypy(\s|$)|flake8(\s|$)|go\s+test|make\s+test|dotnet\s+test|zig\s+build\s+test|deno\s+test|bun\s+test)"
             )
             .expect("valid regex")
         });
-        re.is_match(command)
+        re.is_match(rest)
     }
 
     /// Auto-detect and run the project's linter / type checker.
@@ -196,7 +248,7 @@ impl Sandbox {
             return Ok("No linter detected (no Cargo.toml, tsconfig.json, package.json, or Python config found)".into());
         };
 
-        let mut command = Command::new(resolve_command(cmd));
+        let mut command = Command::new(cmd);
         command
             .args(&args)
             .current_dir(&self.workspace)

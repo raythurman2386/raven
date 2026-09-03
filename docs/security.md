@@ -115,22 +115,28 @@ entirely (e.g. if a legitimate tool needs network access).
 
 ### 4. Resource limits (`setrlimit`)
 
-**What it does:** Applies `RLIMIT_CPU` (30s), `RLIMIT_FSIZE` (64 MiB), and
+**What it does:** Applies `RLIMIT_CPU` (30s), `RLIMIT_FSIZE` (248 MiB), and
 `RLIMIT_NOFILE` (1024) to every subprocess.
 
 **Why:** Caps oversized writes (`RLIMIT_FSIZE`), runaway CPU (`RLIMIT_CPU`),
-and fd exhaustion (`RLIMIT_NOFILE`).
+and fd exhaustion (`RLIMIT_NOFILE`). The 248 MiB write cap stays above real
+toolchain outputs (raven's own debug test binary is ~280 MiB with full
+debuginfo) while bounding a runaway write.
 
 **Exemption for sanctioned verification commands:** `run_tests`, `run_lint`,
 and `run_shell` commands that match the verification-gate predicate
 (`cargo test`, `cargo clippy`, `cargo fmt --check`, `npm test`, `pytest`,
 `tsc`, `eslint`, …) skip rlimits entirely. These commands legitimately need
-to write linker outputs larger than 64 MiB (a debug test binary can exceed
-the `RLIMIT_FSIZE` cap, which would SIGXFSZ-kill the linker) and to burn more
-than 30s of CPU on a clean build. The exemption mirrors the seccomp
-network-block exemption already granted to the same sanctioned commands, and
-is limited to commands the enforced-verify gate would credit — not arbitrary
-model output. Landlock and seccomp still apply.
+to write linker outputs larger than the cap (a debug test binary with full
+debuginfo can exceed it, which would SIGXFSZ-kill the linker) and to burn more
+than 30s of CPU on a clean build. The matcher tolerates inert prefixes — a
+single leading `cd <dir> &&`, leading `VAR=value` assignments — and a single
+trailing pipe into a read-only output consumer (`tail`, `head`, `grep`,
+`sed -n`, `sort`, `uniq`, `wc`); anything executable chained after the
+sanctioned command (`&&`, `;`, a non-reader pipe) does not match. The
+exemption mirrors the seccomp network-block exemption already granted to the
+same sanctioned commands, and is limited to commands the enforced-verify gate
+would credit — not arbitrary model output. Landlock and seccomp still apply.
 
 **Platforms:** Linux + macOS.
 
@@ -149,60 +155,9 @@ capped via `setrlimit`:
   because the ambient thread count is already near the cap.
 
 The remaining layers bound the practical damage: Landlock confines the
-filesystem, `RLIMIT_CPU`/`RLIMIT_FSIZE` stop runaway execution and writes, and
-Windows Job Objects bound committed memory separately (see §5).
+filesystem, and `RLIMIT_CPU`/`RLIMIT_FSIZE` stop runaway execution and writes.
 
-### 5. Windows Job Objects (resource limits + process-tree confinement)
-
-**What it does:** On Windows, every subprocess Raven spawns is assigned to a
-fresh Job Object configured with:
-
-- `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` — all processes in the job are killed
-  when the job handle closes, so a runaway child (and its entire process tree)
-  cannot outlive the parent Raven process.
-- `JOB_OBJECT_LIMIT_ACTIVE_PROCESS` (max 256) — caps the process tree size.
-- `JOB_OBJECT_LIMIT_PROCESS_MEMORY` / `JOB_OBJECT_LIMIT_JOB_MEMORY` (1 GiB
-  each) — caps per-process and per-job committed memory. These count *resident*
-  (committed) memory, not virtual address space, so unlike the Unix `RLIMIT_AS`
-  they do not break runtimes like V8/Node that reserve large virtual regions.
-
-The child is opened with the minimal access rights (`PROCESS_SET_QUOTA |
-PROCESS_QUERY_INFORMATION | PROCESS_TERMINATE`) — deliberately *not*
-`PROCESS_ALL_ACCESS`.
-
-**Why:** Job Objects are the Windows-native equivalent of the Unix
-Landlock/seccomp/rlimits model. A process in a job cannot escape it, so a
-misbehaving child's grandchildren are confined to the same limits, and a
-fork-bomb/runaway process is killed when Raven exits.
-
-**Platforms:** Windows only.
-
-**Limitation:** Best-effort. If creating or assigning the Job Object fails
-(kernel policy, handle exhaustion), Raven logs a warning and the child runs
-without job confinement — the same posture as the Unix layers.
-
-**Residual risk (Windows filesystem and network):** Job Objects are **not** a
-filesystem sandbox. There is no Landlock, AppContainer, Mandatory Integrity
-Control, or Restricted Token applied to the child. A confined Windows
-subprocess can:
-
-- read and write any file the user can (`%USERPROFILE%`, other drives, UNC
-  paths, `%TEMP%` — which is **not** pinned the way Linux `TMPDIR` is),
-- create `AF_INET`/`AF_INET6` sockets (no seccomp equivalent),
-- follow symlinks / junctions / reparse points anywhere the user can.
-
-File tools (`read_file` / `write_file` / …) still apply lexical `..` rejection
-plus canonicalization of the nearest existing ancestor (`safe_resolve`). That
-is a real check but has a small TOCTOU window and does **not** bind the
-subprocess. `openat2`/`RESOLVE_BENEATH` is Linux-only.
-
-**What this means in practice:** a misbehaving model on Windows can exfiltrate
-secrets over the network and write outside the workspace via `run_shell`.
-Mitigations that actually help: keep `confirm_shell` on (do not pass `--yolo`),
-run Raven as a low-privilege user, or run it inside Windows Sandbox / a VM /
-a container. Do not treat Job Objects as "the Windows Landlock".
-
-### 6. Shell safety (denylist + allowlist + direct exec)
+### 5. Shell safety (denylist + allowlist + direct exec)
 
 **What it does:**
 - **Denylist** (`dangerous_re`): blocks obviously destructive patterns
@@ -231,11 +186,11 @@ a container. Do not treat Job Objects as "the Windows Landlock".
 **Platforms:** All.
 
 **Limitation:** The shell fallback path (commands with metacharacters) still
-goes through `sh -c` (or `cmd /C` on Windows), which is inherently
-injection-prone. The denylist is not a security boundary. The real safety net
-is `confirm_shell` (user approval) and the OS-level layers above.
+goes through `sh -c`, which is inherently injection-prone. The denylist is not
+a security boundary. The real safety net is `confirm_shell` (user approval) and
+the OS-level layers above.
 
-### 7. Tool-argument hygiene
+### 6. Tool-argument hygiene
 
 **What it does:** Before dispatch, Raven rejects tool calls whose arguments
 JSON exceeds 1 MiB, are not a JSON object, or omit/mis-type required fields
@@ -250,12 +205,6 @@ OS layers.
 
 ## What Raven does NOT do
 
-- **No Windows filesystem confinement.** Windows gets Job Objects (resource
-  limits + process-tree confinement + kill-on-close) and shell filtering, but
-  there is no Landlock/seccomp/AppContainer equivalent — a subprocess on
-  Windows can still read/write any file the user can, follow junctions, and
-  make network calls. See §5 residual risk. This is the same posture as most
-  tools in this space.
 - **No container/VM isolation.** Raven does not require Docker or any
   container runtime. If you need stronger isolation, run Raven inside a
   container or VM yourself.

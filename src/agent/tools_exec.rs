@@ -188,10 +188,9 @@ impl Agent {
                 };
                 if !pre_approved {
                     let (confirm_tx, confirm_rx) = tokio::sync::oneshot::channel::<String>();
-                    let question = format!("Allow this shell command?\n\n$ {command}\n\n(type 'y' to allow, anything else to deny)");
                     let _ = tx
-                        .send(AgentEvent::AskUser {
-                            question,
+                        .send(AgentEvent::AskPermission {
+                            command: command.clone(),
                             reply: confirm_tx,
                         })
                         .await;
@@ -569,12 +568,23 @@ impl Agent {
 /// genuinely successful run (fail-closed, issue #136).
 ///
 /// Returns `true` only when the output shows `exit=0` and contains no signal
-/// kill, timeout, or test-failure markers. A SIGSYS-killed, timed-out, or
-/// non-zero-exit "verification" does NOT count as verified.
+/// kill, linker/compile failure, timeout, or test-failure markers. A
+/// SIGSYS-killed, timed-out, linker-crashed, or non-zero-exit "verification"
+/// does NOT count as verified.
 fn verification_passed(output: &str) -> bool {
     if output.contains("Error: command killed by signal")
         || output.contains("killed by signal")
         || output.contains("timed out")
+    {
+        return false;
+    }
+
+    // Linker / compiler failures report `exit=0` when the command was piped
+    // (the pipeline's exit code is the last stage's) while the payload shows
+    // the real failure. Fail closed on the payload markers.
+    if output.contains("terminated with signal")
+        || output.contains("could not compile")
+        || output.contains("error: linking with")
     {
         return false;
     }
@@ -697,6 +707,27 @@ mod tests {
         let output = "--- run_tests (cargo) exit=10 ---\n10 tests failed\n";
         assert!(!verification_passed(output));
         assert_eq!(parse_exit_code(output), Some(10));
+    }
+
+    #[test]
+    fn verification_passed_linker_signal_terminated_is_not_verified() {
+        // Regression: a piped `cargo test | tail` reports the pipeline's
+        // exit=0 while the payload shows the real linker death. The gate
+        // must fail closed on the payload markers.
+        let output = "exit=0\ncollect2: fatal error: ld terminated with signal 25 [File size limit exceeded]\nerror: could not compile `raven` (lib test) due to 1 previous error\n";
+        assert!(!verification_passed(output));
+    }
+
+    #[test]
+    fn verification_passed_linking_with_failure_is_not_verified() {
+        let output = "exit=0\nerror: linking with `cc` failed: exit status: 1\n";
+        assert!(!verification_passed(output));
+    }
+
+    #[test]
+    fn verification_passed_could_not_compile_is_not_verified() {
+        let output = "exit=0\nerror: could not compile `raven` due to 3 previous errors\n";
+        assert!(!verification_passed(output));
     }
 
     #[test]
