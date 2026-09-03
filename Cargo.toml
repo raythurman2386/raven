@@ -2,7 +2,7 @@
 name = "raven"
 version = "0.5.19"
 edition = "2021"
-description = "Privacy-first local coding-agent harness for Ollama / OpenAI-compatible endpoints"
+description = "An opinionated, personal coding-agent harness for Linux and Raspberry Pi (Ollama / OpenAI-compatible endpoints)"
 license = "MIT"
 rust-version = "1.88"
 

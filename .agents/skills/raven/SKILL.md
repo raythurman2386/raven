@@ -1,6 +1,6 @@
 ---
 name: raven
-description: "Use when developing the Raven coding-agent harness — a privacy-first local coding-agent CLI in Rust for Ollama / OpenAI-compatible endpoints. Provides architecture, module map, conventions, verify commands, and the enforced-verification gate."
+description: "Use when developing the Raven coding-agent harness — an opinionated personal coding-agent CLI in Rust for Linux/Pi (Ollama / OpenAI-compatible endpoints). Provides architecture, module map, conventions, verify commands, and the enforced-verification gate."
 version: 1.1.0
 author: Hermes Agent
 license: MIT
@@ -12,11 +12,11 @@ metadata:
 
 # Raven — Development Skill
 
-Raven is a privacy-first local coding-agent harness written in Rust. It runs a
-streaming agent loop against a local (or cloud) Ollama / OpenAI-compatible
-`/v1/chat/completions` endpoint, with tools, plan mode, context compaction, and
-parallel sub-agents. This skill gives you the full context to work on it
-correctly.
+Raven is an opinionated, personal coding-agent harness written in Rust for
+Linux and Raspberry Pi. It runs a streaming agent loop against a local (or
+cloud) Ollama / OpenAI-compatible `/v1/chat/completions` endpoint, with tools,
+plan mode, context compaction, and parallel sub-agents. This skill gives you
+the full context to work on it correctly.
 
 ## When to Use
 

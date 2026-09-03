@@ -1,46 +1,35 @@
 # Raven
 
-A small, privacy-first coding-agent harness written in Rust for [Ollama](https://ollama.com) and any OpenAI-compatible endpoint. It's a single binary that runs a real agent loop — tools, plan mode, verification, workspace isolation — against a model endpoint you control. No cloud auth layer, no MCP marketplace, no telemetry, no personality layer. Just the loop, the tools, and your workspace.
+My opinionated, personal coding-agent harness. Single Rust binary for Linux (x86_64, aarch64) and Raspberry Pi, speaking plain OpenAI-compatible `/v1/chat/completions` to whatever model endpoint I point it at — local Ollama, Ollama Cloud, or OpenRouter.
 
-I built it to learn Rust and to have a harness that only contains the pieces I actually use. It's small enough to read end-to-end, and it runs fine on a Raspberry Pi.
+Modern harnesses are getting bloated: managed auth layers, plugin marketplaces, personality files, and telemetry that not everyone really trusts. I didn't want any of that. I wanted to build and learn a harness end-to-end — the agent loop, streaming, context compaction, sandboxing, TUI, session persistence — and then work through each issue as it comes up in real use. Raven is that project. It's ~23K lines of Rust you can read in an afternoon, and when something breaks, the fix is mine to make.
 
 ---
 
-## Why Raven?
+## Where it stands
 
-I wanted a coding agent I could actually understand and trust. The big harnesses are powerful, but they bring a lot I don't need — managed auth, plugin marketplaces, telemetry, personality layers. Raven keeps the parts that matter for real work and drops the rest.
+I use raven as my daily harness for the majority of real work:
 
-**What it's like to use:**
+- **TUI** (`raven`) — terminal driver, streaming output, slash commands, permission gates, plan mode
+- **Editor agent** (`raven --acp`) — ACP over stdio as an external agent in [Zed](https://zed.dev) and [Hearth](https://github.com/raythurman2386/hearth), with provider/model switching from the editor's picker
+- **Headless** (`raven -p "…"`) — scripted/CI tasks, and as the backend other agents drive for debugging (I let Grok Build run it headless to help debug raven itself)
+- **System scope** (`raven --system`) — the same harness pointed at the whole machine for OS administration (Omarchy desktop management), with tiered shell confirmations
 
-- **Local first** — runs against Ollama on your machine by default; dial in OpenRouter when a task needs a bigger model. Only LLM requests leave your network.
-- **No telemetry** — ever. No usage tracking, no phone-home, no cloud sync. All session state stays on disk, locally.
-- **Auditable** — about 23K lines of Rust excluding tests (~31K with tests). You can read the whole harness. No proprietary plugins, no external service dependencies.
-- **Small footprint** — a single binary that runs comfortably on a Raspberry Pi. No daemon, no background indexing.
-- **No personality layer** — no "soul file". It keeps a plain `.raven/MEMORY.md` with exactly what you tell it to remember.
-- **Production-grade safety** — workspace confinement (Landlock + seccomp on Linux), shell command filters, git-worktree isolation, and a verify-before-done gate.
+I still reach for other harnesses when one fits a job better, but the loop of daily work — edit, test, fix, commit — I trust to raven. It got there the honest way: I set the models I want to use, leave it alone until it fails at something, then fix that thing in the harness instead of working around it.
 
-It's built for focused, supervised work — not an autonomous loop trying to complete entire projects unsupervised. I review everything it produces.
-
-## How I use it
-
-Daily driver is the TUI, usually attached to Zed over ACP (`raven --acp`) so model switching happens in the editor's picker. In a terminal: `raven -p "…"` for agent-mode tasks, `--mode plan` when you want a gated plan, `--yolo` for throwaway work.
-
-- **Sessions** — every turn lands in `.raven/sessions/` as JSONL. `--resume` continues the latest, `--list-sessions` browses, `/export` bundles a session as Markdown/JSON.
-- **System scope** — `raven --system` runs the same TUI against the whole machine (sandbox root `/`, tiered shell policy: diagnostics auto-run, mutations confirm — or `--system --yolo` for full autonomy on a trusted machine, OS-administration prompt) for Omarchy/desktop management; sessions audit-trailed under `~/.raven/system/sessions/`.
-- **Models** — `glm-5.3-flash:cloud` for day-to-day work, `glm-5.3:cloud` when a task needs the flagship, `x-ai/grok-4.5` on OpenRouter for frontier reasoning, `qwen3.8:latest` offline. `/model` + Tab completes; `/provider` switches endpoints.
-- **Hermes lineage** — `read_file` document extraction mirrors Hermes Agent's `read_extract.py` (same `anydoc` core), and loop-control fallbacks mirror Hermes's max-iteration recovery. Ideas borrowed from good harnesses; the code is all here.
+**Why no MCP (yet):** I haven't used MCP servers much, so building support would be speculative — the harness stays honest by containing only pieces I actually use. It's not a forever "never"; if it becomes something I need, it gets built the same way everything else here did.
 
 ---
 
 ## Install
 
-**Linux / Raspberry Pi:**
+**Linux / Raspberry Pi** (x86_64, aarch64, armv7 — the only supported platforms):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/raythurman2386/raven/master/install.sh | sh
 ```
 
-The script detects your platform, downloads the latest prebuilt binary from GitHub Releases, verifies the SHA-256 checksum against a manifest signed with a pinned Ed25519 key (a bad signature refuses the install), and installs to `~/.cargo/bin`. Build from source with `cargo build --release` or `cargo install --path .`.
+The script detects your platform, downloads the latest prebuilt binary from GitHub Releases, verifies the SHA-256 checksum against a manifest signed with a pinned Ed25519 key (a bad signature refuses the install), and installs to `~/.cargo/bin`. Build from source with `cargo build --release` or `cargo install --path .`. macOS code paths still compile (rlimits-only confinement) but there are no release builds for it.
 
 **Requirements:** Rust 1.88+ (MSRV) and a model endpoint — local Ollama, [Ollama Cloud](https://ollama.ai/cloud), [OpenRouter](https://openrouter.ai), or any OpenAI-compatible `/v1` API.
 
@@ -74,10 +63,11 @@ raven --resume          # resume latest
 raven --list-sessions    # browse all sessions
 ```
 
-### In the editor (Zed)
+### In the editor (Zed / Hearth)
 
 Raven speaks Agent Client Protocol (ACP) over stdio (`raven --acp`), so it runs
-as an external agent inside [Zed](https://zed.dev). It advertises a `model`
+as an external agent inside [Zed](https://zed.dev) and
+[Hearth](https://github.com/raythurman2386/hearth). It advertises a `model`
 session config option listing every configured provider's models, so you can
 switch providers and models from the editor's model selector. See
 [`docs/zed_connection.md`](docs/zed_connection.md) for the complete setup.
@@ -86,23 +76,23 @@ switch providers and models from the editor's model selector. See
 
 ## Features
 
-| In scope | Intentionally out of scope |
+| In the harness | Deliberately not in it |
 |---|---|
-| Streaming agent loop (OpenAI-compatible `/v1/chat/completions`) | MCP marketplace — Raven stays lean |
-| 24 tools: `list_dir`, `read_file`, `search_replace`, `write_file`, `grep`, `run_shell`, `search_code`, `todo_write`, `goal_set`, `delegate_task`, `think`, `memory_update`, `memory_search`, `git_status`, `git_diff`, `git_log`, `apply_patch`, `run_tests`, `run_lint`, `ask_user`, `web_search`, `web_fetch`, `skill_search`, `skill_load` | Remote config sync |
-| Small footprint — runs on a Raspberry Pi | Personality / "soul file" |
-| Document extraction (`read_file` → Markdown via `anydoc`: `.docx`, `.pdf`, `.xlsx`, …) | Multi-model routing |
+| Streaming agent loop (OpenAI-compatible `/v1/chat/completions`) | MCP support — I don't use MCP servers yet; this gets built if/when I do |
+| 24 tools: `list_dir`, `read_file`, `search_replace`, `write_file`, `grep`, `run_shell`, `search_code`, `todo_write`, `goal_set`, `delegate_task`, `think`, `memory_update`, `memory_search`, `git_status`, `git_diff`, `git_log`, `apply_patch`, `run_tests`, `run_lint`, `ask_user`, `web_search`, `web_fetch`, `skill_search`, `skill_load` | Telemetry / usage tracking / phone-home — I don't trust it either |
+| Small footprint — single binary, runs on a Raspberry Pi | Personality / "soul file" — it's an agent loop, not a character |
+| Document extraction (`read_file` → Markdown via `anydoc`: `.docx`, `.pdf`, `.xlsx`, …) | Plugin marketplace / managed auth layer |
 | Workspace sandbox (path confinement + dangerous-command filter) | GUI / web frontend |
-| OS-level subprocess confinement (Landlock, seccomp, rlimits) | Container/VM isolation |
-| Git worktree isolation (isolated branches per task) | Cloud sync of sessions |
-| Structured plan mode (parse → approve → revise → execute) | Native IDE integration beyond ACP |
-| Skills (`SKILL.md` discovery + `skill_search`/`skill_load`) | Plugin marketplace / auth |
-| Repo symbol map (`<repo_map>` for large workspaces) | Managed workflow orchestration |
-| Parallel tool execution within a single model turn | Telemetry / usage tracking |
+| OS-level subprocess confinement (Landlock, seccomp, rlimits) | Cloud sync of sessions — state stays on your disk |
+| Git worktree isolation (isolated branches per task) | Multi-model routing — one model per turn, switched explicitly |
+| Structured plan mode (parse → approve → revise → execute) | Windows / macOS release targets — Linux + Pi is the whole surface |
+| Skills (`SKILL.md` discovery + `skill_search`/`skill_load`) | |
+| Repo symbol map (`<repo_map>` for large workspaces) | |
+| Parallel tool execution within a single model turn | |
 | Context-window inference + automatic compaction | |
 | JSONL session persistence + `--resume` / `--list-sessions` | |
-| Cross-session project memory (`.raven/MEMORY.md`) | |
-| ACP v1 stdio (`raven --acp`) for editor attachment | |
+| Cross-session project memory (`.raven/MEMORY.md`) — a plain file, nothing hidden | |
+| ACP v1 stdio (`raven --acp`) for editor attachment (Zed, Hearth) | |
 | ratatui TUI + headless CLI | |
 
 ---
@@ -114,7 +104,7 @@ switch providers and models from the editor's model selector. See
 | [docs/usage.md](docs/usage.md) | Users | Day-to-day workflows, plan mode, parallel sub-agents |
 | [docs/configuration.md](docs/configuration.md) | Users | Config, env vars, providers, API keys, AGENTS.md |
 | [docs/example.config.toml](docs/example.config.toml) | Users | Fully-commented reference config |
-| [docs/zed_connection.md](docs/zed_connection.md) | Users | Connect Raven to Zed via ACP |
+| [docs/zed_connection.md](docs/zed_connection.md) | Users | Connect Raven to Zed / Hearth via ACP |
 | [docs/omarchy.md](docs/omarchy.md) | Users (Omarchy Linux) | Default agent + Agents bar panel integration |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Users | Common failure modes (streams, sandbox, ACP) |
 | [docs/tools.md](docs/tools.md) | Users + Contributors | Tool contracts, parameters, sandbox rules |
@@ -125,7 +115,7 @@ switch providers and models from the editor's model selector. See
 
 See also the full [docs index](docs/README.md) and [CHANGELOG.md](CHANGELOG.md).
 
-Raven keeps a plain, editable file at `.raven/MEMORY.md`. The first 25KB is injected into the system prompt on each run. The `memory_update` tool lets the agent persist conventions, decisions, and context across sessions — but it's just a Markdown file you can read and edit yourself. There's no hidden state, no "soul" or persona. It remembers exactly what you (or the agent) put in that file, and nothing else.
+Raven keeps a plain, editable file at `.raven/MEMORY.md`. The first 25KB is injected into the system prompt on each run, and the `memory_update` tool lets the agent persist conventions, decisions, and context across sessions. It's just a Markdown file — open it, edit it, delete it. It remembers exactly what you (or the agent) put in that file, and nothing else.
 
 ---
 
@@ -212,11 +202,13 @@ raven -p "Refactor this function"
 - **`/loop [N]`** — show or set the max iteration budget for new turns
 - **`/steer <message>`** — redirect the running agent (queued into the turn; re-fires the last turn when idle)
 - **`/cleanup <days> [--yes]`** — prune sessions older than N days (dry-run unless `--yes`; never deletes the current session)
-- **`^C`** — stop the current task (session auto-saves)
+- **`Esc`** — interrupt the running task (session auto-saves the partial turn); layered dismiss when completion/selection/prompt is open. When idle, `Esc` `Esc` quits
+- **`Ctrl+C`** — interrupts like Esc while a turn runs; needs a second press within 3s to quit when idle
 - **Tab** — complete the current slash command or its argument; press again to cycle candidates. **Enter** submits when the box already holds a complete candidate (Tab-filled or fully typed), otherwise it fills the highlighted one
 - **Up/Down** — recall previous prompts (keep pressing Up to walk back through history; Down returns toward the live input; typing resets). When you are not recalling (typed text at the live position), Up/Down scroll the transcript instead
 - **Wheel / PgUp / PgDn** — scroll the transcript (wheel never walks prompt history). Home jumps to the top when the input is empty; End returns to the live tail
 - **Mouse drag** — select text in the transcript to copy it to your clipboard
+- **`y` / `n`** — answer a shell-permission prompt in one keystroke (bare `Enter` allows, `Esc` denies)
 - The footer below the input box shows context-sensitive keyhints (approve / answer / interrupt / idle)
 
 ### For large codebases
@@ -325,14 +317,14 @@ SearXNG fallback, ACP) are covered in
 
 ---
 
-## Privacy & local-only operation
+## What talks to the network
 
-**No telemetry, ever.** Nothing is collected, even anonymously. All agent state stays on your machine (except LLM requests to your chosen endpoint). The only network access is:
+Raven makes exactly two kinds of outbound requests, both under your control:
 
-1. **LLM requests** to your endpoint (Ollama local, OpenRouter cloud, etc.) — you control this.
+1. **LLM requests** to your configured endpoint (Ollama local, Ollama Cloud, OpenRouter, …).
 2. **Optional** `web_search` requests to DuckDuckGo or a self-hosted SearXNG instance.
 
-Everything else stays local. Sessions are stored as plain JSONL under `.raven/sessions/` with local debug-event logs and git-diff snapshots for audit/rollback.
+That's the whole list. No update checks run on their own (self-update is an explicit `raven self update`), nothing is collected or reported, and all session state — JSONL transcripts, debug-event logs, git-diff snapshots — lives as plain files under `.raven/` on your disk. If you want to verify that, it's ~23K lines; the network calls are all in `agent/stream.rs` and `web.rs`.
 
 ---
 

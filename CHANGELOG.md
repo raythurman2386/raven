@@ -54,6 +54,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **README repositioned to what raven actually is** — an opinionated, personal
+  harness for Linux and Raspberry Pi, built end-to-end as a learning project
+  and used daily as a TUI, ACP server (Zed/Hearth), and headless backend —
+  replacing the "privacy-first" marketing framing with plain statements of
+  what talks to the network and why MCP isn't in it (yet). CLI `--help` /
+  crate description updated to match.
 - **Sandbox file-size cap raised 64 MiB → 248 MiB** — the inner sandbox's
   `RLIMIT_FSIZE` now allows 248 MiB writes per confined child. The old 64 MiB
   cap SIGXFSZ-killed real toolchain work (a debug test binary with full
