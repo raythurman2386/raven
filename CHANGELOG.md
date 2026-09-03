@@ -4,53 +4,7 @@ All notable changes to Raven are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.5.19] - 2026-09-02
-
-### Changed
-
-- **System scope now runs the standard TUI and headless harness** — `raven
-  --system` with no prompt opens the same TUI as the repo default (same
-  slash commands, plan flow); `-p "task"` runs the standard headless one-shot.
-  The dedicated headless system runner (`src/system.rs`) is gone; scope is a
-  `Settings` axis flowing through the normal dispatch. System sessions persist
-  under `~/.raven/system/sessions/` (audit trail) and `--list-sessions` /
-  `--export` / `--resume` work against that store. System-scope scratch dirs
-  (sandbox TMPDIR/caches, git patch staging) and `memory_update` writes land
-  under `~/.raven/` instead of `/​.raven`.
-- **Tiered system-scope shell policy** — a system-scope allowlist
-  (`system_safe_command_re`) auto-runs read-only diagnostics (`pacman`
-  query/search/info, `systemctl status/list/show/cat`, `journalctl`,
-  `coredumpctl`, `hyprctl` reads, hardware readers, `omarchy` informational
-  commands) without a confirmation prompt; state-changing operations still
-  confirm. The OS-administration prompt documents the split.
-- **`--system --yolo` is now a supported explicit opt-in** to a fully
-  autonomous system agent (trusted single-user machines) — previously
-  rejected outright. The destructive-command denylist and the seccomp network
-  block still apply under `--yolo`.
-- **Flag combinations with `--system` now error instead of being silently
-  ignored**: `--system --acp`, `--system --parallel`, and `--system
-  --workspace <path>` are rejected up front (previously ACP silently won over
-  `--system`, and the others were no-ops). An empty task under
-  `--system --headless` now errors like the repo-scoped path instead of
-  sending an empty prompt.
-
-### Fixed
-
-- **TUI: window resizes now repaint** — a `Event::Resize` handler marks the
-  frame dirty; previously resizes were silently ignored and the terminal kept
-  showing the last frame laid out for the old size (missing input box,
-  orphaned cursor) until the next keypress.
-- **TUI: shell-confirmation answers register visibly** — answering a
-  confirmation now logs `→ answered: <reply>` immediately and an animated
-  `awaiting model…` indicator shows while the next model response is in
-  flight (previously the screen went silent for the whole round-trip).
-- **TUI: Enter on an empty input during a confirmation now answers "no"**
-  instead of being swallowed (which stalled the agent); Esc dismisses a
-  pending question as a denial instead of dropping the reply channel.
-- **Sandbox: unscoped `grep` / `search_code` in system scope no longer walk
-  the whole filesystem** — the walks cap at 20 000 files and skip kernel
-  pseudo-filesystems (`/proc`, `/sys`, `/dev`, `/run`, `/boot`), reporting
-  the cap in results so the model narrows the search.
+## [0.6.0] - 2026-09-03
 
 ### Changed
 
@@ -101,9 +55,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`cargo doc` warnings fixed** — the stale intra-doc link in
   `testutil.rs`'s module docs and the private-item link in `memory.rs` are
   resolved; docs build warning-free.
-
-### Fixed (earlier in this cycle)
-
 - **Mode confusion after Shift+Tab** — the TUI's mode cycle only updated the
   display; the agent's system prompt (`--- Mode ---` section) and, separately,
   the advertised toolset kept the *startup* mode. A session started/resumed in
@@ -160,6 +111,53 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   you were running raven on Windows — migrate to the Linux binary under WSL
   or a container.
 
+## [0.5.19] - 2026-09-02
+
+### Changed
+
+- **System scope now runs the standard TUI and headless harness** — `raven
+  --system` with no prompt opens the same TUI as the repo default (same
+  slash commands, plan flow); `-p "task"` runs the standard headless one-shot.
+  The dedicated headless system runner (`src/system.rs`) is gone; scope is a
+  `Settings` axis flowing through the normal dispatch. System sessions persist
+  under `~/.raven/system/sessions/` (audit trail) and `--list-sessions` /
+  `--export` / `--resume` work against that store. System-scope scratch dirs
+  (sandbox TMPDIR/caches, git patch staging) and `memory_update` writes land
+  under `~/.raven/` instead of `/​.raven`.
+- **Tiered system-scope shell policy** — a system-scope allowlist
+  (`system_safe_command_re`) auto-runs read-only diagnostics (`pacman`
+  query/search/info, `systemctl status/list/show/cat`, `journalctl`,
+  `coredumpctl`, `hyprctl` reads, hardware readers, `omarchy` informational
+  commands) without a confirmation prompt; state-changing operations still
+  confirm. The OS-administration prompt documents the split.
+- **`--system --yolo` is now a supported explicit opt-in** to a fully
+  autonomous system agent (trusted single-user machines) — previously
+  rejected outright. The destructive-command denylist and the seccomp network
+  block still apply under `--yolo`.
+- **Flag combinations with `--system` now error instead of being silently
+  ignored**: `--system --acp`, `--system --parallel`, and `--system
+  --workspace <path>` are rejected up front (previously ACP silently won over
+  `--system`, and the others were no-ops). An empty task under
+  `--system --headless` now errors like the repo-scoped path instead of
+  sending an empty prompt.
+
+### Fixed
+
+- **TUI: window resizes now repaint** — a `Event::Resize` handler marks the
+  frame dirty; previously resizes were silently ignored and the terminal kept
+  showing the last frame laid out for the old size (missing input box,
+  orphaned cursor) until the next keypress.
+- **TUI: shell-confirmation answers register visibly** — answering a
+  confirmation now logs `→ answered: <reply>` immediately and an animated
+  `awaiting model…` indicator shows while the next model response is in
+  flight (previously the screen went silent for the whole round-trip).
+- **TUI: Enter on an empty input during a confirmation now answers "no"**
+  instead of being swallowed (which stalled the agent); Esc dismisses a
+  pending question as a denial instead of dropping the reply channel.
+- **Sandbox: unscoped `grep` / `search_code` in system scope no longer walk
+  the whole filesystem** — the walks cap at 20 000 files and skip kernel
+  pseudo-filesystems (`/proc`, `/sys`, `/dev`, `/run`, `/boot`), reporting
+  the cap in results so the model narrows the search.
 ## [0.5.18] - 2026-09-01
 
 ### Added

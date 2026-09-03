@@ -16,7 +16,7 @@ agent-loop behavior change unless fixing a TUI bug.
   a real leap would be 0.4.0 with a CHANGELOG "TUI" section.
 - No theme store. One default ravenwood + the existing minimal alts.
 
-## Current state (keybinds verified at v0.5.19)
+## Current state (keybinds verified at v0.6.0)
 
 - `src/tui/mod.rs` — event loop, layout, draw_ui, input, mouse, plan handling,
   agent-turn spawn. Extract only when a surface stabilizes.
@@ -32,7 +32,7 @@ agent-loop behavior change unless fixing a TUI bug.
   terminal is too narrow); status strip has
   state·workspace·steps·live-tool·waiting·copy-toast·[stop] (or the
   quit-confirm hint); footer shows context-sensitive keyhints.
-- Keybinds (v0.5.19): `Esc` is the layered key — completion → selection →
+- Keybinds (v0.6.0): `Esc` is the layered key — completion → selection →
   pending prompt (permission gates deny on Esc) → interrupt a running turn →
   double-press-quit (3s window). `Ctrl+C` interrupts while running and needs a
   second press to quit when idle. `Enter` while running queues a steer.
