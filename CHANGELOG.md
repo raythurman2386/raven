@@ -66,6 +66,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   debuginfo can exceed it; raven's own is ~280 MiB). The cap remains a
   bounded guardrail, and sanctioned verification commands (`cargo test`,
   `cargo clippy`, `npm test`, `pytest`, …) still skip rlimits entirely.
+- **Web tools hardened + made honest** — `web_search` now detects
+  DuckDuckGo's bot-detection challenge page and returns an actionable error
+  ("wait a minute or configure SearXNG") instead of parsing it as junk
+  results or a false "No results found.". The DDG result parser is anchored
+  to real `<a class="result__a">` tags (previously the bare `result__a`
+  string also matched CSS selectors inside `<style>` blocks, emitting
+  garbage like `ader__logo-wrap`), HTML entities are decoded in titles and
+  page text (`&amp;`, numeric, and the common named entities), and
+  percent-decoding is byte-correct so multibyte UTF-8 URLs decode properly
+  (`%E4%B8%AD` → `中`, not three replacement chars). SearXNG now honors the
+  `page` parameter (`pageno`). `web_fetch` streams bodies with a 512 KB
+  download cap instead of buffering unbounded pages, rejects binary content
+  types with a clear error, and strips HTML comments. The user agent is now
+  `raven/<version>` (was a stale `raven-mini-harness/0.1` string).
 
 ### Fixed
 

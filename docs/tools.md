@@ -280,7 +280,9 @@ Pauses the agent and asks the user a question. In the TUI the input box repurpos
 
 Searches the web via DuckDuckGo's HTML endpoint by default. No API key required. Returns up to 10 results per page (title + URL). Output capped at 12 000 chars. Read-only and available during planning.
 
-When a [SearXNG](https://docs.searxng.org/) base URL is configured (`RAVEN_SEARXNG_URL` or the `searxng_url` config key), `web_search` queries the SearXNG JSON API instead and returns title + URL + a short snippet. If SearXNG is unreachable, returns an error, or returns empty results, it automatically falls back to DuckDuckGo so search never bricks. No API key is needed for a typical SearXNG install. See [configuration.md](configuration.md#searxng) for setup.
+When a [SearXNG](https://docs.searxng.org/) base URL is configured (`RAVEN_SEARXNG_URL` or the `searxng_url` config key), `web_search` queries the SearXNG JSON API instead and returns title + URL + a short snippet; the `page` parameter maps to SearXNG's `pageno`. If SearXNG is unreachable, returns an error, or returns empty results, it automatically falls back to DuckDuckGo so search never bricks. No API key is needed for a typical SearXNG install. See [configuration.md](configuration.md#searxng) for setup.
+
+DuckDuckGo rate-limits aggressive clients with a bot-detection challenge; when that happens `web_search` returns a clear error telling the model to wait (or to use the configured SearXNG backend) instead of returning junk.
 
 ### `web_fetch`
 
@@ -290,7 +292,7 @@ When a [SearXNG](https://docs.searxng.org/) base URL is configured (`RAVEN_SEARX
 }
 ```
 
-Fetches a URL and returns the page content as readable text (HTML stripped). Only `http://` and `https://` URLs are allowed. 20s total timeout, 10s connect timeout. Output capped at 12 000 chars. Read-only and available during planning.
+Fetches a URL and returns the page content as readable text (HTML stripped, entities decoded). Only `http://` and `https://` URLs are allowed. HTML/text content types only — binary downloads (images, archives) are rejected with an error. The body is capped at 512 KB before parsing, 20s total timeout, 10s connect timeout. Output capped at 12 000 chars. Read-only and available during planning.
 
 ### `skill_search`
 
