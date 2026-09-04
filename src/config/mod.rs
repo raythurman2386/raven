@@ -485,6 +485,10 @@ pub struct ConfigFile {
     pub searxng_url: Option<String>,
     /// Optional comma-separated SearXNG engine list (e.g. `"google,bing"`).
     pub searxng_engines: Option<Vec<String>>,
+    /// Native MCP servers (`[mcp.servers.<name>]`). Workspace overlay wins
+    /// per server name over the global file.
+    #[serde(default)]
+    pub mcp: crate::mcp::McpConfig,
 }
 
 /// Load config from workspace `.raven/config.toml` then `~/.raven/config.toml`.
@@ -531,6 +535,7 @@ pub fn load_config_file(workspace: &std::path::Path) -> ConfigFile {
         theme: ws.theme.or(global.theme),
         searxng_url: ws.searxng_url.or(global.searxng_url),
         searxng_engines: ws.searxng_engines.or(global.searxng_engines),
+        mcp: global.mcp.merge(ws.mcp),
     }
 }
 

@@ -1,10 +1,9 @@
-//! Agent Plugins v1.0.0 — skills-only client conformance.
+//! Agent Plugins v1.0.0 — skills + stdio MCP client conformance.
 //!
-//! Implements the portable subset of the Agent Plugins specification that
-//! Raven supports: loading `plugin.json` manifests, validating the closed
-//! manifest schema and plugin name constraints, and discovering Agent Skills
-//! from each plugin's fixed `skills/` location. MCP servers (`mcp.json`) and
-//! client extensions are outside Raven's scope and are ignored per §11.3.
+//! Loads `plugin.json` manifests, discovers Agent Skills from each plugin's
+//! fixed `skills/` location, and maps portable `mcp.json` stdio servers into
+//! [`crate::mcp::McpServerSpec`]. Streamable HTTP / SSE entries are skipped
+//! (Raven's MCP client is stdio-only). Client extensions are ignored per §8.
 //!
 //! Plugin roots are `~/.raven/plugins/` (global) and `.raven/plugins/`
 //! (workspace). Each immediate child directory containing a `plugin.json` is a
@@ -14,8 +13,15 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-/// Canonical `$schema` identifier for Agent Plugins 1.0.0.
+mod mcp;
+
+pub use mcp::mcp_specs;
+
+/// Canonical `$schema` identifier for Agent Plugins 1.0.0 manifests.
 pub const PLUGIN_SCHEMA: &str = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";
+
+/// Canonical `$schema` identifier for Agent Plugins 1.0.0 MCP configuration.
+pub const MCP_SCHEMA: &str = "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json";
 
 /// A loaded plugin: its validated name, filesystem root, and discovered skills.
 #[derive(Debug, Clone)]
@@ -54,7 +60,7 @@ fn valid_name(name: &str) -> bool {
 }
 
 /// Whether `path` resolves (through symlinks) to a location within `root`.
-fn within(root: &Path, path: &Path) -> bool {
+pub(super) fn within(root: &Path, path: &Path) -> bool {
     match (root.canonicalize(), path.canonicalize()) {
         (Ok(r), Ok(p)) => p.starts_with(&r),
         _ => false,
@@ -271,6 +277,11 @@ pub fn fingerprint(workspace: &Path) -> Vec<(PathBuf, Option<SystemTime>)> {
                         }
                     }
                 }
+            }
+            let mcp = dir.join("mcp.json");
+            if mcp.is_file() {
+                let m = std::fs::metadata(&mcp).and_then(|m| m.modified()).ok();
+                files.push((mcp, m));
             }
         }
     }

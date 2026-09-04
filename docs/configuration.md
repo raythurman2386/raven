@@ -242,6 +242,39 @@ searxng_engines = ["google", "bing"]
 
 Precedence: `RAVEN_SEARXNG_URL` env var > config-file `searxng_url`. `RAVEN_SEARXNG_ENGINES` > config-file `searxng_engines`.
 
+---
+
+## MCP servers
+
+Raven is an MCP **client**. It speaks stdio JSON-RPC to servers you configure
+natively, and ACP editors may also forward servers on `session/new` /
+`session/load` / `session/resume` (ACP requires stdio; HTTP/SSE are not
+advertised). Discovered tools are merged into the model's tool list as
+`{server}__{tool}` (for example `sysmetrics__get_cpu_metrics`). Plan/chat
+mode includes only tools the server marks `readOnlyHint: true`.
+
+```toml
+# ~/.raven/config.toml  (or workspace .raven/config.toml)
+[mcp.servers.sysmetrics]
+command = "sysmetrics-mcp"
+args = ["--temp-unit", "celsius", "--max-processes", "10"]
+```
+
+`command` is looked up on `PATH` when it is not an absolute path. Workspace
+config overlays global config by server name. Set `enabled = false` to keep a
+server listed without starting it.
+
+A failed spawn is logged and skipped; the session still starts. MCP children
+are not Landlock-confined — they are trusted processes you opted into.
+
+Agent Plugins packages may also declare stdio servers in `mcp.json` at the
+plugin root (see [usage.md](usage.md#skills-skill_search--skill_load)). Merge
+order is plugin → `config.toml` → ACP `mcpServers` (later wins on the same
+name).
+
+[sysmetrics-mcp](https://github.com/raythurman2386/sysmetrics-mcp) is the
+reference Linux/Pi metrics server this config is written against.
+
 Behavior:
 
 - When configured, `web_search` queries `GET {base}/search?q=…&format=json` and returns up to 10 results (title + URL + short snippet).

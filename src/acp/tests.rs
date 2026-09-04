@@ -123,13 +123,18 @@ fn extract_prompt_rejects_image() {
 }
 
 #[test]
-fn capabilities_advertise_no_mcp_and_load_session() {
+fn capabilities_advertise_stdio_mcp_and_load_session() {
     let caps = agent_capabilities();
     assert_eq!(caps["loadSession"], true);
+    // Stdio MCP is mandatory in ACP v1 and is not a capability flag.
+    // HTTP/SSE remain unadvertised (optional transports).
     assert_eq!(caps["mcpCapabilities"]["http"], false);
     assert_eq!(caps["mcpCapabilities"]["sse"], false);
     assert_eq!(caps["promptCapabilities"]["image"], false);
     assert!(caps["sessionCapabilities"]["list"].is_object());
+    assert!(caps["sessionCapabilities"]["close"].is_object());
+    assert!(caps["sessionCapabilities"]["resume"].is_object());
+    assert!(caps["sessionCapabilities"]["set"].is_null());
 }
 
 #[test]
@@ -753,9 +758,34 @@ async fn set_model_rejects_missing_or_empty_model() {
 }
 
 #[tokio::test]
-async fn capabilities_advertise_set_capability() {
-    let caps = agent_capabilities();
-    assert!(caps["sessionCapabilities"]["set"].is_object());
+async fn session_new_accepts_mcp_servers_array() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().canonicalize().unwrap();
+    let server = Arc::new(Mutex::new(test_server(&ws)));
+    let buf = Arc::new(StdMutex::new(Vec::new()));
+    let writer: Arc<Mutex<dyn FrameWrite>> = Arc::new(Mutex::new(BufWriter { buf: buf.clone() }));
+    send(&server, &writer, req(1, "initialize", json!({}))).await;
+    send(
+        &server,
+        &writer,
+        req(
+            2,
+            "session/new",
+            json!({
+                "cwd": ws.display().to_string(),
+                "mcpServers": [{
+                    "name": "gone",
+                    "command": "/no/such/mcp-server-raven-test",
+                    "args": [],
+                    "env": []
+                }]
+            }),
+        ),
+    )
+    .await;
+    let frames = frames_from(&buf);
+    // Failed MCP spawn must not fail session/new.
+    assert!(frames[1]["result"]["sessionId"].is_string());
 }
 
 #[tokio::test]

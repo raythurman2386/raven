@@ -558,6 +558,7 @@ fn dummy_state() -> TuiState {
         last_turn: None,
         completion_dismissed_at: None,
         quit_armed: None,
+        mcp: None,
     }
 }
 

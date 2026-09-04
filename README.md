@@ -17,7 +17,7 @@ I use raven as my daily harness for the majority of real work:
 
 I still reach for other harnesses when one fits a job better, but the loop of daily work — edit, test, fix, commit — I trust to raven. It got there the honest way: I set the models I want to use, leave it alone until it fails at something, then fix that thing in the harness instead of working around it.
 
-**Why no MCP (yet):** I haven't used MCP servers much, so building support would be speculative — the harness stays honest by containing only pieces I actually use. It's not a forever "never"; if it becomes something I need, it gets built the same way everything else here did.
+**MCP:** stdio only, opt-in. Configure servers in `config.toml` (`[mcp.servers.<name>]`) or let an ACP editor forward them on `session/new`. Tools show up as `{name}__{tool}` — for example `sysmetrics-mcp` becomes `sysmetrics__get_cpu_metrics`. No marketplace, no HTTP/SSE transport.
 
 ---
 
@@ -78,7 +78,7 @@ switch providers and models from the editor's model selector. See
 
 | In the harness | Deliberately not in it |
 |---|---|
-| Streaming agent loop (OpenAI-compatible `/v1/chat/completions`) | MCP support — I don't use MCP servers yet; this gets built if/when I do |
+| Streaming agent loop (OpenAI-compatible `/v1/chat/completions`) | MCP marketplace / HTTP+SSE MCP transports |
 | 24 tools: `list_dir`, `read_file`, `search_replace`, `write_file`, `grep`, `run_shell`, `search_code`, `todo_write`, `goal_set`, `delegate_task`, `think`, `memory_update`, `memory_search`, `git_status`, `git_diff`, `git_log`, `apply_patch`, `run_tests`, `run_lint`, `ask_user`, `web_search`, `web_fetch`, `skill_search`, `skill_load` | Telemetry / usage tracking / phone-home — I don't trust it either |
 | Small footprint — single binary, runs on a Raspberry Pi | Personality / "soul file" — it's an agent loop, not a character |
 | Document extraction (`read_file` → Markdown via `anydoc`: `.docx`, `.pdf`, `.xlsx`, …) | Plugin marketplace / managed auth layer |
@@ -93,6 +93,7 @@ switch providers and models from the editor's model selector. See
 | JSONL session persistence + `--resume` / `--list-sessions` | |
 | Cross-session project memory (`.raven/MEMORY.md`) — a plain file, nothing hidden | |
 | ACP v1 stdio (`raven --acp`) for editor attachment (Zed, Hearth) | |
+| Stdio MCP client (`[mcp.servers]`, ACP `mcpServers`, Agent Plugins `mcp.json`) | |
 | ratatui TUI + headless CLI | |
 
 ---
@@ -345,7 +346,7 @@ src/
   plan.rs           # Structured plan mode
   memory.rs         # Cross-session `.raven/MEMORY.md`
   skills.rs         # SKILL.md discovery
-  plugins.rs        # Agent Plugins v1.0.0 (skills-only) discovery
+  plugins/          # Agent Plugins v1.0.0 (skills + stdio MCP) discovery
   repomap/          # Repo symbol map for large codebases
   web.rs            # web_search / web_fetch
 evals/              # Agent evaluation suite

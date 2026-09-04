@@ -137,3 +137,20 @@ default_model = "deepseek-v4-flash"
 #
 # Prefer the provider-scoped env var over a config-file api_key so the secret
 # never lands in a committed file or shell history.
+
+# ---------------------------------------------------------------------------
+# MCP servers (stdio)
+# ---------------------------------------------------------------------------
+# Raven connects these on TUI/headless startup, and ACP editors may also
+# forward servers on session/new. Tools are advertised as `{name}__{tool}`
+# (e.g. sysmetrics__get_cpu_metrics). HTTP/SSE transports are not supported.
+#
+# Example: sysmetrics-mcp (https://github.com/raythurman2386/sysmetrics-mcp)
+# Install the binary on PATH, then uncomment:
+#
+# [mcp.servers.sysmetrics]
+# command = "sysmetrics-mcp"
+# args = ["--temp-unit", "celsius", "--max-processes", "10"]
+# # enabled = false
+# # [mcp.servers.sysmetrics.env]
+# # FOO = "bar"

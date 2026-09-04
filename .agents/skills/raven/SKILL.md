@@ -67,14 +67,18 @@ CLI (main.rs)
 | `src/tools/` | 24 tools + sandbox — `mod.rs`, `definitions.rs`, `dispatch.rs`, `sandbox/` (`mod.rs` + `confinement.rs`), `document.rs`, `git.rs`, `patch.rs` |
 | `src/tui/` | ratatui TUI with status bar, streaming, scrollback, /commands |
 | `src/web.rs` | Web tools (`web_search`, `web_fetch`) |
-| `src/acp/` | ACP v1 stdio adapter (`raven acp`) — protocol + server, no MCP |
+| `src/acp/` | ACP v1 stdio adapter (`raven --acp`) — protocol + server |
+| `src/mcp/` | Thin stdio MCP client (`[mcp.servers]`, ACP `mcpServers`) |
+| `src/plugins/` | Agent Plugins v1.0.0 (skills + `mcp.json`) |
 
 ## Conventions
 
 ### Rust
 
 - **Rust 2021 edition.** Target MSRV: 1.97 (pinned in `rust-toolchain.toml`).
-- Keep the binary small and dependency-light. No MCP, no telemetry.
+- Keep the binary small and dependency-light. Thin stdio MCP client only
+  (no marketplace, no HTTP/SSE). Agent Plugins `mcp.json` is stdio-only.
+  No telemetry.
 - Every public struct, enum, and fn should have a doc comment.
 - `cargo doc --no-deps` must build with no warnings.
 - `cargo build` must build with no warnings.

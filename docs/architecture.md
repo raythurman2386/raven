@@ -18,6 +18,7 @@ CLI (main.rs)
   └─ TUI (tui/)  ── ratatui event loop, drains agent events
   └─ headless_run ── one-shot tasks (repo and system scope)
   └─ run_parallel ── N independent Agent tasks on git worktrees (repo scope)
+  └─ MCP (mcp/) ── stdio JSON-RPC client; tools merged as `{server}__{tool}`
 ```
 
 ### Scope axis

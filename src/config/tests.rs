@@ -346,6 +346,33 @@ fn config_file_parses_theme() {
 }
 
 #[test]
+fn config_file_parses_mcp_servers() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg_dir = tmp.path().join(".raven");
+    std::fs::create_dir_all(&cfg_dir).unwrap();
+    std::fs::write(
+        cfg_dir.join("config.toml"),
+        r#"
+[mcp.servers.sysmetrics]
+command = "sysmetrics-mcp"
+args = ["--temp-unit", "celsius", "--max-processes", "10"]
+"#,
+    )
+    .unwrap();
+    let cfg = load_config_file(tmp.path());
+    let spec = cfg
+        .mcp
+        .servers
+        .get("sysmetrics")
+        .expect("workspace mcp.servers.sysmetrics");
+    assert_eq!(spec.command, "sysmetrics-mcp");
+    assert_eq!(
+        spec.args,
+        vec!["--temp-unit", "celsius", "--max-processes", "10"]
+    );
+}
+
+#[test]
 fn config_file_parses_searxng() {
     let tmp = tempfile::tempdir().unwrap();
     let cfg_dir = tmp.path().join(".raven");

@@ -8,6 +8,7 @@ pub mod commands;
 pub mod config;
 pub mod context;
 pub mod error;
+pub mod mcp;
 pub mod memory;
 pub mod plan;
 pub mod plugins;

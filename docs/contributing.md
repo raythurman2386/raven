@@ -21,7 +21,8 @@ cargo doc --no-deps
 ## Style
 
 - Rust 2021 edition. Target MSRV: 1.88+ (pinned in `rust-toolchain.toml`).
-- Keep the binary small and dependency-light. No MCP, no telemetry.
+- Keep the binary small and dependency-light. Thin stdio MCP client only
+  (no marketplace, no HTTP/SSE transport). No telemetry.
 - Every public struct, enum, and fn should have a doc comment.
 - `cargo doc --no-deps` must build with no warnings.
 - `cargo build` must build with no warnings.
@@ -48,13 +49,15 @@ src/
 ├── commands.rs   # Slash-command registry and parsing
 ├── plan.rs       # Structured plan data model, parsing, step advancement
 ├── skills.rs     # SKILL.md discovery + skill_search/skill_load
-├── plugins.rs    # Agent Plugins v1.0.0 (skills-only) discovery + validation
+├── plugins/      # Agent Plugins v1.0.0 (skills + stdio MCP) discovery + validation
 ├── session.rs    # JSONL session persistence, resume, list
 ├── memory.rs     # Project memory (MEMORY.md) loading, update, search
 ├── state.rs      # Persistent agent state (.raven/state/todos.json + goal.json)
 ├── repomap/mod.rs # Lightweight repo symbol map
 ├── tokenizer.rs  # Pure-Rust token estimator
 ├── web.rs        # Keyless web tools (web_fetch, web_search)
+├── mcp/          # Stdio MCP client (config + ACP session/new)
+├── acp/          # Agent Client Protocol v1 stdio adapter
 ├── error.rs      # Typed error enums (AgentError, ToolError)
 └── runner.rs     # Shared event-draining and plan-approval flow
 docs/
