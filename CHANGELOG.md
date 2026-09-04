@@ -4,6 +4,27 @@ All notable changes to Raven are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.3] - 2026-09-04
+
+### Fixed
+
+- **TUI no longer aborts on permission gates** — `AskPermission` /
+  `AskUser` cleared the input box without resetting the byte cursor. Typing
+  while a turn ran, then answering a shell prompt (including typing `yes`
+  at a `y/n` gate), panicked on `is_char_boundary` and, in the release
+  profile (`panic = "abort"`), dumped core. The box now resets the cursor;
+  insert, backspace, left/right, paste, and caret drawing clamp to a UTF-8
+  boundary first. A panic hook restores cooked mode and leaves the
+  alternate screen so a remaining panic does not leave the terminal raw.
+- **Slash-command completion** — argument replace spans no longer assume a
+  single ASCII space (Unicode whitespace sat mid-character). Applying a
+  candidate clamps the range.
+- **`web_search` / `web_fetch` percent-decode** — `%` followed by a
+  multi-byte UTF-8 character (e.g. `%aé`) sliced mid-character and
+  aborted the process. Hex is parsed from bytes.
+- **`/cleanup` date math** — short or empty ISO timestamps no longer
+  slice past the string.
+
 ## [0.6.2] - 2026-09-04
 
 ### Fixed
