@@ -4,7 +4,7 @@ All notable changes to Raven are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.6.0] - 2026-09-03
+## [0.6.1] - 2026-09-04
 
 ### Added
 
@@ -24,6 +24,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   for that plugin only; skills still load. Tool names are
   `{plugin}__{server}__{tool}`. Native `config.toml` and ACP `mcpServers`
   override the same name. Plan/chat exposes only `readOnlyHint: true` tools.
+
+## [0.6.0] - 2026-09-03
 
 ### Changed
 

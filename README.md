@@ -2,7 +2,7 @@
 
 My opinionated, personal coding-agent harness. Single Rust binary for Linux (x86_64, aarch64) and Raspberry Pi, speaking plain OpenAI-compatible `/v1/chat/completions` to whatever model endpoint I point it at — local Ollama, Ollama Cloud, or OpenRouter.
 
-Modern harnesses are getting bloated: managed auth layers, plugin marketplaces, personality files, and telemetry that not everyone really trusts. I didn't want any of that. I wanted to build and learn a harness end-to-end — the agent loop, streaming, context compaction, sandboxing, TUI, session persistence — and then work through each issue as it comes up in real use. Raven is that project. It's ~23K lines of Rust you can read in an afternoon, and when something breaks, the fix is mine to make.
+Modern harnesses are getting bloated: managed auth layers, plugin marketplaces, personality files, and telemetry that not everyone really trusts. I didn't want any of that. I wanted to build and learn a harness end-to-end — the agent loop, streaming, context compaction, sandboxing, TUI, session persistence — and then work through each issue as it comes up in real use. Raven is that project. It's ~26K lines of Rust you can read in an afternoon, and when something breaks, the fix is mine to make.
 
 ---
 
@@ -325,7 +325,7 @@ Raven makes exactly two kinds of outbound requests, both under your control:
 1. **LLM requests** to your configured endpoint (Ollama local, Ollama Cloud, OpenRouter, …).
 2. **Optional** `web_search` requests to DuckDuckGo or a self-hosted SearXNG instance.
 
-That's the whole list. No update checks run on their own (self-update is an explicit `raven self update`), nothing is collected or reported, and all session state — JSONL transcripts, debug-event logs, git-diff snapshots — lives as plain files under `.raven/` on your disk. If you want to verify that, it's ~23K lines; the network calls are all in `agent/stream.rs` and `web.rs`.
+That's the whole list. No update checks run on their own (self-update is an explicit `raven self update`), nothing is collected or reported, and all session state — JSONL transcripts, debug-event logs, git-diff snapshots — lives as plain files under `.raven/` on your disk. If you want to verify that, it's ~26K lines; the network calls are all in `agent/stream.rs` and `web.rs`.
 
 ---
 
