@@ -323,8 +323,9 @@ fn prepare_compaction(
     // Adjust so we don't split a tool-call/tool-result pair
     tail_start = find_safe_tail_start(messages, tail_start);
 
+    let tail_start = tail_start.clamp(1, messages.len());
     CompactionOutcome::NeedsSummary(CompactionPlan {
-        middle: messages[1..tail_start].to_vec(),
+        middle: messages.get(1..tail_start).unwrap_or(&[]).to_vec(),
         tail_start,
         before,
     })
@@ -548,8 +549,14 @@ fn assemble_compaction(
     summary_assistant.usage = dropped_usage;
 
     // Assemble new history
-    let system = messages[0].clone();
-    let tail: Vec<ChatMessage> = messages[plan.tail_start..].to_vec();
+    let Some(system) = messages.first().cloned() else {
+        return CompactionReport {
+            before_tokens: plan.before,
+            after_tokens: plan.before,
+            note: "compaction skipped (empty history)".into(),
+        };
+    };
+    let tail: Vec<ChatMessage> = messages.get(plan.tail_start..).unwrap_or(&[]).to_vec();
 
     let mut compacted = Vec::with_capacity(tail.len() + 3);
     compacted.push(system);

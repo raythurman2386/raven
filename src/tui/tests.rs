@@ -1470,6 +1470,10 @@ fn history_recall_up_returns_previous() {
     assert_eq!(idx, 1);
     assert_eq!(history_recall_up(&hist, 0), None);
     assert_eq!(history_recall_up(&[], 0), None);
+    // Stale recall cursor past len must not index OOB.
+    let (p, idx) = history_recall_up(&hist, 99).unwrap();
+    assert_eq!(p, "second");
+    assert_eq!(idx, 1);
 }
 
 #[test]

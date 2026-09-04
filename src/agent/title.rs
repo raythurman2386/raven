@@ -37,9 +37,12 @@ pub fn extract_title_source(text: &str) -> String {
         "session that begins with this request:",
     ] {
         if let Some(idx) = lower.find(marker) {
-            let rest = text[idx + marker.len()..].trim();
-            if !rest.is_empty() {
-                return rest.chars().take(800).collect();
+            let start = idx.saturating_add(marker.len());
+            if let Some(rest) = text.get(start..) {
+                let rest = rest.trim();
+                if !rest.is_empty() {
+                    return rest.chars().take(800).collect();
+                }
             }
         }
     }

@@ -1465,8 +1465,10 @@ fn history_recall_up(prompt_history: &[String], hist_idx: usize) -> Option<(Stri
     if hist_idx == 0 || prompt_history.is_empty() {
         return None;
     }
-    let idx = hist_idx - 1;
-    Some((prompt_history[idx].clone(), idx))
+    // hist_idx can sit past len if history was truncated without resetting
+    // the recall cursor; clamp instead of indexing OOB (release panic=abort).
+    let idx = hist_idx.min(prompt_history.len()).saturating_sub(1);
+    prompt_history.get(idx).cloned().map(|p| (p, idx))
 }
 
 /// Apply Down-arrow recall: move `hist_idx` forward one. Returns
@@ -1480,7 +1482,7 @@ fn history_recall_down(prompt_history: &[String], hist_idx: usize) -> Option<(St
     if idx == prompt_history.len() {
         Some((String::new(), idx))
     } else {
-        Some((prompt_history[idx].clone(), idx))
+        prompt_history.get(idx).cloned().map(|p| (p, idx))
     }
 }
 

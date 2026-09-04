@@ -371,8 +371,10 @@ async fn ddg_search(query: &str, page: Option<u32>) -> String {
         s_val = ((page - 1) * 10).to_string();
         params.push(("s", &s_val));
     }
-    let url = reqwest::Url::parse_with_params("https://html.duckduckgo.com/html/", &params)
-        .unwrap_or_else(|_| reqwest::Url::parse("https://html.duckduckgo.com/html/").unwrap());
+    let url = match reqwest::Url::parse_with_params("https://html.duckduckgo.com/html/", &params) {
+        Ok(u) => u,
+        Err(e) => return format!("Error: failed to build search URL: {e}"),
+    };
     match client.get(url).send().await {
         Ok(resp) if resp.status().is_success() => {
             let body = match resp.text().await {
@@ -520,10 +522,18 @@ fn parse_ddg_results(html: &str) -> String {
 /// Scans forward from `from`, returning the byte index of the tag opening.
 /// Skips matches of the bare string `result__a` that are not inside an
 /// `<a …>` class attribute (e.g. CSS selectors in `<style>` blocks).
+fn clamp_str_idx(s: &str, idx: usize) -> usize {
+    let mut i = idx.min(s.len());
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
 fn find_result_anchor(html: &str, from: usize) -> Option<usize> {
     let bytes = html.as_bytes();
-    let mut i = from;
-    while let Some(rel) = html[i..].find("result__a") {
+    let mut i = clamp_str_idx(html, from);
+    while let Some(rel) = html.get(i..)?.find("result__a") {
         let pos = i + rel;
         // Walk back to the nearest '<a ' opening within this tag.
         let mut start = pos;
@@ -557,7 +567,10 @@ fn parse_ddg_primary(html: &str) -> Vec<String> {
     let mut lines = Vec::new();
     let mut from = 0usize;
     while let Some(tag_start) = find_result_anchor(html, from) {
-        let after = &html[tag_start..];
+        let after = match html.get(tag_start..) {
+            Some(a) => a,
+            None => break,
+        };
         let (href_start, quote_char) = if let Some(h) = after.find("href=\"") {
             (tag_start + h + 6, '"')
         } else if let Some(h) = after.find("href='") {
@@ -565,21 +578,21 @@ fn parse_ddg_primary(html: &str) -> Vec<String> {
         } else {
             break;
         };
-        let href_end = match html[href_start..].find(quote_char) {
+        let href_end = match html.get(href_start..).and_then(|s| s.find(quote_char)) {
             Some(e) => href_start + e,
             None => break,
         };
-        let href = &html[href_start..href_end];
+        let href = html.get(href_start..href_end).unwrap_or("");
 
-        let title_start = match html[href_end..].find('>') {
+        let title_start = match html.get(href_end..).and_then(|s| s.find('>')) {
             Some(g) => href_end + g + 1,
             None => break,
         };
-        let title_end = match html[title_start..].find("</a>") {
+        let title_end = match html.get(title_start..).and_then(|s| s.find("</a>")) {
             Some(e) => title_start + e,
             None => break,
         };
-        let title = html_to_text(&html[title_start..title_end]);
+        let title = html_to_text(html.get(title_start..title_end).unwrap_or(""));
 
         let url = decode_ddg_redirect(href);
         lines.push(format!("{title} — {url}"));
@@ -595,26 +608,30 @@ fn parse_ddg_fallback(html: &str) -> Vec<String> {
     let mut lines = Vec::new();
     let mut rest = html;
     while let Some(pos) = rest.find("uddg=") {
-        let after = &rest[pos..];
+        let after = match rest.get(pos..) {
+            Some(a) => a,
+            None => break,
+        };
         let val_start = pos + 5;
-        let val_end = match after[5..].find('&') {
+        let encoded_part = after.get(5..).unwrap_or("");
+        let val_end = match encoded_part.find('&') {
             Some(e) => val_start + e,
-            None => match after[5..].find('"') {
+            None => match encoded_part.find('"') {
                 Some(e) => val_start + e,
-                None => match after[5..].find('\'') {
+                None => match encoded_part.find('\'') {
                     Some(e) => val_start + e,
-                    None => after.len(),
+                    None => pos + after.len(),
                 },
             },
         };
-        let encoded = &rest[val_start..val_end];
+        let encoded = rest.get(val_start..val_end).unwrap_or("");
         let decoded = urlencoding_percent_decode(encoded);
         if !decoded.is_empty()
             && (decoded.starts_with("http://") || decoded.starts_with("https://"))
         {
             lines.push(decoded);
         }
-        rest = &rest[val_end..];
+        rest = rest.get(val_end..).unwrap_or("");
         if lines.len() >= MAX_RESULTS {
             break;
         }
@@ -984,6 +1001,23 @@ mod tests {
         assert!(anchor.is_some(), "the real <a> tag must be found");
         let out = parse_ddg_results(html);
         assert!(out.contains("yes"), "got: {out}");
+    }
+
+    #[test]
+    fn find_result_anchor_tolerates_stale_and_mid_utf8_from() {
+        let html = "<p>café</p><a class=\"result__a\" href=\"x\">yes</a>";
+        assert!(find_result_anchor(html, html.len() + 50).is_none());
+        // byte 4 of "café" sits inside é
+        let cafe = html.find('é').expect("é");
+        let _ = find_result_anchor(html, cafe + 1);
+    }
+
+    #[test]
+    fn parse_ddg_fallback_uddg_at_end_does_not_panic() {
+        let _ = parse_ddg_fallback("uddg=");
+        let _ = parse_ddg_fallback("uddg=https://example.com");
+        let out = parse_ddg_fallback("uddg=https://example.com&other=1");
+        assert!(out.iter().any(|u| u.contains("example.com")), "got {out:?}");
     }
 
     // ── Entity decoding ────────────────────────────────────────────────

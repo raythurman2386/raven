@@ -459,8 +459,8 @@ impl Agent {
             )
             .await;
         }
-        if refresh_state && !self.messages.is_empty() {
-            self.messages[0] = super::core::rebuild_system_message(&self.settings);
+        if refresh_state {
+            self.replace_system_message(super::core::rebuild_system_message(&self.settings));
         }
 
         // Plan progress: mark the current step Completed and advance to

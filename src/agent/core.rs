@@ -545,7 +545,7 @@ impl Agent {
     pub fn with_plan(mut self, plan: Plan) -> Self {
         self.plan = Some(plan);
         self.settings.mode = Mode::Agent;
-        self.messages[0] = build_system_message(&self.settings);
+        self.replace_system_message(build_system_message(&self.settings));
         self
     }
 
@@ -563,6 +563,14 @@ impl Agent {
             }
         }
         Ok(agent)
+    }
+
+    pub(crate) fn replace_system_message(&mut self, msg: ChatMessage) {
+        if let Some(first) = self.messages.first_mut() {
+            *first = msg;
+        } else {
+            self.messages.push(msg);
+        }
     }
 
     /// Test-only: install a scripted completion source so `run()` drives the
@@ -647,7 +655,7 @@ impl Agent {
             crate::repomap::invalidate(&self.settings.workspace);
             self.repo_map_stale = false;
         }
-        self.messages[0] = build_system_message(&self.settings);
+        self.replace_system_message(build_system_message(&self.settings));
 
         let result = self.run_loop(user_text, tx, &mut edited_any).await;
 

@@ -246,7 +246,14 @@ pub async fn dispatch(
                 "session/new" => on_session_new(&mut srv, &id, &params).await,
                 "session/load" => on_session_load(&mut srv, &id, &params, &writer).await,
                 "session/resume" => on_session_resume(&mut srv, &id, &params).await,
-                _ => unreachable!(),
+                other => (
+                    error_msg(
+                        Some(&id),
+                        error_code::METHOD_NOT_FOUND,
+                        &format!("method not found: {other}"),
+                    ),
+                    None,
+                ),
             }
         };
         if let Some(job) = job {

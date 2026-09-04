@@ -34,7 +34,9 @@ fn expand_placeholders(s: &str, plugin_root: &str, plugin_data: &str) -> String 
             out.push_str(plugin_data);
             rest = tail;
         } else {
-            let ch = rest.chars().next().unwrap();
+            let Some(ch) = rest.chars().next() else {
+                break;
+            };
             out.push(ch);
             rest = &rest[ch.len_utf8()..];
         }
@@ -361,6 +363,10 @@ mod tests {
         assert_eq!(out, "/root/x /data/y ${NOPE} /root");
         let out = expand_placeholders("${PLUGIN_ROOT}", "${PLUGIN_DATA}/nested", "/data");
         assert_eq!(out, "${PLUGIN_DATA}/nested");
+        assert_eq!(
+            expand_placeholders("café ${PLUGIN_ROOT}", "/r", "/d"),
+            "café /r"
+        );
     }
 
     #[test]

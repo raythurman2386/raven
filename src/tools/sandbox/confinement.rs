@@ -332,27 +332,45 @@ fn apply_seccomp_network_block(skip_network_block: bool) {
         }
     };
 
-    let rules: Vec<(i64, Vec<SeccompRule>)> = vec![(
-        libc::SYS_socket,
-        vec![
-            SeccompRule::new(vec![SeccompCondition::new(
-                0,
-                SeccompCmpArgLen::Dword,
-                SeccompCmpOp::Eq,
-                libc::AF_INET as u64,
-            )
-            .expect("valid seccomp condition")])
-            .expect("valid seccomp rule"),
-            SeccompRule::new(vec![SeccompCondition::new(
-                0,
-                SeccompCmpArgLen::Dword,
-                SeccompCmpOp::Eq,
-                libc::AF_INET6 as u64,
-            )
-            .expect("valid seccomp condition")])
-            .expect("valid seccomp rule"),
-        ],
-    )];
+    let inet = match SeccompCondition::new(
+        0,
+        SeccompCmpArgLen::Dword,
+        SeccompCmpOp::Eq,
+        libc::AF_INET as u64,
+    ) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("seccomp: invalid AF_INET condition: {e}");
+            return;
+        }
+    };
+    let inet6 = match SeccompCondition::new(
+        0,
+        SeccompCmpArgLen::Dword,
+        SeccompCmpOp::Eq,
+        libc::AF_INET6 as u64,
+    ) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("seccomp: invalid AF_INET6 condition: {e}");
+            return;
+        }
+    };
+    let rule_inet = match SeccompRule::new(vec![inet]) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!("seccomp: invalid AF_INET rule: {e}");
+            return;
+        }
+    };
+    let rule_inet6 = match SeccompRule::new(vec![inet6]) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!("seccomp: invalid AF_INET6 rule: {e}");
+            return;
+        }
+    };
+    let rules: Vec<(i64, Vec<SeccompRule>)> = vec![(libc::SYS_socket, vec![rule_inet, rule_inet6])];
 
     let filter: BpfProgram = match SeccompFilter::new(
         rules.into_iter().collect(),
