@@ -4,6 +4,35 @@ All notable changes to Raven are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2] - 2026-09-04
+
+### Fixed
+
+- **Web tools and sub-agent dispatch are now visible in the TUI** —
+  `web_search`, `web_fetch`, and `delegate_task` run inline in the async
+  tool-exec loop and were special-cased *before* the `ToolStart` event was
+  sent, so the TUI showed only `thinking… (iter N)` for the whole call (a
+  slow search could hold the turn for up to ~40s: 20s SearXNG timeout plus a
+  20s DuckDuckGo fallback cap) and the streamed text appeared to stall, then
+  catch up. `ToolStart` is now emitted before the await, pairing with the
+  existing `ToolEnd`, and both the TUI and headless event drains record
+  web-tool query/URL into the session `debug-events.jsonl`.
+
+### Changed
+
+- **Agent-loop timing is logged by default** — the tracing filter defaults
+  to `warn,raven=info` instead of `warn`, so the per-iteration
+  `pre_http_ms` / `send_http_ms` / `stream_ms` lines land in
+  `~/.raven/raven.log` along with a new `duration_ms` line per web tool.
+  (Two bare `EnvFilter` directives override each other — last one wins — so
+  the crate is targeted explicitly; an explicit `RUST_LOG` still wins.)
+
+### Dependencies
+
+- base64 0.22.1 → 0.23.1 (#173)
+- anydoc 0.1.9 → 0.2.4 (#172)
+- softprops/action-gh-release action SHA bump (#174)
+
 ## [0.6.1] - 2026-09-04
 
 ### Added
