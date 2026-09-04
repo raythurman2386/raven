@@ -344,7 +344,7 @@ pub(super) async fn dispatch_slash_command(
                         if m.id == current_id {
                             continue;
                         }
-                        let mdate = &m.updated_at[..m.updated_at.len().min(10)];
+                        let mdate = m.updated_at.get(..10).unwrap_or(m.updated_at.as_str());
                         if mdate.as_bytes() < cutoff.as_bytes() {
                             stale.push(m);
                         }
@@ -424,11 +424,11 @@ pub(super) async fn dispatch_slash_command(
 /// date library.
 pub(super) fn date_minus_days(now_iso: &str, days: usize) -> String {
     // Parse the leading date components (day-granularity; ignore time).
-    let date = &now_iso[..now_iso.len().min(10)];
+    let date = now_iso.get(..10).unwrap_or(now_iso);
     let (y, m, d) = (
-        date[0..4].parse::<i64>().unwrap_or(1970),
-        date[5..7].parse::<i64>().unwrap_or(1),
-        date[8..10].parse::<i64>().unwrap_or(1),
+        date.get(..4).and_then(|s| s.parse().ok()).unwrap_or(1970),
+        date.get(5..7).and_then(|s| s.parse().ok()).unwrap_or(1),
+        date.get(8..10).and_then(|s| s.parse().ok()).unwrap_or(1),
     );
 
     // Convert to a serial day number and subtract.

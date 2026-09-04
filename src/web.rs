@@ -634,12 +634,22 @@ fn urlencoding_percent_decode(s: &str) -> String {
     while i < src.len() {
         match src[i] {
             b'%' if i + 2 < src.len() => {
-                if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                    bytes.push(v);
-                    i += 3;
-                } else {
-                    bytes.push(b'%');
-                    i += 1;
+                // Parse hex from bytes, not `&s[i+1..i+3]` — that slice panics
+                // when the two bytes after `%` split a multi-byte UTF-8 char
+                // (e.g. `%aé`).
+                let hex = [src[i + 1], src[i + 2]];
+                match std::str::from_utf8(&hex)
+                    .ok()
+                    .and_then(|h| u8::from_str_radix(h, 16).ok())
+                {
+                    Some(v) => {
+                        bytes.push(v);
+                        i += 3;
+                    }
+                    None => {
+                        bytes.push(b'%');
+                        i += 1;
+                    }
                 }
             }
             b'+' => {
@@ -1029,5 +1039,13 @@ mod tests {
     #[test]
     fn percent_decode_keeps_literal_percent_without_hex() {
         assert_eq!(urlencoding_percent_decode("100% done"), "100% done");
+    }
+
+    #[test]
+    fn percent_decode_percent_before_multibyte_does_not_panic() {
+        // `%` + `a` + `é` (2-byte UTF-8): slicing `&s[i+1..i+3]` splits é.
+        let out = urlencoding_percent_decode("%aé");
+        assert!(out.contains('é'), "got {out:?}");
+        assert!(out.contains('%') || out.contains('a'));
     }
 }

@@ -1342,6 +1342,13 @@ fn date_minus_days_handles_rollover() {
 }
 
 #[test]
+fn date_minus_days_short_or_empty_iso_does_not_panic() {
+    let _ = dispatch::date_minus_days("", 3);
+    let _ = dispatch::date_minus_days("2026", 1);
+    assert_eq!(dispatch::date_minus_days("2026-08-23", 0), "2026-08-23");
+}
+
+#[test]
 fn opencode_go_models_autocomplete() {
     if skip_if_outer_sandbox() {
         return;
@@ -1802,6 +1809,56 @@ async fn ask_permission_event_renders_gate_and_awaits_y() {
         "y",
         "gate should forward the y answer"
     );
+}
+
+#[test]
+fn ask_permission_resets_stale_cursor() {
+    // Typing a steer while a turn runs leaves cursor > 0; AskPermission used
+    // to clear the box without resetting the cursor, so the next insert
+    // panicked on is_char_boundary (typing "yes" at a y/n gate).
+    let mut state = dummy_state();
+    state.input = "hello".into();
+    state.cursor = 5;
+    state.clear_input();
+    assert!(state.input.is_empty());
+    assert_eq!(state.cursor, 0);
+    insert_char_at_cursor(&mut state.input, &mut state.cursor, 'e');
+    assert_eq!(state.input, "e");
+    assert_eq!(state.cursor, 1);
+}
+
+#[test]
+fn insert_char_at_cursor_tolerates_stale_and_mid_utf8_cursor() {
+    let mut input = String::new();
+    let mut cursor = 12;
+    insert_char_at_cursor(&mut input, &mut cursor, 'y');
+    assert_eq!(input, "y");
+    assert_eq!(cursor, 1);
+
+    // "café" is 5 bytes; byte 4 sits inside é.
+    let mut input = "café".to_string();
+    let mut cursor = 4;
+    insert_char_at_cursor(&mut input, &mut cursor, 'x');
+    assert!(
+        input.contains('x'),
+        "inserted despite mid-char cursor: {input}"
+    );
+    assert!(input.is_char_boundary(cursor));
+
+    let mut cursor = 99;
+    delete_char_before_cursor(&mut input, &mut cursor);
+    assert!(input.is_char_boundary(cursor));
+    move_cursor_left(&input, &mut cursor);
+    assert!(input.is_char_boundary(cursor));
+    move_cursor_right(&input, &mut cursor);
+    assert!(input.is_char_boundary(cursor));
+}
+
+#[test]
+fn input_cursor_position_tolerates_stale_and_mid_utf8_cursor() {
+    let rect = ratatui::layout::Rect::new(0, 20, 80, 3);
+    let _ = input_cursor_position("hi", "❯ ", 99, rect);
+    let _ = input_cursor_position("café", "❯ ", 4, rect);
 }
 
 #[test]

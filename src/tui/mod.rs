@@ -39,7 +39,7 @@ use ratatui::{
 };
 use std::collections::HashMap;
 use std::fmt;
-use std::io::stdout;
+use std::io::{stdout, Write};
 use std::sync::{Mutex, OnceLock};
 use tokio::sync::mpsc;
 
@@ -457,6 +457,17 @@ impl TuiState {
         self.log_dirty = true;
     }
 
+    /// Empty the input box and put the edit cursor back on a valid boundary.
+    ///
+    /// AskUser / AskPermission clear the box while a steer may still have a
+    /// non-zero cursor; inserting at that stale index panics (`is_char_boundary`).
+    fn clear_input(&mut self) {
+        self.input.clear();
+        self.cursor = 0;
+        self.completion = None;
+        self.input_dirty = true;
+    }
+
     /// Recompute the completion popup for the current input, honoring a
     /// prior Esc dismissal: once dismissed at N chars, the popup stays closed
     /// while the input is at or past N chars and only reopens after the user
@@ -533,6 +544,7 @@ pub async fn run_tui(
     .unwrap_or(None);
 
     enable_raw_mode()?;
+    install_tui_panic_hook();
     let mut stdout = stdout();
     execute!(
         stdout,
@@ -819,29 +831,14 @@ pub async fn run_tui(
                             }
                             KeyCode::Left => {
                                 if state.pending_question.is_none() {
-                                    // Move cursor left by one char (byte-safe).
-                                    if let Some(prev) = state.input[..state.cursor]
-                                        .char_indices()
-                                        .next_back()
-                                        .map(|(i, _)| i)
-                                    {
-                                        state.cursor = prev;
-                                        state.input_dirty = true;
-                                    }
+                                    move_cursor_left(&state.input, &mut state.cursor);
+                                    state.input_dirty = true;
                                 }
                             }
                             KeyCode::Right => {
                                 if state.pending_question.is_none() {
-                                    // Move right by one char (byte-safe). Advance
-                                    // past the char at the cursor, including the
-                                    // last char so the cursor can reach the true
-                                    // end of the line. (char_indices().nth(1)
-                                    // returns None when only one char remains,
-                                    // stranding the cursor before the last char.)
-                                    if let Some(c) = state.input[state.cursor..].chars().next() {
-                                        state.cursor += c.len_utf8();
-                                        state.input_dirty = true;
-                                    }
+                                    move_cursor_right(&state.input, &mut state.cursor);
+                                    state.input_dirty = true;
                                 }
                             }
                             KeyCode::Home => {
@@ -927,8 +924,7 @@ pub async fn run_tui(
                                 if state.pending_question.is_some()
                                     || state.input.chars().count() < MAX_INPUT_CHARS
                                 {
-                                    state.input.insert(state.cursor, c);
-                                    state.cursor += c.len_utf8();
+                                    insert_char_at_cursor(&mut state.input, &mut state.cursor, c);
                                     state.input_dirty = true;
                                 }
                                 state.hist_idx = state.prompt_history.len();
@@ -936,15 +932,8 @@ pub async fn run_tui(
                             }
                             KeyCode::Backspace => {
                                 if state.pending_question.is_some() || !state.input.is_empty() {
-                                    if let Some(prev) = state.input[..state.cursor]
-                                        .char_indices()
-                                        .next_back()
-                                        .map(|(i, _)| i)
-                                    {
-                                        state.input.remove(prev);
-                                        state.cursor = prev;
-                                        state.input_dirty = true;
-                                    }
+                                    delete_char_before_cursor(&mut state.input, &mut state.cursor);
+                                    state.input_dirty = true;
                                 }
                                 state.recompute_completion(&arg_candidates);
                             }
@@ -965,11 +954,10 @@ pub async fn run_tui(
                                     if !holds_candidate {
                                         if let Some(candidate) = comp.candidates.get(comp.selected)
                                         {
-                                            state.input.replace_range(
-                                                comp.replace_start..comp.replace_end,
-                                                candidate,
-                                            );
-                                            state.cursor = state.input.len();
+                                            let (new_input, new_cursor) =
+                                                apply_completion(&state.input, &comp, candidate);
+                                            state.input = new_input;
+                                            state.cursor = new_cursor;
                                             state.input_dirty = true;
                                         }
                                         continue;
@@ -985,10 +973,7 @@ pub async fn run_tui(
                                     continue;
                                 }
                                 let text = state.input.trim().to_string();
-                                state.input.clear();
-                                state.cursor = 0;
-                                state.input_dirty = true;
-                                state.completion = None;
+                                state.clear_input();
                                 state.scroll = 0;
                                 state.auto_scroll = true;
                                 state.turn_tool_count = 0;
@@ -1152,7 +1137,7 @@ pub async fn run_tui(
                                 .take(remaining)
                                 .collect();
                             if !pasted.is_empty() {
-                                let at = state.cursor.min(state.input.len());
+                                let at = clamp_cursor(&state.input, state.cursor);
                                 state.input.insert_str(at, &pasted);
                                 state.cursor = at + pasted.len();
                                 state.input_dirty = true;
@@ -1320,7 +1305,7 @@ pub async fn run_tui(
                     state.pending_question_text = Some(question);
                     state.pending_permission = None;
                     state.status = "awaiting answer".into();
-                    state.input.clear();
+                    state.clear_input();
                     state.scroll = 0;
                 }
                 AgentEvent::AskPermission { command, reply } => {
@@ -1329,7 +1314,7 @@ pub async fn run_tui(
                     state.pending_question_text = None;
                     state.pending_permission = Some(command);
                     state.status = "permission required".into();
-                    state.input.clear();
+                    state.clear_input();
                     state.scroll = 0;
                 }
                 AgentEvent::Done => {
@@ -1989,7 +1974,7 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &mut TuiSt
             if i == 0 && s.starts_with(prompt) {
                 Line::from(vec![
                     Span::styled(prompt.to_string(), prompt_style),
-                    Span::styled(s[prompt.len()..].to_string(), input_style),
+                    Span::styled(s.get(prompt.len()..).unwrap_or("").to_string(), input_style),
                 ])
             } else {
                 Line::from(Span::styled(s, input_style))
@@ -2109,6 +2094,69 @@ fn wrapped_line_count(s: &str, width: usize) -> usize {
     wrap_display_lines(s, width).len()
 }
 
+/// Clamp a byte index onto a UTF-8 char boundary within `s`.
+///
+/// Indices past `s.len()` or in the middle of a multi-byte character both
+/// fail `is_char_boundary` and panic on `String::insert` / slicing.
+fn clamp_cursor(s: &str, idx: usize) -> usize {
+    let mut i = idx.min(s.len());
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
+/// Insert `c` at `cursor`, first repairing a stale or mid-character index.
+fn insert_char_at_cursor(input: &mut String, cursor: &mut usize, c: char) {
+    *cursor = clamp_cursor(input, *cursor);
+    input.insert(*cursor, c);
+    *cursor += c.len_utf8();
+}
+
+fn delete_char_before_cursor(input: &mut String, cursor: &mut usize) {
+    *cursor = clamp_cursor(input, *cursor);
+    if let Some(prev) = input[..*cursor].char_indices().next_back().map(|(i, _)| i) {
+        input.remove(prev);
+        *cursor = prev;
+    }
+}
+
+fn move_cursor_left(input: &str, cursor: &mut usize) {
+    *cursor = clamp_cursor(input, *cursor);
+    if let Some(prev) = input[..*cursor].char_indices().next_back().map(|(i, _)| i) {
+        *cursor = prev;
+    }
+}
+
+fn move_cursor_right(input: &str, cursor: &mut usize) {
+    *cursor = clamp_cursor(input, *cursor);
+    if let Some(c) = input[*cursor..].chars().next() {
+        *cursor += c.len_utf8();
+    }
+}
+
+/// Restore cooked mode and leave the alternate screen after a panic so the
+/// user's terminal is not left raw. Release builds use `panic = "abort"`, so
+/// this hook is the only chance to clean up before the process dies.
+fn install_tui_panic_hook() {
+    static HOOK: OnceLock<()> = OnceLock::new();
+    HOOK.get_or_init(|| {
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let _ = disable_raw_mode();
+            let mut out = stdout();
+            let _ = execute!(
+                out,
+                LeaveAlternateScreen,
+                DisableMouseCapture,
+                DisableBracketedPaste
+            );
+            let _ = out.flush();
+            prev(info);
+        }));
+    });
+}
+
 /// Compute the terminal (x, y) where the cursor should sit after the input
 /// text, accounting for the prompt prefix, wrapping width, and the input box's
 /// top-left position.
@@ -2121,7 +2169,8 @@ fn input_cursor_position(
     use unicode_width::UnicodeWidthStr;
 
     let content_width = input_rect.width.saturating_sub(2).max(1) as usize;
-    let prefix = format!("{}{}", prompt, &input[..cursor.min(input.len())]);
+    let at = clamp_cursor(input, cursor);
+    let prefix = format!("{}{}", prompt, &input[..at]);
     let lines = wrap_display_lines(&prefix, content_width);
     let mut row = lines.len().saturating_sub(1);
     let mut col = lines.last().map(|l| l.width()).unwrap_or(0);
@@ -2422,9 +2471,7 @@ fn reset_session(
     state.agent_state = AgentState::Idle;
     state.status = "ready".into();
     state.assistant_text.clear();
-    state.input.clear();
-    state.cursor = 0;
-    state.completion = None;
+    state.clear_input();
     state.completion_dismissed_at = None;
     state.selection = None;
     state.live_tool = None;

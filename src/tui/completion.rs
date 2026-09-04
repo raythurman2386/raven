@@ -128,9 +128,12 @@ pub fn candidates_for(
     if matches.is_empty() {
         return None;
     }
-    // Replace the argument token (everything after the command token).
+    // Replace the argument token. Skip *all* whitespace after the command
+    // token — `cmd_end + 1` assumed a single ASCII space and is a mid-char
+    // index when the separator is multi-byte Unicode whitespace.
     let cmd_end = lead + 1 + token.len();
-    let replace_start = cmd_end + 1; // skip the space
+    let ws = input.get(cmd_end..).unwrap_or("");
+    let replace_start = cmd_end + (ws.len() - ws.trim_start().len());
     let replace_end = input.len();
     Some(Completion {
         candidates: matches,
@@ -140,14 +143,24 @@ pub fn candidates_for(
     })
 }
 
+fn clamp_idx(s: &str, idx: usize) -> usize {
+    let mut i = idx.min(s.len());
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
 /// Apply a completion candidate to the input, returning the new input and the
 /// new cursor position (byte index).
 pub fn apply(input: &str, completion: &Completion, candidate: &str) -> (String, usize) {
+    let start = clamp_idx(input, completion.replace_start);
+    let end = clamp_idx(input, completion.replace_end).max(start);
     let mut out = String::with_capacity(input.len() + candidate.len());
-    out.push_str(&input[..completion.replace_start]);
+    out.push_str(&input[..start]);
     out.push_str(candidate);
-    out.push_str(&input[completion.replace_end..]);
-    let cursor = completion.replace_start + candidate.len();
+    out.push_str(&input[end..]);
+    let cursor = start + candidate.len();
     (out, cursor)
 }
 
@@ -285,6 +298,35 @@ mod tests {
         assert!(c2.span_holds_selected("/theme nord"));
         c2.next();
         assert!(!c2.span_holds_selected("/theme nord"));
+    }
+
+    #[test]
+    fn argument_completion_skips_unicode_whitespace() {
+        // U+00A0 is two UTF-8 bytes; replace_start must land on a boundary.
+        let input = "/theme\u{00a0}no";
+        let c = candidates_for(input, &theme_args).unwrap();
+        assert!(
+            input.is_char_boundary(c.replace_start),
+            "replace_start={} is mid-char in {input:?}",
+            c.replace_start
+        );
+        let (out, cursor) = apply(input, &c, "nord");
+        assert_eq!(out, "/theme\u{00a0}nord");
+        assert_eq!(cursor, out.len());
+    }
+
+    #[test]
+    fn apply_tolerates_mid_char_replace_span() {
+        let input = "café";
+        let c = Completion {
+            candidates: vec!["x".into()],
+            selected: 0,
+            replace_start: 4, // inside é
+            replace_end: 4,
+        };
+        let (out, cursor) = apply(input, &c, "x");
+        assert!(out.contains('x'));
+        assert!(out.is_char_boundary(cursor));
     }
 
     #[test]
