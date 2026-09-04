@@ -14,6 +14,7 @@ target-local/
 Thumbs.db
 
 # Session storage (per-workspace)
+.raven/
 .raven/sessions/
 .raven/cargo-home/
 .raven/npm-cache/

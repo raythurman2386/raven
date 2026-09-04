@@ -4,6 +4,10 @@ My opinionated, personal coding-agent harness. Single Rust binary for Linux (x86
 
 Modern harnesses are getting bloated: managed auth layers, plugin marketplaces, personality files, and telemetry that not everyone really trusts. I didn't want any of that. I wanted to build and learn a harness end-to-end — the agent loop, streaming, context compaction, sandboxing, TUI, session persistence — and then work through each issue as it comes up in real use. Raven is that project. It's ~26K lines of Rust you can read in an afternoon, and when something breaks, the fix is mine to make.
 
+<p align="center">
+  <img src="assets/rvn-screenshot.png" alt="Raven TUI — agent turn streaming in the terminal" width="720">
+</p>
+
 ---
 
 ## Where it stands
