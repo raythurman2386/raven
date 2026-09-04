@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 
 use crate::agent::{Agent, AgentEvent, ChatMessage};
 use crate::config::Settings;
+use crate::mcp::McpHandle;
 use crate::plan;
 use crate::session::{Session, SessionStore};
 
@@ -176,6 +177,7 @@ pub async fn run_plan_flow(
     store: &SessionStore,
     session: &mut Session,
     task: &str,
+    mcp: Option<McpHandle>,
 ) -> Result<()> {
     let plan = plan::parse_plan(assistant_text);
     println!("\n{}", plan::format_plan(&plan));
@@ -189,9 +191,12 @@ pub async fn run_plan_flow(
         }
         Approval::Revise(feedback) => {
             let feedback_msg = format!("Revise the plan based on this feedback:\n{feedback}");
-            let agent =
+            let mut agent =
                 Agent::with_messages(settings.clone(), first_messages.clone().unwrap_or_default())?
                     .plan_only();
+            if let Some(mcp) = mcp.clone() {
+                agent = agent.with_mcp(mcp);
+            }
 
             let rev_msg = ChatMessage::plain("user", Some(feedback_msg.clone()));
             store.append_message(session, &rev_msg)?;
@@ -215,8 +220,11 @@ pub async fn run_plan_flow(
                     let exec_msg = ChatMessage::plain("user", Some(plan::EXECUTE_PROMPT.into()));
                     store.append_message(session, &exec_msg)?;
                     let exec_messages = rev_messages.unwrap_or_default();
-                    let agent =
+                    let mut agent =
                         Agent::with_messages(settings.clone(), exec_messages)?.with_plan(revised);
+                    if let Some(mcp) = mcp.clone() {
+                        agent = agent.with_mcp(mcp);
+                    }
                     let (final_messages, _) =
                         spawn_and_drain_logged(agent, plan::EXECUTE_PROMPT, Some((store, session)))
                             .await?;
@@ -234,7 +242,10 @@ pub async fn run_plan_flow(
     let exec_msg = ChatMessage::plain("user", Some(plan::EXECUTE_PROMPT.into()));
     store.append_message(session, &exec_msg)?;
 
-    let agent = Agent::with_messages(settings.clone(), exec_messages)?.with_plan(plan);
+    let mut agent = Agent::with_messages(settings.clone(), exec_messages)?.with_plan(plan);
+    if let Some(mcp) = mcp {
+        agent = agent.with_mcp(mcp);
+    }
     let (final_messages, _) =
         spawn_and_drain_logged(agent, plan::EXECUTE_PROMPT, Some((store, session))).await?;
     if let Some(ref msgs) = final_messages {

@@ -298,6 +298,30 @@ impl Agent {
             let cache_key = format!("{}:{}", name, tc.function.arguments);
             let read_only = self.plan_only;
 
+            if let Some(mcp) = self.mcp.clone() {
+                if mcp.has_tool(&name) {
+                    if read_only && !mcp.is_read_only(&name) {
+                        slots[idx] = Some(PendingToolResult::ready(
+                            id,
+                            name,
+                            cache_key,
+                            Ok("Error: this MCP tool is not available in read-only mode. \
+                                 Use --mode agent to enable it."
+                                .into()),
+                        ));
+                        continue;
+                    }
+                    handles.push((
+                        idx,
+                        tokio::task::spawn_blocking(move || {
+                            let result = mcp.call(&name, &args);
+                            (id, name, result, cache_key, false)
+                        }),
+                    ));
+                    continue;
+                }
+            }
+
             // Track verification intent: the model dispatched run_tests or
             // ran a test/typecheck/lint command via run_shell this turn.
             // The actual credit is deferred until the tool result is available

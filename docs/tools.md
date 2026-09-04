@@ -302,7 +302,7 @@ Fetches a URL and returns the page content as readable text (HTML stripped, enti
 }
 ```
 
-Searches for skills (SKILL.md files) by name or description. Searches `.raven/skills/` (project), `~/.raven/skills/` (global), and Agent Plugins v1.0.0 packages (skills-only) under `.raven/plugins/` and `~/.raven/plugins/`. Returns matching skill names and descriptions. Read-only and available during planning.
+Searches for skills (SKILL.md files) by name or description. Searches `.raven/skills/` (project), `~/.raven/skills/` (global), and Agent Plugins v1.0.0 packages under `.raven/plugins/` and `~/.raven/plugins/`. Returns matching skill names and descriptions. Read-only and available during planning.
 
 ### `skill_load`
 

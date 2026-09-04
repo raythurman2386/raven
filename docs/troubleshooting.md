@@ -95,8 +95,12 @@ raven --acp
   `session/request_permission`. `initialize` advertises one `agent`-type auth
   method (`agent-auth`); `authenticate` acknowledges it (credentials are
   resolved in-process).
-- **Not advertised:** MCP servers, images/audio, client `fs/*`/`terminal/*`.
-  Raven keeps its own sandbox.
+- **MCP:** stdio only. Native `[mcp.servers]` in `config.toml` plus any
+  `mcpServers` the editor sends on `session/new`. HTTP/SSE MCP is not
+  advertised. A missing binary is logged and skipped (the session still
+  starts). Tools show up as `{server}__{tool}`.
+- **Not advertised:** images/audio, client `fs/*`/`terminal/*`. Raven keeps
+  its own sandbox.
 - **Other CLI flags still apply** to the ACP process: `--provider`, `--model`,
   `--workspace`, `--yolo`, `--mode`.
 

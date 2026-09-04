@@ -29,7 +29,9 @@ Supported: `initialize`, `authenticate`, `session/new`, `session/prompt`,
 auth method (`agent-auth`): credentials are already resolved in-process, so
 `authenticate` is a no-op acknowledgement.
 
-Not advertised: MCP servers, images/audio, client `fs/*` / `terminal/*`.
+MCP: stdio servers from native `[mcp.servers]` plus ACP `mcpServers` on
+`session/new` / `session/load` / `session/resume`. HTTP/SSE MCP transports
+are not advertised. Images/audio and client `fs/*` / `terminal/*` are unused;
 Raven keeps its own sandbox. Other CLI flags (`--provider`, `--model`,
 `--workspace`, `--yolo`, `--mode`) still apply to the ACP process.
 
@@ -300,11 +302,11 @@ Skills are reusable instruction files — `SKILL.md` with YAML frontmatter
 .raven/skills/commit/SKILL.md
 ```
 
-Raven also loads Agent Plugins v1.0.0 packages (skills-only): a directory with
-a `plugin.json` manifest and a `skills/` folder, placed under
-`.raven/plugins/` (project) or `~/.raven/plugins/` (global). Each plugin's
-skills are discovered from its `skills/` location and surfaced through the
-same tools.
+Raven also loads Agent Plugins v1.0.0 packages: a directory with a
+`plugin.json` manifest under `.raven/plugins/` (project) or `~/.raven/plugins/`
+(global). Skills come from each plugin's `skills/` folder. Stdio MCP servers
+come from root `mcp.json` (`${PLUGIN_ROOT}` / `${PLUGIN_DATA}` expanded; HTTP
+and SSE entries skipped). Tool names are `{plugin}__{server}__{tool}`.
 
 The agent can discover them with `skill_search` (match by name or
 description) and load one into context with `skill_load`, which returns the

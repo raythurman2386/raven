@@ -47,6 +47,7 @@ use crate::agent::{generate_session_title, is_title_prompt, Agent, AgentEvent, C
 use crate::commands;
 use crate::config::{Mode, Settings};
 use crate::context::history_tokens;
+use crate::mcp::McpHandle;
 use crate::plan::{self, AgentState};
 use crate::session::{Session, SessionStore};
 
@@ -321,6 +322,8 @@ struct TuiState {
     last_turn: Option<(Vec<ChatMessage>, String, bool)>,
     /// Background session-title job (first real user prompt only).
     title_handle: Option<tokio::task::JoinHandle<Option<String>>>,
+    /// Session-scoped MCP tools (native `[mcp.servers]`).
+    mcp: Option<McpHandle>,
 }
 
 impl TuiState {
@@ -396,6 +399,7 @@ impl TuiState {
             hist_idx: 0,
             last_turn: None,
             title_handle: None,
+            mcp: None,
         }
     }
 
@@ -519,6 +523,15 @@ pub async fn run_tui(
     config_file: crate::config::ConfigFile,
     resume_session: Option<Session>,
 ) -> Result<()> {
+    let workspace = settings.workspace.clone();
+    let native = config_file.mcp.specs();
+    let mcp = tokio::task::spawn_blocking(move || {
+        let specs = crate::mcp::merge_specs(crate::plugins::mcp_specs(&workspace), native);
+        crate::mcp::connect_specs(&specs)
+    })
+    .await
+    .unwrap_or(None);
+
     enable_raw_mode()?;
     let mut stdout = stdout();
     execute!(
@@ -537,6 +550,11 @@ pub async fn run_tui(
     let app_name = "raven";
 
     let mut state = TuiState::new(&settings, app_name, compact_at);
+    if let Some(mcp) = mcp {
+        let names = mcp.server_names().join(", ");
+        state.push_system(format!("mcp: {names} ({} tools)", mcp.tool_count()));
+        state.mcp = Some(mcp);
+    }
 
     // Hard cap on rendered log entries so per-frame cost stays bounded for
     // long sessions. Old entries are dropped from the on-screen log only; the
@@ -2581,8 +2599,9 @@ fn begin_agent_turn(
     let (steer_tx, steer_rx) = mpsc::unbounded_channel::<String>();
     state.event_rx = Some(rx);
     state.steer_tx = Some(steer_tx);
+    let mcp = state.mcp.clone();
     state.task_handle = Some(spawn_agent_turn(
-        settings, messages, prompt, tx, steer_rx, configure,
+        settings, messages, prompt, tx, steer_rx, mcp, configure,
     ));
 }
 /// Spawn one agent turn, building the [`Agent`] off the TUI thread.
@@ -2596,6 +2615,7 @@ fn spawn_agent_turn(
     prompt: String,
     tx: mpsc::Sender<AgentEvent>,
     steer_rx: mpsc::UnboundedReceiver<String>,
+    mcp: Option<McpHandle>,
     configure: impl FnOnce(Agent) -> Agent + Send + 'static,
 ) -> tokio::task::JoinHandle<anyhow::Result<Vec<ChatMessage>>> {
     tokio::spawn(async move {
@@ -2612,6 +2632,9 @@ fn spawn_agent_turn(
                 return Err(e);
             }
         };
+        if let Some(mcp) = mcp {
+            agent = agent.with_mcp(mcp);
+        }
         agent.run(&prompt, tx).await?;
         Ok(agent.messages)
     })

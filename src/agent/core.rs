@@ -15,6 +15,7 @@ use tokio::sync::mpsc;
 use crate::config::{load_agents_md, Mode, Settings};
 use crate::context::{compact_if_needed_llm, history_tokens};
 use crate::error::{cap_http_body, AgentError};
+use crate::mcp::McpHandle;
 use crate::memory;
 use crate::plan::Plan;
 use crate::tokenizer::{count_tokens, UsageCalibration, MSG_OVERHEAD};
@@ -425,6 +426,8 @@ pub struct Agent {
     /// sent) and returns the raw SSE body string (or JSON when `no_stream`).
     #[cfg(test)]
     pub(crate) completion_source: Option<CompletionSource>,
+    /// Optional MCP tools attached for this turn (session-scoped handle).
+    pub(crate) mcp: Option<McpHandle>,
 }
 
 impl Agent {
@@ -467,8 +470,15 @@ impl Agent {
             usage_supported,
             #[cfg(test)]
             completion_source: None,
+            mcp: None,
             client: shared_http_client()?,
         })
+    }
+
+    /// Attach MCP tools discovered for this session.
+    pub fn with_mcp(mut self, mcp: McpHandle) -> Self {
+        self.mcp = Some(mcp);
+        self
     }
 
     /// Restrict this agent to the read-only toolset for a plan-proposal turn.
@@ -580,25 +590,30 @@ impl Agent {
         } else {
             cached_tool_definitions().clone()
         };
-        if self.settings.allow_delegate {
-            return tools;
-        }
-        let Some(arr) = tools.as_array() else {
-            return tools;
+        let tools = if self.settings.allow_delegate {
+            tools
+        } else {
+            let Some(arr) = tools.as_array() else {
+                return tools;
+            };
+            let filtered: Vec<serde_json::Value> = arr
+                .iter()
+                .filter(|tool| {
+                    !matches!(
+                        tool.get("function")
+                            .and_then(|f| f.get("name"))
+                            .and_then(|n| n.as_str()),
+                        Some("delegate_task" | "goal_set" | "todo_write")
+                    )
+                })
+                .cloned()
+                .collect();
+            serde_json::Value::Array(filtered)
         };
-        let filtered: Vec<serde_json::Value> = arr
-            .iter()
-            .filter(|tool| {
-                !matches!(
-                    tool.get("function")
-                        .and_then(|f| f.get("name"))
-                        .and_then(|n| n.as_str()),
-                    Some("delegate_task" | "goal_set" | "todo_write")
-                )
-            })
-            .cloned()
-            .collect();
-        serde_json::Value::Array(filtered)
+        match &self.mcp {
+            Some(mcp) => crate::mcp::merge_tool_defs(tools, mcp, self.plan_only),
+            None => tools,
+        }
     }
 
     /// Run one full agent turn (may include multiple tool rounds). Yields events.

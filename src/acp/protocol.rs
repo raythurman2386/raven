@@ -1,8 +1,9 @@
 //! ACP v1 wire helpers: JSON-RPC envelopes, capabilities, and event mapping.
 //!
-//! Kept small on purpose — Raven speaks a documented subset of ACP v1
-//! (no MCP, no client FS/terminal, text prompts only). See
-//! <https://agentclientprotocol.com/protocol/overview>.
+//! Kept small on purpose — Raven speaks ACP v1 over stdio (text prompts,
+//! session lifecycle, config options, stdio MCP). Client `fs/*` /
+//! `terminal/*` are unused; HTTP/SSE MCP transports are not advertised.
+//! See <https://agentclientprotocol.com/protocol/overview>.
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -98,8 +99,7 @@ pub fn agent_capabilities() -> Value {
         "sessionCapabilities": {
             "list": {},
             "close": {},
-            "resume": {},
-            "set": {}
+            "resume": {}
         }
     })
 }
@@ -335,6 +335,15 @@ pub fn plan_update(plan: &Plan) -> Value {
 /// `AskUser` is not mapped here — the server turns it into
 /// `session/request_permission`. `Done` / `Error` end the turn.
 pub fn map_event(event: &AgentEvent, tool_seq: &mut u64) -> Vec<Value> {
+    map_event_with_kind(event, tool_seq, tool_kind)
+}
+
+/// [`map_event`] with a custom ACP `ToolKind` resolver (MCP tools).
+pub fn map_event_with_kind(
+    event: &AgentEvent,
+    tool_seq: &mut u64,
+    kind_of: impl Fn(&str) -> &'static str,
+) -> Vec<Value> {
     match event {
         AgentEvent::TextDelta(t) if !t.is_empty() => vec![json!({
             "sessionUpdate": "agent_message_chunk",
@@ -347,7 +356,7 @@ pub fn map_event(event: &AgentEvent, tool_seq: &mut u64) -> Vec<Value> {
                 "sessionUpdate": "tool_call",
                 "toolCallId": id,
                 "title": name,
-                "kind": tool_kind(name),
+                "kind": kind_of(name),
                 "status": "in_progress",
                 "rawInput": args
             })]

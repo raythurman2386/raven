@@ -103,7 +103,7 @@ Because Raven runs as its own process, Zed and Raven config stay separate:
 | Tools | Raven (its 25 built-in tools) |
 | Skills / instructions | Raven (native `SKILL.md` discovery, `AGENTS.md` auto-load) |
 | Zed Skills | Do **not** apply — Raven does not read Zed skills |
-| MCP servers | Zed-configured MCP servers may be forwarded to Raven over ACP; Raven also reads its own native config |
+| MCP servers | Native `[mcp.servers]` in Raven's `config.toml`, plus any servers Zed forwards on `session/new` (stdio only) |
 
 ## Provider selection per connection
 
@@ -170,7 +170,9 @@ chosen provider + model:
   with Raven. Set the key via `env` in the `agent_servers` entry, an
   `OLLAMA_API_KEY`/`OPENROUTER_API_KEY` env var available to the process, or
   Raven's own `.env`.
-- **MCP tools missing.** Check both Zed's MCP server config (forwarded) and
-  Raven's native MCP config.
+- **MCP tools missing.** Confirm the server is stdio (not HTTP/SSE), the
+  command is on `PATH` for the Raven process, and either `[mcp.servers]` is
+  set in `~/.raven/config.toml` or Zed is forwarding `mcpServers` on
+  `session/new`. A failed spawn is skipped; check stderr / `RUST_LOG=raven=debug`.
 
 For general ACP failure modes, see [troubleshooting.md](troubleshooting.md).

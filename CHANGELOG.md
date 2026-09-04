@@ -6,6 +6,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.6.0] - 2026-09-03
 
+### Added
+
+- **Stdio MCP client** — Raven connects MCP servers from `[mcp.servers.<name>]`
+  in `config.toml` (TUI and headless) and from ACP `mcpServers` on
+  `session/new` / `session/load` / `session/resume` (required by ACP v1).
+  Tools are advertised as `{server}__{tool}` (e.g. `sysmetrics__get_cpu_metrics`
+  for [sysmetrics-mcp](https://github.com/raythurman2386/sysmetrics-mcp)).
+  HTTP/SSE MCP transports are not advertised. A failed spawn is skipped so
+  the session still starts. Plan/chat includes only `readOnlyHint: true`
+  tools. `sessionCapabilities.set` was dropped — it is not in the ACP schema;
+  session config options remain on `session/set_config_option`.
+- **Agent Plugins MCP (`mcp.json`)** — plugins may ship stdio MCP servers in
+  the portable Agent Plugins 1.0.0 `mcp.json` format. Raven expands
+  `${PLUGIN_ROOT}` / `${PLUGIN_DATA}`, sets those env vars, defaults `cwd` to
+  the plugin root, and skips HTTP/SSE entries. Invalid `mcp.json` disables MCP
+  for that plugin only; skills still load. Tool names are
+  `{plugin}__{server}__{tool}`. Native `config.toml` and ACP `mcpServers`
+  override the same name. Plan/chat exposes only `readOnlyHint: true` tools.
+
 ### Changed
 
 - **README repositioned to what raven actually is** — an opinionated, personal

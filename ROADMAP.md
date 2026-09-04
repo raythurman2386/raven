@@ -47,7 +47,7 @@ fmt.
 
 - **Document extraction** — `read_file` converts `.docx`, `.pdf`, `.xlsx`, `.odt`, `.epub`, `.pptx`, `.csv`, `.rtf`, `.ods`, `.odp`, `.doc`, `.xls`, `.ppt` and more to Markdown (via the `anydoc` engine).
 - **Web search + fetch** — keyless DuckDuckGo by default; optional self-hosted SearXNG backend with automatic DDG fallback.
-- **Skills** — `SKILL.md` discovery over `.raven/skills/` + `~/.raven/skills/` plus Agent Plugins v1.0.0 packages (skills-only) from `.raven/plugins/` + `~/.raven/plugins/`, `skill_search`/`skill_load`.
+- **Skills** — `SKILL.md` discovery over `.raven/skills/` + `~/.raven/skills/` plus Agent Plugins v1.0.0 packages (skills + stdio MCP) from `.raven/plugins/` + `~/.raven/plugins/`, `skill_search`/`skill_load`.
 - **Repo symbol map** — `<repo_map>` injected for large workspaces (≥15 files / ≥80 symbols), cached per workspace, off the hot path.
 - **Memory** — `.raven/MEMORY.md` injected (first 25KB) + `memory_search` keyword recall.
 - **Git** — inspect-only `git_status` / `git_diff` / `git_log`; worktree isolation for sub-agents with patch-apply back to the parent working tree (no harness commits).
@@ -65,6 +65,7 @@ fmt.
 - **Layered config** — CLI > env > `.env` > workspace `.raven/config.toml` > global `~/.raven/config.toml` > built-in defaults.
 - **Session persistence** — atomic JSONL (`messages.jsonl` + `summary.json`), unique-tmp rename, flush-on-`/stop`/SIGINT, `--resume`/`--list-sessions`, local `debug-events.jsonl` + `last.patch` snapshots.
 - **ACP v1 stdio** — `raven --acp` for editor attachment (Zed etc.).
+- **Stdio MCP** — native `[mcp.servers]` plus ACP `mcpServers` on session setup; tools advertised as `{server}__{tool}`.
 
 ### TUI
 - Streaming tail-patch, ravenwood theme, wrapped multi-line input, markdown rendering (headings/code/lists/tables/links), slash-command completion (`/provider`, `/model` with live endpoint discovery), abort/steer that can't leak a stale `Done` into the next turn.
@@ -100,13 +101,13 @@ These are real grok-build features but would bloat raven past "mini". Not
 planned unless a checklist item forces a small split.
 
 - In-tree CDP / Browser Use
-- MCP marketplace (ACP clients may still attach)
+- MCP marketplace (stdio MCP is supported; no catalog/UI)
 - Full VM / container isolation (run Raven inside a container yourself if you need it)
 - NFS-safe SQLite journaling — raven is local-only
 - sqlite-vec embeddings / MMR / dream consolidation — keyword recall covers the need
 - Rhai workflow engine + deterministic journal — over-engineered for a per-turn agent
 - Background task pool / kill-task supervisor — `spawn_blocking` + `/stop` covers the mini case
-- Full official `agent-client-protocol` crate / MCP-over-ACP — Raven ships a thin v1 stdio adapter (`raven --acp`) instead
+- Full official `agent-client-protocol` crate — Raven ships a thin v1 stdio adapter (`raven --acp`) with stdio MCP
 - Large TUI redesign unless a checklist item requires a small split
 - New protocols beyond fixing ACP if something is broken
 

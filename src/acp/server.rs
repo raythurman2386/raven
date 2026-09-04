@@ -1,8 +1,8 @@
 //! ACP v1 stdio agent: JSON-RPC over newline-delimited stdin/stdout.
 //!
 //! Editors spawn `raven --acp` and talk ACP. Raven owns its own sandbox and
-//! tools; MCP servers on `session/new` are ignored. Client `fs/*` /
-//! `terminal/*` are not used.
+//! tools, and connects stdio MCP servers from `session/new` (merged with
+//! native `[mcp.servers]` config). Client `fs/*` / `terminal/*` are not used.
 //!
 //! Stdin stays live during a prompt so `session/cancel` and
 //! `session/request_permission` replies can arrive mid-turn.
@@ -18,12 +18,14 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 
 use crate::agent::{Agent, AgentEvent, ChatMessage};
 use crate::config::{Mode, Settings};
+use crate::mcp::{connect_specs, merge_specs, McpHandle, McpServerSpec};
 use crate::session::{Session, SessionStore};
 
 use super::protocol::{
     agent_capabilities, agent_info, auth_methods, error_code, error_msg, extract_prompt_text,
-    map_event, mode_config_option, model_config_option, permission_allowed, result_msg,
-    session_modes, session_update, Incoming, StopReason, AUTH_METHOD_ID, PROTOCOL_VERSION,
+    map_event_with_kind, mode_config_option, model_config_option, permission_allowed, result_msg,
+    session_modes, session_update, tool_kind, Incoming, StopReason, AUTH_METHOD_ID,
+    PROTOCOL_VERSION,
 };
 
 /// Shared writer so request handlers and the event pump can emit frames.
@@ -65,6 +67,8 @@ struct LiveSession {
     /// also keeps the sync FS work off the runtime (an inline write stalls
     /// the event pump mid-stream for large transcripts).
     saver: Option<tokio::task::JoinHandle<()>>,
+    /// Stdio MCP servers for this session (native config + ACP `mcpServers`).
+    mcp: Option<McpHandle>,
 }
 
 /// In-memory ACP agent state (sessions + pending client replies).
@@ -75,6 +79,8 @@ pub struct AcpServer {
     /// The full loaded config, so the server can enumerate every configured
     /// provider for the model picker and switch a session onto any of them.
     cfg: crate::config::ConfigFile,
+    /// Native `[mcp.servers]` specs, merged with per-session ACP `mcpServers`.
+    native_mcp: Vec<McpServerSpec>,
     initialized: bool,
     sessions: HashMap<String, LiveSession>,
     next_rpc_id: AtomicU64,
@@ -86,6 +92,7 @@ impl AcpServer {
     /// and can enumerate providers from `cfg`.
     pub fn new(template: Settings, cfg: crate::config::ConfigFile) -> Self {
         Self {
+            native_mcp: cfg.mcp.specs(),
             template,
             cfg,
             initialized: false,
@@ -141,6 +148,32 @@ async fn build_config_options(
 
 fn current_model_id(settings: &Settings) -> String {
     format!("{}/{}", settings.provider.name, settings.model)
+}
+
+struct McpAttach {
+    workspace: PathBuf,
+    native: Vec<McpServerSpec>,
+    params: Value,
+    sid: String,
+}
+
+/// Connect plugin + native + ACP-provided stdio MCP servers off the runtime.
+async fn attach_mcp(
+    workspace: PathBuf,
+    native: Vec<McpServerSpec>,
+    params: Value,
+) -> Option<McpHandle> {
+    tokio::task::spawn_blocking(move || {
+        let plugin = crate::plugins::mcp_specs(&workspace);
+        let specs = merge_specs(
+            merge_specs(plugin, native),
+            McpServerSpec::from_acp_params(&params),
+        );
+        connect_specs(&specs)
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 /// Dispatch one incoming frame. Prompt turns are spawned so stdin stays live.
@@ -203,7 +236,28 @@ pub async fn dispatch(
         return Ok(());
     }
 
-    let reply = {
+    let reply = if matches!(
+        method.as_str(),
+        "session/new" | "session/load" | "session/resume"
+    ) {
+        let (reply, job) = {
+            let mut srv = server.lock().await;
+            match method.as_str() {
+                "session/new" => on_session_new(&mut srv, &id, &params).await,
+                "session/load" => on_session_load(&mut srv, &id, &params, &writer).await,
+                "session/resume" => on_session_resume(&mut srv, &id, &params).await,
+                _ => unreachable!(),
+            }
+        };
+        if let Some(job) = job {
+            let mcp = attach_mcp(job.workspace, job.native, job.params).await;
+            let mut srv = server.lock().await;
+            if let Some(sess) = srv.sessions.get_mut(&job.sid) {
+                sess.mcp = mcp;
+            }
+        }
+        reply
+    } else {
         let mut srv = server.lock().await;
         match method.as_str() {
             "initialize" => on_initialize(&mut srv, &id),
@@ -225,9 +279,6 @@ pub async fn dispatch(
                     result_msg(&id, json!({}))
                 }
             }
-            "session/new" => on_session_new(&mut srv, &id, &params).await,
-            "session/load" => on_session_load(&mut srv, &id, &params, &writer).await,
-            "session/resume" => on_session_resume(&mut srv, &id, &params).await,
             "session/list" => on_session_list(&srv, &id, &params),
             "session/close" => on_session_close(&mut srv, &id, &params),
             "session/set_mode" => on_set_mode(&mut srv, &id, &params),
@@ -263,23 +314,48 @@ fn persist_new(settings: &Settings) -> Result<(SessionStore, Session)> {
     Ok((store, session))
 }
 
-async fn on_session_new(srv: &mut AcpServer, id: &Value, params: &Value) -> Value {
+async fn on_session_new(
+    srv: &mut AcpServer,
+    id: &Value,
+    params: &Value,
+) -> (Value, Option<McpAttach>) {
     let cwd = match params.get("cwd").and_then(|v| v.as_str()) {
         Some(c) => c,
-        None => return error_msg(Some(id), error_code::INVALID_PARAMS, "cwd is required"),
+        None => {
+            return (
+                error_msg(Some(id), error_code::INVALID_PARAMS, "cwd is required"),
+                None,
+            )
+        }
     };
     let settings = match srv.settings_for_cwd(cwd) {
         Ok(s) => s,
-        Err(e) => return error_msg(Some(id), error_code::INVALID_PARAMS, &e.to_string()),
+        Err(e) => {
+            return (
+                error_msg(Some(id), error_code::INVALID_PARAMS, &e.to_string()),
+                None,
+            )
+        }
     };
     let (store, persisted) = match persist_new(&settings) {
         Ok(v) => v,
-        Err(e) => return error_msg(Some(id), error_code::INTERNAL, &e.to_string()),
+        Err(e) => {
+            return (
+                error_msg(Some(id), error_code::INTERNAL, &e.to_string()),
+                None,
+            )
+        }
     };
     let sid = persisted.summary.id.clone();
     let mode = settings.mode.label().to_string();
     let config_options =
         build_config_options(srv.cfg.clone(), current_model_id(&settings), mode.clone()).await;
+    let job = McpAttach {
+        workspace: settings.workspace.clone(),
+        native: srv.native_mcp.clone(),
+        params: params.clone(),
+        sid: sid.clone(),
+    };
     srv.sessions.insert(
         sid.clone(),
         LiveSession {
@@ -289,15 +365,19 @@ async fn on_session_new(srv: &mut AcpServer, id: &Value, params: &Value) -> Valu
             persisted,
             cancel: None,
             saver: None,
+            mcp: None,
         },
     );
-    result_msg(
-        id,
-        json!({
-            "sessionId": sid,
-            "modes": session_modes(&mode),
-            "configOptions": config_options
-        }),
+    (
+        result_msg(
+            id,
+            json!({
+                "sessionId": sid,
+                "modes": session_modes(&mode),
+                "configOptions": config_options
+            }),
+        ),
+        Some(job),
     )
 }
 
@@ -306,14 +386,17 @@ async fn on_session_load(
     id: &Value,
     params: &Value,
     writer: &Arc<Mutex<dyn FrameWrite>>,
-) -> Value {
+) -> (Value, Option<McpAttach>) {
     let sid = match params.get("sessionId").and_then(|v| v.as_str()) {
         Some(s) => s.to_string(),
         None => {
-            return error_msg(
-                Some(id),
-                error_code::INVALID_PARAMS,
-                "sessionId is required",
+            return (
+                error_msg(
+                    Some(id),
+                    error_code::INVALID_PARAMS,
+                    "sessionId is required",
+                ),
+                None,
             );
         }
     };
@@ -323,16 +406,31 @@ async fn on_session_load(
     } else {
         match srv.settings_for_cwd(cwd) {
             Ok(s) => s,
-            Err(e) => return error_msg(Some(id), error_code::INVALID_PARAMS, &e.to_string()),
+            Err(e) => {
+                return (
+                    error_msg(Some(id), error_code::INVALID_PARAMS, &e.to_string()),
+                    None,
+                )
+            }
         }
     };
     let store = match SessionStore::for_workspace(&settings.workspace) {
         Ok(s) => s,
-        Err(e) => return error_msg(Some(id), error_code::INTERNAL, &e.to_string()),
+        Err(e) => {
+            return (
+                error_msg(Some(id), error_code::INTERNAL, &e.to_string()),
+                None,
+            )
+        }
     };
     let persisted = match store.load(&sid) {
         Ok(s) => s,
-        Err(e) => return error_msg(Some(id), error_code::INVALID_PARAMS, &e.to_string()),
+        Err(e) => {
+            return (
+                error_msg(Some(id), error_code::INVALID_PARAMS, &e.to_string()),
+                None,
+            )
+        }
     };
     {
         let mut w = writer.lock().await;
@@ -363,6 +461,12 @@ async fn on_session_load(
     let mode = settings.mode.label().to_string();
     let config_options =
         build_config_options(srv.cfg.clone(), current_model_id(&settings), mode.clone()).await;
+    let job = McpAttach {
+        workspace: settings.workspace.clone(),
+        native: srv.native_mcp.clone(),
+        params: params.clone(),
+        sid: sid.clone(),
+    };
     srv.sessions.insert(
         sid,
         LiveSession {
@@ -372,25 +476,36 @@ async fn on_session_load(
             persisted,
             cancel: None,
             saver: None,
+            mcp: None,
         },
     );
-    result_msg(
-        id,
-        json!({
-            "modes": session_modes(&mode),
-            "configOptions": config_options
-        }),
+    (
+        result_msg(
+            id,
+            json!({
+                "modes": session_modes(&mode),
+                "configOptions": config_options
+            }),
+        ),
+        Some(job),
     )
 }
 
-async fn on_session_resume(srv: &mut AcpServer, id: &Value, params: &Value) -> Value {
+async fn on_session_resume(
+    srv: &mut AcpServer,
+    id: &Value,
+    params: &Value,
+) -> (Value, Option<McpAttach>) {
     let sid = match params.get("sessionId").and_then(|v| v.as_str()) {
         Some(s) => s.to_string(),
         None => {
-            return error_msg(
-                Some(id),
-                error_code::INVALID_PARAMS,
-                "sessionId is required",
+            return (
+                error_msg(
+                    Some(id),
+                    error_code::INVALID_PARAMS,
+                    "sessionId is required",
+                ),
+                None,
             );
         }
     };
@@ -403,12 +518,21 @@ async fn on_session_resume(srv: &mut AcpServer, id: &Value, params: &Value) -> V
             mode.clone(),
         )
         .await;
-        return result_msg(
-            id,
-            json!({
-                "modes": session_modes(&mode),
-                "configOptions": config_options
-            }),
+        let job = McpAttach {
+            workspace: sess.settings.workspace.clone(),
+            native: srv.native_mcp.clone(),
+            params: params.clone(),
+            sid: sid.clone(),
+        };
+        return (
+            result_msg(
+                id,
+                json!({
+                    "modes": session_modes(&mode),
+                    "configOptions": config_options
+                }),
+            ),
+            Some(job),
         );
     }
     let cwd = params.get("cwd").and_then(|v| v.as_str()).unwrap_or("");
@@ -417,20 +541,41 @@ async fn on_session_resume(srv: &mut AcpServer, id: &Value, params: &Value) -> V
     } else {
         match srv.settings_for_cwd(cwd) {
             Ok(s) => s,
-            Err(e) => return error_msg(Some(id), error_code::INVALID_PARAMS, &e.to_string()),
+            Err(e) => {
+                return (
+                    error_msg(Some(id), error_code::INVALID_PARAMS, &e.to_string()),
+                    None,
+                )
+            }
         }
     };
     let store = match SessionStore::for_workspace(&settings.workspace) {
         Ok(s) => s,
-        Err(e) => return error_msg(Some(id), error_code::INTERNAL, &e.to_string()),
+        Err(e) => {
+            return (
+                error_msg(Some(id), error_code::INTERNAL, &e.to_string()),
+                None,
+            )
+        }
     };
     let persisted = match store.load(&sid) {
         Ok(s) => s,
-        Err(e) => return error_msg(Some(id), error_code::INVALID_PARAMS, &e.to_string()),
+        Err(e) => {
+            return (
+                error_msg(Some(id), error_code::INVALID_PARAMS, &e.to_string()),
+                None,
+            )
+        }
     };
     let mode = settings.mode.label().to_string();
     let config_options =
         build_config_options(srv.cfg.clone(), current_model_id(&settings), mode.clone()).await;
+    let job = McpAttach {
+        workspace: settings.workspace.clone(),
+        native: srv.native_mcp.clone(),
+        params: params.clone(),
+        sid: sid.clone(),
+    };
     srv.sessions.insert(
         sid,
         LiveSession {
@@ -440,14 +585,18 @@ async fn on_session_resume(srv: &mut AcpServer, id: &Value, params: &Value) -> V
             persisted,
             cancel: None,
             saver: None,
+            mcp: None,
         },
     );
-    result_msg(
-        id,
-        json!({
-            "modes": session_modes(&mode),
-            "configOptions": config_options
-        }),
+    (
+        result_msg(
+            id,
+            json!({
+                "modes": session_modes(&mode),
+                "configOptions": config_options
+            }),
+        ),
+        Some(job),
     )
 }
 
@@ -718,7 +867,7 @@ async fn run_prompt_inner(
     let text = extract_prompt_text(blocks).map_err(|e| anyhow::anyhow!("{e}"))?;
     let title = text_preview(&text);
 
-    let (settings, preload) = {
+    let (settings, preload, mcp) = {
         let srv = server.lock().await;
         let sess = srv
             .sessions
@@ -737,11 +886,16 @@ async fn run_prompt_inner(
                 }
             });
         }
-        (sess.settings.clone(), sess.messages.clone())
+        (
+            sess.settings.clone(),
+            sess.messages.clone(),
+            sess.mcp.clone(),
+        )
     };
 
     let (tx, mut rx) = mpsc::channel::<AgentEvent>(128);
     let prompt_text = text.clone();
+    let mcp_for_agent = mcp.clone();
     let handle = tokio::spawn(async move {
         let constructed = tokio::task::spawn_blocking({
             let settings = settings.clone();
@@ -757,6 +911,9 @@ async fn run_prompt_inner(
         .await
         .unwrap_or_else(|e| Err(anyhow::anyhow!("agent construction cancelled: {e}")));
         let mut agent = constructed?;
+        if let Some(handle) = mcp_for_agent {
+            agent = agent.with_mcp(handle);
+        }
         if settings.mode.read_only() {
             agent = agent.plan_only();
         }
@@ -843,7 +1000,12 @@ async fn run_prompt_inner(
                 .await;
             }
             other => {
-                let updates = map_event(&other, &mut tool_seq);
+                let kind_of = |name: &str| {
+                    mcp.as_ref()
+                        .and_then(|h| h.acp_kind(name))
+                        .unwrap_or_else(|| tool_kind(name))
+                };
+                let updates = map_event_with_kind(&other, &mut tool_seq, kind_of);
                 if !updates.is_empty() {
                     let mut w = writer.lock().await;
                     for update in updates {

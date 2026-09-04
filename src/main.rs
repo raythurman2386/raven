@@ -7,7 +7,7 @@
 //! Inspired by the agent-harness ideas in xAI's [Grok Build](https://github.com/xai-org/grok-build);
 //! not affiliated.
 //!
-//! One binary, no cloud auth, no MCP — just a streaming agent loop
+//! One binary, no cloud auth — a streaming agent loop
 //! with tools, plan mode, context compaction, and parallel sub-agents, talking
 //! to any OpenAI-compatible `/v1/chat/completions` endpoint (local Ollama by
 //! default, Ollama Cloud with a Bearer token optionally). Subprocesses are
@@ -29,6 +29,7 @@
 //! | [`plan`]      | Structured plan data model + parsing                |
 //! | [`session`]   | Session persistence (JSONL)                          |
 //! | [`acp`]       | Agent Client Protocol v1 stdio adapter (`--acp`)      |
+//! | [`mcp`]       | Stdio MCP client (ACP `mcpServers` + `[mcp.servers]`) |
 //! | [`tokenizer`] | BPE-like token estimation                         |
 //!
 //! See the repository `README.md` for user-facing documentation and
@@ -516,7 +517,15 @@ async fn main() -> Result<()> {
         std::process::exit(1);
     }
 
-    headless_run(settings, &task, resume_session, store).await
+    let workspace = settings.workspace.clone();
+    let native = cfg.mcp.specs();
+    let mcp = tokio::task::spawn_blocking(move || {
+        let specs = raven::mcp::merge_specs(raven::plugins::mcp_specs(&workspace), native);
+        raven::mcp::connect_specs(&specs)
+    })
+    .await
+    .unwrap_or(None);
+    headless_run(settings, &task, resume_session, store, mcp).await
 }
 
 /// Run a single task in headless (non-interactive) mode.
@@ -530,6 +539,7 @@ async fn headless_run(
     task: &str,
     resume_session: Option<Session>,
     store: SessionStore,
+    mcp: Option<raven::mcp::McpHandle>,
 ) -> Result<()> {
     let compact_at = ((settings.context_window - settings.context_window / 8) as f32
         * settings.compact_threshold) as usize;
@@ -579,6 +589,9 @@ async fn headless_run(
     } else {
         Agent::with_messages(settings.clone(), session.messages.clone())?
     };
+    if let Some(mcp) = mcp.clone() {
+        agent = agent.with_mcp(mcp);
+    }
     if read_only {
         agent = agent.plan_only();
     }
@@ -607,6 +620,7 @@ async fn headless_run(
             &store,
             &mut session,
             task,
+            mcp,
         )
         .await?;
     }
