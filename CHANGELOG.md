@@ -4,6 +4,23 @@ All notable changes to Raven are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.4] - 2026-09-04
+
+### Fixed
+
+- **Further panic hardening on live TUI and tool paths** — Up-history no
+  longer indexes past `prompt_history.len()`. DuckDuckGo HTML parsing
+  clamps UTF-8 offsets and uses `get` for `uddg=` / `href` slices instead
+  of panicking on a mid-character `from` or a truncated `uddg=` at EOF.
+  A failed search-URL build returns an error string instead of
+  `Url::parse(...).unwrap()`. Compaction skips an empty history instead of
+  slicing `messages[0]` / `messages[1..tail_start]`. The agent replaces
+  the system message via `first_mut()` rather than `messages[0]`. ACP
+  session dispatch returns JSON-RPC method-not-found instead of
+  `unreachable!()`. Seccomp filter construction logs and skips instead of
+  `.expect` on the first `run_shell`. Session-title extraction and plugin
+  `${PLUGIN_*}` expansion no longer slice/`unwrap` on a bad offset.
+
 ## [0.6.3] - 2026-09-04
 
 ### Fixed

@@ -1,6 +1,6 @@
 [package]
 name = "raven"
-version = "0.6.3"
+version = "0.6.4"
 edition = "2021"
 description = "An opinionated, personal coding-agent harness for Linux and Raspberry Pi (Ollama / OpenAI-compatible endpoints)"
 license = "MIT"
