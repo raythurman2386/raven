@@ -505,6 +505,86 @@ fn sse_multi_tools(calls: &[(&str, &str, &str)]) -> String {
 }
 
 #[tokio::test]
+async fn web_search_emits_tool_start_and_end_pair() {
+    // Web tools are dispatched inline (async HTTP), so ToolStart must go out
+    // before the await — otherwise the TUI shows nothing while the search
+    // runs. An empty query errors before any HTTP, exercising the real
+    // dispatch path offline; only the event pairing matters here.
+    let tmp = tempfile::tempdir().unwrap();
+    let mut agent = Agent::new(settings_for(tmp.path()))
+        .unwrap()
+        .with_completion_source(scripted(vec![
+            sse_tool_call("call_w", "web_search", r#"{"query":""}"#),
+            sse_text("Search failed, moving on."),
+        ]));
+    let (tx, mut rx) = mpsc::channel(64);
+    agent.run("search the web", tx).await.unwrap();
+    let events = drain(&mut rx).await;
+
+    let start_idx = events
+        .iter()
+        .position(|e| matches!(e, AgentEvent::ToolStart { name, .. } if name == "web_search"));
+    let end_idx = events
+        .iter()
+        .position(|e| matches!(e, AgentEvent::ToolEnd { name, .. } if name == "web_search"));
+    assert!(start_idx.is_some(), "web_search must emit ToolStart");
+    assert!(end_idx.is_some(), "web_search must emit ToolEnd");
+    assert!(
+        start_idx.unwrap() < end_idx.unwrap(),
+        "ToolStart must precede ToolEnd"
+    );
+    // The tool result still reaches the model even though the search failed.
+    assert!(
+        agent.messages.iter().any(|m| m.role == "tool"
+            && m.content
+                .as_deref()
+                .unwrap_or("")
+                .contains("empty search query")),
+        "web_search result should be recorded in history"
+    );
+}
+
+#[tokio::test]
+async fn delegate_task_emits_tool_start_and_end_pair() {
+    let tmp = tempfile::tempdir().unwrap();
+    super::super::parallel::stub_delegate_task("Sub-agent finished the sub-task.");
+    let mut agent = Agent::new(settings_for(tmp.path()))
+        .unwrap()
+        .with_completion_source(scripted(vec![
+            sse_tool_call(
+                "call_d",
+                "delegate_task",
+                r#"{"description":"summarize the readme"}"#,
+            ),
+            sse_text("Delegated work complete."),
+        ]));
+    let (tx, mut rx) = mpsc::channel(64);
+    agent.run("delegate a task", tx).await.unwrap();
+    let events = drain(&mut rx).await;
+
+    let start_idx = events
+        .iter()
+        .position(|e| matches!(e, AgentEvent::ToolStart { name, .. } if name == "delegate_task"));
+    let end_idx = events
+        .iter()
+        .position(|e| matches!(e, AgentEvent::ToolEnd { name, .. } if name == "delegate_task"));
+    assert!(start_idx.is_some(), "delegate_task must emit ToolStart");
+    assert!(end_idx.is_some(), "delegate_task must emit ToolEnd");
+    assert!(
+        start_idx.unwrap() < end_idx.unwrap(),
+        "ToolStart must precede ToolEnd"
+    );
+    assert!(
+        agent.messages.iter().any(|m| m.role == "tool"
+            && m.content
+                .as_deref()
+                .unwrap_or("")
+                .contains("Sub-agent finished")),
+        "delegate_task result should be recorded in history"
+    );
+}
+
+#[tokio::test]
 async fn mixed_read_write_tool_results_preserve_call_order() {
     if skip_if_outer_sandbox() {
         return;

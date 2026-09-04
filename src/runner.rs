@@ -50,6 +50,16 @@ pub async fn drain_events_logged(
                             let _ = store.log_event(session, "shell", &snippet);
                         }
                     }
+                } else if name == "web_search" || name == "web_fetch" {
+                    if let Some((store, session)) = debug {
+                        let arg = args
+                            .get("query")
+                            .or_else(|| args.get("url"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let snippet: String = arg.chars().take(500).collect();
+                        let _ = store.log_event(session, &name, &snippet);
+                    }
                 }
             }
             AgentEvent::ToolEnd { name, preview } => {

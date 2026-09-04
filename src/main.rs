@@ -206,8 +206,12 @@ enum SelfSubcommand {
 /// TTY with the TUI alternate screen, so a log line would paint at the cursor
 /// (the input bar). When stdout is piped, write to stderr instead.
 fn init_tracing() {
+    // Default to warn for dependencies and info for this crate only — the
+    // agent loop logs per-iteration HTTP and stream timings. Two bare
+    // directives override each other (last wins), so the crate must be
+    // targeted explicitly; an explicit RUST_LOG still wins.
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn,raven=info"));
 
     let use_file = std::io::stdout().is_terminal();
     if use_file {
@@ -224,7 +228,6 @@ fn init_tracing() {
                         .with_env_filter(filter)
                         .with_writer(Mutex::new(file))
                         .with_ansi(false)
-                        .with_target(false)
                         .compact()
                         .init();
                     return;
@@ -236,7 +239,7 @@ fn init_tracing() {
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(std::io::stderr)
-        .with_target(false)
+        .with_ansi(false)
         .compact()
         .init();
 }
