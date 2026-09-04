@@ -229,8 +229,16 @@ impl Agent {
 
             // delegate_task spawns a fresh sub-agent in a new context window
             // and returns its distilled output — async, so special-case it
-            // like the web tools.
+            // like the web tools. ToolStart must pair with the ToolEnd from
+            // record_tool_result, or the TUI shows nothing while the
+            // sub-agent runs.
             if tc.function.name == "delegate_task" {
+                let _ = tx
+                    .send(AgentEvent::ToolStart {
+                        name: tc.function.name.clone(),
+                        args: args.clone(),
+                    })
+                    .await;
                 let description = args
                     .get("description")
                     .and_then(|v| v.as_str())
@@ -256,7 +264,17 @@ impl Agent {
             }
 
             // Web tools are async HTTP — special-case them like ask_user.
+            // ToolStart goes out before the await so the TUI shows the call
+            // while it runs instead of a silent multi-second stall; the
+            // paired ToolEnd comes from record_tool_result below.
             if tc.function.name == "web_search" || tc.function.name == "web_fetch" {
+                let _ = tx
+                    .send(AgentEvent::ToolStart {
+                        name: tc.function.name.clone(),
+                        args: args.clone(),
+                    })
+                    .await;
+                let t_web = std::time::Instant::now();
                 let result = if tc.function.name == "web_search" {
                     let query = args
                         .get("query")
@@ -277,6 +295,11 @@ impl Agent {
                         .to_string();
                     crate::web::fetch_text(&url).await
                 };
+                tracing::info!(
+                    tool = tc.function.name.as_str(),
+                    duration_ms = t_web.elapsed().as_millis() as u64,
+                    "web tool finished"
+                );
                 slots[idx] = Some(PendingToolResult::ready(
                     tc.id.clone(),
                     tc.function.name.clone(),
