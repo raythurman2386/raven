@@ -114,9 +114,12 @@ impl FsPolicy {
     /// run cargo/rustc/node/etc:
     /// - every `PATH` directory under `$HOME` (so any tool on PATH can exec —
     ///   `~/.cargo/bin`, `~/.local/bin`, `~/.local/share/mise/shims`,
-    ///   `~/.config/nvm/.../bin`, `~/.opencode/bin`, …). PATH dirs are bin
-    ///   dirs, not secret dirs (`~/.ssh`, `~/.env`, `~/.aws` are never on
-    ///   PATH), so this does not widen the read surface to home secrets.
+    ///   `~/.config/nvm/.../bin`, `~/.opencode/bin`, `ripwire` when installed
+    ///   there, …). PATH dirs are bin dirs, not secret dirs (`~/.ssh`,
+    ///   `~/.env`, `~/.aws` are never on PATH), so this does not widen the
+    ///   read surface to home secrets. Ripwire's cache is pinned under
+    ///   `workspace/.raven/` (workspace is RW) so a confined child does not
+    ///   need to write `$HOME`.
     /// - `~/.cargo/registry` (host registry, reachable through the pinned
     ///   `CARGO_HOME` symlink)
     /// - `~/.rustup` (real toolchain binaries that rustup proxies exec)

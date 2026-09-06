@@ -208,6 +208,7 @@ fn settings_for(workspace: &std::path::Path, base_url: &str) -> crate::config::S
         searxng_engines: Vec::new(),
         sandbox_extra_rw: Vec::new(),
         allow_delegate: true,
+        ripwire: false,
     }
 }
 
@@ -1272,6 +1273,34 @@ async fn multi_turn_conversation() {
 
     let user_msgs: Vec<_> = agent.messages.iter().filter(|m| m.role == "user").collect();
     assert_eq!(user_msgs.len(), 2);
+}
+
+#[test]
+fn agent_new_with_ripwire_enabled_and_no_binary_does_not_fail() {
+    let tmp = tempfile::tempdir().unwrap();
+    for i in 0..20 {
+        let p = tmp.path().join(format!("src/f{i}.rs"));
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, format!("pub fn regex_only_symbol_{i}() {{}}\n")).unwrap();
+    }
+    let mut settings = settings_for(tmp.path(), "http://127.0.0.1:1");
+    settings.ripwire = true;
+    let agent = crate::repomap::with_ripwire_bin(None, || {
+        Agent::new(settings).expect("startup must not fail without ripwire")
+    });
+    let sys = agent
+        .messages
+        .first()
+        .and_then(|m| m.content.clone())
+        .unwrap_or_default();
+    assert!(
+        sys.contains("<repo_map>") || sys.contains("regex_only_symbol"),
+        "regex fallback map should still inject: {sys}"
+    );
+    assert!(
+        sys.contains("<ripwire>"),
+        "enabled flag still documents tools"
+    );
 }
 
 #[tokio::test]

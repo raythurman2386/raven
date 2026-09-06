@@ -35,7 +35,7 @@ opt-in (denylist + network block still apply).
 ### Step-by-step
 
 1. **CLI** (`main.rs`) parses flags with `clap`, builds a [`Settings`](../src/config/mod.rs) struct (resolving env vars, loading config files, and querying the model's actual context window via Ollama's `/api/show` endpoint).
-2. **Agent construction** (`Agent::new`): validates the workspace, builds the system prompt (`SYSTEM_BASE` + workspace root + `AGENTS.md` + `--rules`), and seeds `messages[0]` as the system message.
+2. **Agent construction** (`Agent::new`): validates the workspace, builds the system prompt (`SYSTEM_BASE` + workspace root + optional ripwire or regex `<repo_map>` + `AGENTS.md` + `--rules`), and seeds `messages[0]` as the system message. Ripwire is opt-in and never required.
 3. **Agent loop** (`Agent::run`): appends the user message, then loops up to `max_iterations`:
    - **Compaction check**: estimate history tokens; if over the soft limit, summarize the middle (see [Compaction](#compaction)).
    - **Clamp `max_tokens`**: so `prompt_tokens + max_tokens + 64 ≤ context_window`.

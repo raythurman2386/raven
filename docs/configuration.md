@@ -22,6 +22,7 @@ See the [root README quick start](../README.md#quick-start) for the full flag li
 | `RAVEN_SANDBOX_NETWORK_BLOCK` | _(unset)_ | Set to `0` to skip the seccomp network block (Linux only) |
 | `RAVEN_SEARXNG_URL` | _(unset)_ | Optional self-hosted SearXNG base URL for `web_search` (e.g. `http://127.0.0.1:8080`) |
 | `RAVEN_SEARXNG_ENGINES` | _(unset)_ | Optional comma-separated SearXNG engine list (e.g. `google,bing`) |
+| `RAVEN_RIPWIRE` | _(unset)_ | Opt-in ripwire-backed repo map (`1`/`true`/`yes`/`on` or `0`/`false`/`no`/`off`). Default off; regex map remains the fallback. |
 
 ### Examples
 
@@ -197,6 +198,7 @@ Layered TOML config, loaded from the workspace first (higher priority), then the
 | `theme` | `ravenwood` | TUI color theme: `ravenwood`, `nord`, `dracula`, `solarized-dark` |
 | `searxng_url` | _(unset)_ | Optional self-hosted SearXNG base URL for `web_search` (e.g. `http://127.0.0.1:8080`) |
 | `searxng_engines` | _(unset)_ | Optional SearXNG engine list (e.g. `["google", "bing"]`) |
+| `ripwire` | `false` | Opt-in: use a `ripwire` binary on `PATH` for the system-prompt map and mid-turn graph tools. Regex map remains the default and fallback. |
 
 ```toml
 # .raven/config.toml  (workspace)  or  ~/.raven/config.toml  (global)
@@ -217,6 +219,36 @@ theme = "ravenwood"
 ```
 
 CLI flags still win over config file values; env vars take precedence over the config file but lose to explicit CLI flags.
+
+### Ripwire (optional repo map)
+
+The regex `<repo_map>` is always available. To prefer [ripwire](https://github.com/redhat-et/ripwire)
+when its CLI is on `PATH`:
+
+```bash
+# install (see ripwire's README for current instructions)
+RIPWIRE_REPO=redhat-et/ripwire bash -c "$(curl -fsSL https://raw.githubusercontent.com/redhat-et/ripwire/main/scripts/install.sh)"
+```
+
+```toml
+# .raven/config.toml or ~/.raven/config.toml
+ripwire = true
+```
+
+```bash
+export RAVEN_RIPWIRE=1   # overrides the config file
+```
+
+Raven is still a single binary: ripwire is **not** vendored, not a Cargo
+dependency, and not required in CI. If the flag is off, `ripwire` is missing,
+the spawn times out, the child exits non-zero, stdout is oversize, or Landlock
+blocks exec, the regex map is used and the session continues.
+
+**Sandbox:** confined children may exec binaries on `PATH` under `$HOME`
+(e.g. `~/.local/bin/ripwire`) and under `/usr`. Ripwire's cache is pinned to
+`{workspace}/.raven/ripwire.cache` so the child does not need to write `$HOME`.
+If confinement still cannot exec it, mid-turn tools return an error string
+(no session crash) and the prompt map falls back to regex.
 
 ---
 

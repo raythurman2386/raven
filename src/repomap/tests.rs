@@ -620,3 +620,395 @@ fn walk_skips_files_deeper_than_max_depth() {
         "files deeper than MAX_WALK_DEPTH must not be scanned"
     );
 }
+
+fn write_many_regex_files(dir: &std::path::Path, n: usize) {
+    for i in 0..n {
+        write_rs(
+            dir,
+            &format!("src/regex_{i}.rs"),
+            &format!("pub fn regex_only_symbol_{i}() {{}}\n"),
+        );
+    }
+}
+
+fn install_ripwire_stub(workspace: &std::path::Path, body: &str) -> std::path::PathBuf {
+    let bin_dir = workspace.join("bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let bin = bin_dir.join("ripwire");
+    let mut script = String::from("#!/bin/sh\n");
+    script.push_str(body);
+    std::fs::write(&bin, script).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    bin
+}
+
+fn stub_bin(workspace: &std::path::Path) -> std::path::PathBuf {
+    workspace.join("bin").join("ripwire")
+}
+
+const RANKED_STUB: &str = r#"
+set -eu
+# Mimic ripwire 0.3.x: --top-k=0 with --callers/--callees/--impact exits 1.
+for a in "$@"; do
+  case "$a" in
+    --top-k=0)
+      echo 'ripwire: --top-k does not narrow those verbs' >&2
+      exit 1
+      ;;
+  esac
+done
+ws="${PWD}"
+mkdir -p "${ws}/.raven"
+printf '%s\n' "$@" > "${ws}/.raven/ripwire-argv"
+n=0
+if [ -f "${ws}/.raven/ripwire-calls" ]; then
+  n=$(cat "${ws}/.raven/ripwire-calls")
+fi
+n=$((n+1))
+echo "$n" > "${ws}/.raven/ripwire-calls"
+for a in "$@"; do
+  case "$a" in
+    --callers=*)
+      printf '<callers of="foo"><s t="fn" n="caller_from_stub" p="src/a.rs"></s></callers>\n'
+      exit 0
+      ;;
+    --callees=*)
+      printf '<callees of="foo"><s t="fn" n="callee_from_stub" p="src/a.rs"></s></callees>\n'
+      exit 0
+      ;;
+    --impact=*)
+      printf '<impact of="foo"><s t="fn" n="impact_from_stub" p="src/a.rs"></s></impact>\n'
+      exit 0
+      ;;
+    --for=*)
+      printf '<f p="src/a.rs"><s t="fn" n="for_from_stub"></s></f>\n'
+      exit 0
+      ;;
+  esac
+done
+printf '<r><f p="src/ripwire_only.rs"><s t="fn" n="ripwire_ranked_symbol_%s"><c n="nested_callee_edge"/></s></f></r>\n' "$n"
+"#;
+
+#[test]
+fn flag_off_uses_regex_repo_map() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_many_regex_files(tmp.path(), 20);
+    invalidate(tmp.path());
+    let map = build_map_with(tmp.path(), false).expect("regex map");
+    assert!(map.starts_with("<repo_map>"));
+    assert!(map.ends_with("</repo_map>"));
+    assert!(map.contains("regex_only_symbol_0 [fn]"), "{map}");
+    assert!(
+        !map.contains("ripwire_ranked_symbol"),
+        "regex path must not invent ripwire stub symbols: {map}"
+    );
+}
+
+#[test]
+fn missing_ripwire_on_path_falls_back_to_regex() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_many_regex_files(tmp.path(), 20);
+    invalidate(tmp.path());
+    let map =
+        super::with_ripwire_bin(None, || build_map_with(tmp.path(), true)).expect("regex fallback");
+    assert!(map.starts_with("<repo_map>"));
+    assert!(map.ends_with("</repo_map>"));
+    assert!(map.contains("regex_only_symbol_0 [fn]"), "{map}");
+}
+
+#[test]
+fn enabled_stub_on_path_uses_adapter_not_regex_extract() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_many_regex_files(tmp.path(), 20);
+    let bin = install_ripwire_stub(tmp.path(), RANKED_STUB);
+    invalidate(tmp.path());
+    let map = super::with_ripwire_bin(Some(&bin), || build_map_with(tmp.path(), true))
+        .expect("ripwire map");
+    assert!(map.starts_with("<repo_map>"));
+    assert!(map.ends_with("</repo_map>"));
+    assert!(map.contains("ripwire_ranked_symbol_1 [fn]"), "{map}");
+    assert!(
+        !map.contains("regex_only_symbol_0"),
+        "adapter map must not be the regex extract of the fixture: {map}"
+    );
+    assert!(
+        !map.contains("nested_callee_edge"),
+        "call-edge <c> must not appear as a definition: {map}"
+    );
+    assert!(map.chars().count() <= MAX_MAP_CHARS + 40);
+}
+
+#[test]
+fn ripwire_cache_invalidate_forces_rebuild() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_many_regex_files(tmp.path(), 20);
+    install_ripwire_stub(tmp.path(), RANKED_STUB);
+    invalidate(tmp.path());
+    let bin = stub_bin(tmp.path());
+    super::with_ripwire_bin(Some(&bin), || {
+        let first = build_map_with(tmp.path(), true).expect("first");
+        assert!(first.contains("ripwire_ranked_symbol_1 [fn]"), "{first}");
+        let second = build_map_with(tmp.path(), true).expect("cached");
+        assert_eq!(first, second);
+        invalidate(tmp.path());
+        let third = build_map_with(tmp.path(), true).expect("rebuilt");
+        assert!(third.contains("ripwire_ranked_symbol_2 [fn]"), "{third}");
+        assert_ne!(first, third);
+    });
+}
+
+#[test]
+fn ripwire_nonzero_falls_back_to_regex() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_many_regex_files(tmp.path(), 20);
+    install_ripwire_stub(tmp.path(), "exit 2\n");
+    invalidate(tmp.path());
+    let bin = stub_bin(tmp.path());
+    let map =
+        super::with_ripwire_bin(Some(&bin), || build_map_with(tmp.path(), true)).expect("fallback");
+    assert!(map.contains("regex_only_symbol_0 [fn]"), "{map}");
+}
+
+#[test]
+fn ripwire_timeout_is_silent_failure() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_many_regex_files(tmp.path(), 20);
+    install_ripwire_stub(tmp.path(), "sleep 30\n");
+    let bin = stub_bin(tmp.path());
+    super::with_ripwire_bin(Some(&bin), || {
+        let verb = RipwireVerb::Map {
+            root: tmp.path().to_path_buf(),
+        };
+        let spawned = run_ripwire(tmp.path(), &verb, false, &[], 1);
+        assert!(
+            matches!(spawned, Err(RipwireError::Timeout)),
+            "expected timeout, got {spawned:?}"
+        );
+    });
+    // build_map_with treats Timeout like any other spawn failure (regex
+    // fallback). Cover that with the nonzero-exit stub so this test does
+    // not wait the default 20s.
+}
+
+#[test]
+fn ripwire_oversize_is_error_then_regex_fallback() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_many_regex_files(tmp.path(), 20);
+    install_ripwire_stub(
+        tmp.path(),
+        r#"
+dd if=/dev/zero bs=1000 count=300 2>/dev/null | tr '\0' 'x'
+"#,
+    );
+    invalidate(tmp.path());
+    let bin = stub_bin(tmp.path());
+    let map = super::with_ripwire_bin(Some(&bin), || {
+        let verb = RipwireVerb::Map {
+            root: tmp.path().to_path_buf(),
+        };
+        let spawned = run_ripwire(tmp.path(), &verb, false, &[], 5);
+        assert!(
+            matches!(
+                spawned,
+                Err(RipwireError::Oversize) | Err(RipwireError::Empty)
+            ),
+            "expected oversize/empty, got {spawned:?}"
+        );
+        build_map_with(tmp.path(), true)
+    })
+    .expect("regex fallback");
+    assert!(map.contains("regex_only_symbol_0 [fn]"), "{map}");
+}
+
+#[test]
+fn ripwire_graph_verbs_adapt_stub_output() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_many_regex_files(tmp.path(), 20);
+    install_ripwire_stub(tmp.path(), RANKED_STUB);
+    let bin = stub_bin(tmp.path());
+    super::with_ripwire_bin(Some(&bin), || {
+        let ws = tmp.path();
+        let callers = run_ripwire(
+            ws,
+            &RipwireVerb::Callers {
+                root: ws.to_path_buf(),
+                symbol: "foo".into(),
+            },
+            false,
+            &[],
+            5,
+        )
+        .expect("callers");
+        assert!(callers.contains("caller_from_stub [fn]"), "{callers}");
+        let callees = run_ripwire(
+            ws,
+            &RipwireVerb::Callees {
+                root: ws.to_path_buf(),
+                symbol: "foo".into(),
+            },
+            false,
+            &[],
+            5,
+        )
+        .expect("callees");
+        assert!(callees.contains("callee_from_stub [fn]"), "{callees}");
+        let impact = run_ripwire(
+            ws,
+            &RipwireVerb::Impact {
+                root: ws.to_path_buf(),
+                target: "foo".into(),
+            },
+            false,
+            &[],
+            5,
+        )
+        .expect("impact");
+        assert!(impact.contains("impact_from_stub [fn]"), "{impact}");
+        let focused = run_ripwire(
+            ws,
+            &RipwireVerb::For {
+                root: ws.to_path_buf(),
+                query: "cache invalidation".into(),
+            },
+            false,
+            &[],
+            5,
+        )
+        .expect("for");
+        assert!(focused.contains("for_from_stub [fn]"), "{focused}");
+        let recorded = std::fs::read_to_string(ws.join(".raven/ripwire-argv")).unwrap();
+        assert!(
+            !recorded.split_whitespace().any(|a| a == "--top-k=0"),
+            "spawned argv must not pass --top-k=0: {recorded}"
+        );
+        assert!(
+            recorded.split_whitespace().any(|a| a.starts_with("--for=")),
+            "expected --for in argv: {recorded}"
+        );
+    });
+}
+
+#[test]
+fn graph_argv_omits_topk_zero_and_uses_limit() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path();
+    for verb in [
+        RipwireVerb::Callers {
+            root: ws.to_path_buf(),
+            symbol: "build_map".into(),
+        },
+        RipwireVerb::Callees {
+            root: ws.to_path_buf(),
+            symbol: "build_map".into(),
+        },
+        RipwireVerb::Impact {
+            root: ws.to_path_buf(),
+            target: "build_map".into(),
+        },
+    ] {
+        let args = super::ripwire::argv(ws, &verb).expect("argv");
+        assert!(
+            !args
+                .iter()
+                .any(|a| a == "--top-k=0" || a.starts_with("--top-k=")),
+            "graph verbs must not pass --top-k (ripwire 0.3.x exits 1): {args:?}"
+        );
+        assert!(
+            args.iter().any(|a| a == "--limit=80"),
+            "graph verbs should cap with --limit: {args:?}"
+        );
+    }
+    let callers = super::ripwire::argv(
+        ws,
+        &RipwireVerb::Callers {
+            root: ws.to_path_buf(),
+            symbol: "build_map".into(),
+        },
+    )
+    .unwrap();
+    assert!(
+        callers.iter().any(|a| a == "--callers=build_map"),
+        "{callers:?}"
+    );
+}
+
+#[test]
+fn spawned_callers_argv_is_recorded_without_topk() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_many_regex_files(tmp.path(), 20);
+    install_ripwire_stub(tmp.path(), RANKED_STUB);
+    let bin = stub_bin(tmp.path());
+    super::with_ripwire_bin(Some(&bin), || {
+        let ws = tmp.path();
+        let out = run_ripwire(
+            ws,
+            &RipwireVerb::Callers {
+                root: ws.to_path_buf(),
+                symbol: "build_map".into(),
+            },
+            false,
+            &[],
+            5,
+        )
+        .expect("callers spawn");
+        assert!(out.contains("caller_from_stub [fn]"), "{out}");
+        let recorded = std::fs::read_to_string(ws.join(".raven/ripwire-argv")).unwrap();
+        assert!(
+            recorded
+                .split_whitespace()
+                .any(|a| a == "--callers=build_map"),
+            "shipped argv must include --callers=: {recorded}"
+        );
+        assert!(
+            !recorded
+                .split_whitespace()
+                .any(|a| a.starts_with("--top-k=")),
+            "spawned callers argv must not include --top-k: {recorded}"
+        );
+        assert!(
+            recorded.split_whitespace().any(|a| a == "--limit=80"),
+            "spawned callers argv should include --limit=80: {recorded}"
+        );
+    });
+}
+
+#[test]
+fn host_ripwire_callers_topk_zero_exits_nonzero() {
+    let Some(bin) = super::find_ripwire() else {
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    write_rs(tmp.path(), "src/lib.rs", "pub fn hello() {}\n");
+    let shipped = super::ripwire::argv(
+        tmp.path(),
+        &RipwireVerb::Callers {
+            root: tmp.path().to_path_buf(),
+            symbol: "hello".into(),
+        },
+    )
+    .unwrap();
+    assert!(
+        !shipped.iter().any(|a| a.starts_with("--top-k=")),
+        "shipped argv would be rejected by this host binary: {shipped:?}"
+    );
+
+    let bad = std::process::Command::new(&bin)
+        .args([".", "--callers=hello", "--top-k=0"])
+        .current_dir(tmp.path())
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("spawn host ripwire");
+    let stderr = String::from_utf8_lossy(&bad.stderr);
+    assert!(
+        !bad.status.success(),
+        "ripwire --callers --top-k=0 must fail"
+    );
+    assert!(
+        stderr.contains("--top-k"),
+        "real CLI refusal should mention --top-k: {stderr}"
+    );
+}

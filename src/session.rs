@@ -606,6 +606,7 @@ mod tests {
             searxng_engines: Vec::new(),
             sandbox_extra_rw: Vec::new(),
             allow_delegate: true,
+            ripwire: false,
         }
     }
 

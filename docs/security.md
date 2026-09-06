@@ -79,6 +79,14 @@ Raven therefore:
 **Why /dev is allowed:** git and many tools need `/dev/null` open for
 read+write.
 
+**Optional `ripwire` exec:** when `ripwire = true`, mid-turn tools spawn the
+`ripwire` binary under this same ruleset. Exec is already granted for `PATH`
+directories under `$HOME` (toolchain roots) and `/usr`. The child's cache is
+pinned to `{workspace}/.raven/ripwire.cache` (workspace is RW) so ripwire does
+not need to write `$HOME`. If Landlock still cannot exec it, the tool returns
+an error string and the system-prompt map falls back to the regex extractor —
+agent startup never depends on ripwire.
+
 **Escape hatch:** `RAVEN_SANDBOX_LANDLOCK=0` skips Landlock (tests / recovery).
 
 **Platforms:** Linux only (Landlock is a Linux LSM, kernel 5.13+; REFER needs

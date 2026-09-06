@@ -391,6 +391,32 @@ fn config_file_parses_searxng() {
 }
 
 #[test]
+fn config_file_parses_ripwire() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg_dir = tmp.path().join(".raven");
+    std::fs::create_dir_all(&cfg_dir).unwrap();
+    std::fs::write(cfg_dir.join("config.toml"), "ripwire = true\n").unwrap();
+    let cfg = load_config_file(tmp.path());
+    assert_eq!(cfg.ripwire, Some(true));
+}
+
+#[test]
+fn resolve_ripwire_env_and_config() {
+    let original = std::env::var("RAVEN_RIPWIRE").ok();
+    std::env::remove_var("RAVEN_RIPWIRE");
+    assert!(!resolve_ripwire(None));
+    assert!(resolve_ripwire(Some(true)));
+    std::env::set_var("RAVEN_RIPWIRE", "0");
+    assert!(!resolve_ripwire(Some(true)));
+    std::env::set_var("RAVEN_RIPWIRE", "true");
+    assert!(resolve_ripwire(Some(false)));
+    match original {
+        Some(v) => std::env::set_var("RAVEN_RIPWIRE", v),
+        None => std::env::remove_var("RAVEN_RIPWIRE"),
+    }
+}
+
+#[test]
 fn env_searxng_url_parses() {
     // Save any user-set value so this test never clobbers it for the run.
     let original = std::env::var("RAVEN_SEARXNG_URL").ok();

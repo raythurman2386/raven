@@ -353,6 +353,152 @@ fn dispatch_run_lint_on_cargo_project() {
 }
 
 #[test]
+fn dispatch_ripwire_tools_error_when_disabled() {
+    let tmp = tempfile::tempdir().unwrap();
+    let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
+    assert!(!sb.ripwire);
+    for (name, args) in [
+        ("repo_map", serde_json::json!({})),
+        ("refresh_map", serde_json::json!({})),
+        ("callers", serde_json::json!({"symbol": "foo"})),
+        ("callees", serde_json::json!({"symbol": "foo"})),
+        ("impact", serde_json::json!({"target": "foo"})),
+    ] {
+        let result = dispatch(&sb, name, &args, false).unwrap();
+        assert!(
+            result.contains("ripwire is not enabled"),
+            "{name} disabled: {result}"
+        );
+    }
+}
+
+#[test]
+fn dispatch_ripwire_tools_ok_with_stub() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().canonicalize().unwrap();
+    for i in 0..20 {
+        let p = ws.join(format!("src/regex_{i}.rs"));
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, format!("pub fn regex_only_symbol_{i}() {{}}\n")).unwrap();
+    }
+    let bin_dir = ws.join("bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    std::fs::write(
+        bin_dir.join("ripwire"),
+        r#"#!/bin/sh
+for a in "$@"; do
+  case "$a" in
+    --top-k=0) echo 'ripwire: --top-k does not narrow those verbs' >&2; exit 1 ;;
+  esac
+done
+for a in "$@"; do
+  case "$a" in
+    --callers=*) printf '<callers><s t="fn" n="caller_from_stub" p="src/a.rs"></s></callers>\n'; exit 0 ;;
+    --callees=*) printf '<callees><s t="fn" n="callee_from_stub" p="src/a.rs"></s></callees>\n'; exit 0 ;;
+    --impact=*) printf '<impact><s t="fn" n="impact_from_stub" p="src/a.rs"></s></impact>\n'; exit 0 ;;
+    --for=*) printf '<f p="src/a.rs"><s t="fn" n="for_from_stub"></s></f>\n'; exit 0 ;;
+  esac
+done
+printf '<r><f p="src/ripwire_only.rs"><s t="fn" n="ripwire_ranked_symbol"><c n="nested_callee_edge"/></s></f></r>\n'
+"#,
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            bin_dir.join("ripwire"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
+    let bin = bin_dir.join("ripwire");
+    crate::repomap::with_ripwire_bin(Some(&bin), || {
+        let mut sb = Sandbox::new(ws);
+        sb.ripwire = true;
+        let map = dispatch(&sb, "repo_map", &serde_json::json!({}), false).unwrap();
+        assert!(map.contains("ripwire_ranked_symbol [fn]"), "{map}");
+        assert!(
+            !map.contains("nested_callee_edge"),
+            "call-edge <c> must not become a definition: {map}"
+        );
+        let focused = dispatch(
+            &sb,
+            "repo_map",
+            &serde_json::json!({"query": "cache"}),
+            false,
+        )
+        .unwrap();
+        assert!(focused.contains("for_from_stub [fn]"), "{focused}");
+        let callers =
+            dispatch(&sb, "callers", &serde_json::json!({"symbol": "foo"}), false).unwrap();
+        assert!(callers.contains("caller_from_stub [fn]"), "{callers}");
+        let callees =
+            dispatch(&sb, "callees", &serde_json::json!({"symbol": "foo"}), false).unwrap();
+        assert!(callees.contains("callee_from_stub [fn]"), "{callees}");
+        let impact = dispatch(&sb, "impact", &serde_json::json!({"target": "foo"}), false).unwrap();
+        assert!(impact.contains("impact_from_stub [fn]"), "{impact}");
+        let refreshed = dispatch(&sb, "refresh_map", &serde_json::json!({}), false).unwrap();
+        assert!(
+            refreshed.contains("ripwire_ranked_symbol [fn]"),
+            "{refreshed}"
+        );
+    });
+}
+
+#[test]
+fn dispatch_ripwire_missing_binary_does_not_crash() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().canonicalize().unwrap();
+    let mut sb = Sandbox::new(ws);
+    sb.ripwire = true;
+    let result = crate::repomap::with_ripwire_bin(None, || {
+        dispatch(&sb, "callers", &serde_json::json!({"symbol": "foo"}), false).unwrap()
+    });
+    assert!(
+        result.contains("not found") || result.contains("ripwire"),
+        "{result}"
+    );
+}
+
+#[test]
+fn ripwire_tools_not_in_default_toolset() {
+    let names_of = |defs: &serde_json::Value| -> Vec<String> {
+        defs.as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| {
+                t.get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(|n| n.as_str())
+                    .map(str::to_string)
+            })
+            .collect()
+    };
+    for defs in [
+        tool_definitions(),
+        plan_tool_definitions(),
+        chat_tool_definitions(),
+    ] {
+        let names = names_of(&defs);
+        for extra in ["repo_map", "refresh_map", "callers", "callees", "impact"] {
+            assert!(
+                !names.iter().any(|n| n == extra),
+                "default toolset must not advertise {extra} unless ripwire is enabled"
+            );
+        }
+    }
+    let merged = crate::tools::merge_ripwire_tools(tool_definitions());
+    let names = names_of(&merged);
+    for extra in ["repo_map", "refresh_map", "callers", "callees", "impact"] {
+        assert!(
+            names.iter().any(|n| n == extra),
+            "merged toolset should include {extra}"
+        );
+    }
+}
+
+#[test]
 fn sandbox_raven_dir_repo_is_under_workspace() {
     let tmp = tempfile::tempdir().unwrap();
     let sb = Sandbox::new(tmp.path().canonicalize().unwrap());

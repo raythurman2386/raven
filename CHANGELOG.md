@@ -4,6 +4,19 @@ All notable changes to Raven are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Optional ripwire-backed repo map** — `ripwire = true` in `config.toml` or
+  `RAVEN_RIPWIRE=1` prefers a `ripwire` subprocess (when the binary is on
+  `PATH`) for the system-prompt `<repo_map>` and adds mid-turn `repo_map`,
+  `refresh_map`, `callers`, `callees`, and `impact` tools. Regex extraction
+  remains the default and the fallback when the binary is missing, the spawn
+  fails, times out, overruns the stdout cap, or Landlock blocks exec. Cache is
+  pinned under `{workspace}/.raven/ripwire.cache`. Ripwire is not a build or
+  CI dependency.
+
 ## [0.6.4] - 2026-09-04
 
 ### Fixed

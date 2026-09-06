@@ -353,6 +353,96 @@ pub fn tool_definitions() -> serde_json::Value {
     ])
 }
 
+/// Opt-in ripwire tools. Advertised only when `Settings.ripwire` is true.
+pub fn ripwire_tool_definitions() -> serde_json::Value {
+    serde_json::json!([
+        {
+            "type": "function",
+            "function": {
+                "name": "repo_map",
+                "description": "Ranked repo map via ripwire (or the regex fallback). Optional path scopes the crawl; optional query uses ripwire --for.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "Relative directory or file (default workspace root)" },
+                        "query": { "type": "string", "description": "Task/query for a focused map (ripwire --for)" }
+                    },
+                    "required": []
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "refresh_map",
+                "description": "Invalidate the cached repo map and rebuild it. Same arguments as repo_map.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "Relative directory or file (default workspace root)" },
+                        "query": { "type": "string", "description": "Task/query for a focused map (ripwire --for)" }
+                    },
+                    "required": []
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "callers",
+                "description": "Who calls this symbol (ripwire --callers). Graph edges are a floor, not a proof of absence.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "symbol": { "type": "string", "description": "Function, method, or type name" }
+                    },
+                    "required": ["symbol"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "callees",
+                "description": "What this symbol calls (ripwire --callees). Graph edges are a floor, not a proof of absence.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "symbol": { "type": "string", "description": "Function, method, or type name" }
+                    },
+                    "required": ["symbol"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "impact",
+                "description": "Blast radius for a symbol or file (ripwire --impact).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "target": { "type": "string", "description": "Symbol name or relative file path" }
+                    },
+                    "required": ["target"]
+                }
+            }
+        }
+    ])
+}
+
+/// Append [`ripwire_tool_definitions`] onto an existing tool array.
+pub fn merge_ripwire_tools(base: serde_json::Value) -> serde_json::Value {
+    let extra = ripwire_tool_definitions();
+    match (base, extra) {
+        (serde_json::Value::Array(mut a), serde_json::Value::Array(b)) => {
+            a.extend(b);
+            serde_json::Value::Array(a)
+        }
+        (other, _) => other,
+    }
+}
+
 /// The read-only tool subset exposed during plan mode.
 ///
 /// These let the model gather context (list/read/search/git-inspect) to

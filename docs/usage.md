@@ -325,6 +325,15 @@ back to an ignore-aware walk; hard-coded vendor dirs (`node_modules`,
 budget prefers entrypoints and shallow `src/` over deep tests. Small
 workspaces skip the map; output is capped at ~3.5K chars.
 
+The regex map is the **default**. Optionally, if [ripwire](https://github.com/redhat-et/ripwire)
+is installed on `PATH` and you set `ripwire = true` in `config.toml` (or
+`RAVEN_RIPWIRE=1`), Raven shells out to it for a ranked map and exposes
+mid-turn `repo_map` / `refresh_map` / `callers` / `callees` / `impact` tools.
+Ripwire is never required at build or runtime: missing binary, timeout,
+non-zero exit, oversize output, or a Landlock exec denial all fall back to
+the regex map and never fail agent startup. See
+[configuration.md](configuration.md#ripwire-optional-repo-map).
+
 ### Memory recall (`memory_search`)
 
 The agent can recall past decisions and conventions with `memory_search(query)`,
