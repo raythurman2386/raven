@@ -45,7 +45,7 @@ use raven::agent::{run_parallel, Agent, ChatMessage};
 use raven::config::{
     default_max_iter, env_compact_threshold, env_context_window, env_searxng_engines,
     env_searxng_url, load_config_file, load_dotenv_from, load_global_dotenv, needs_onboarding,
-    resolve_mode, resolve_provider, resolve_scope, run_onboarding, Mode, Settings,
+    resolve_mode, resolve_provider, resolve_ripwire, resolve_scope, run_onboarding, Mode, Settings,
 };
 use raven::context::{fetch_context_window, infer_context_window};
 use raven::runner;
@@ -394,6 +394,7 @@ async fn main() -> Result<()> {
         sandbox_extra_rw: Vec::new(),
         // System scope: no sub-agents, no nested goal/todo persistence.
         allow_delegate: !scope.is_system(),
+        ripwire: resolve_ripwire(cfg.ripwire),
     };
 
     if cli.acp {

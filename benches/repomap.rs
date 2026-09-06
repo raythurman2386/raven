@@ -23,7 +23,8 @@ fn bench(c: &mut Criterion) {
     let mut g = c.benchmark_group("repomap");
     // Cold walk: drop the cache so each sample rescans. `build_map` caches
     // after the first call, so timing it without invalidate only measures
-    // a HashMap hit.
+    // a HashMap hit. `build_map` is the regex path (ripwire off) so these
+    // benches stay green without a ripwire binary.
     g.bench_function("build_map_cold_60_files", |b| {
         b.iter(|| {
             invalidate(tmp.path());

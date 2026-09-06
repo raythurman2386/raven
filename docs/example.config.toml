@@ -75,6 +75,13 @@
 # Overridden by: RAVEN_SEARXNG_ENGINES env.
 #searxng_engines = ["google", "bing"]
 
+# --- Optional ripwire repo map ---------------------------------------------
+# Prefer the `ripwire` CLI (https://github.com/redhat-et/ripwire) for the
+# system-prompt <repo_map> and mid-turn repo_map/callers/callees/impact tools
+# when the binary is on PATH. Default off; regex map is the fallback.
+# Overridden by: RAVEN_RIPWIRE env (`1`/`true`/`yes`/`on`).
+#ripwire = false
+
 # ---------------------------------------------------------------------------
 # Providers
 # ---------------------------------------------------------------------------

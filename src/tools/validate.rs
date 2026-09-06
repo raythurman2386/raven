@@ -97,6 +97,21 @@ pub fn validate_tool_call(name: &str, raw: &str, args: &Value) -> Result<(), Str
         "web_fetch" => {
             require_nonempty_str(name, args, "url")?;
         }
+        "repo_map" | "refresh_map" => {
+            cap_str(name, args, "path", MAX_PATH_CHARS)?;
+            if let Some(v) = args.get("query") {
+                require_type_str(name, "query", v)?;
+            }
+            if let Some(v) = args.get("path") {
+                require_type_str(name, "path", v)?;
+            }
+        }
+        "callers" | "callees" => {
+            require_nonempty_str(name, args, "symbol")?;
+        }
+        "impact" => {
+            require_nonempty_str(name, args, "target")?;
+        }
         _ => {}
     }
     Ok(())
@@ -188,6 +203,17 @@ mod tests {
         let err =
             validate_tool_call("write_file", "{}", &json!({"path": 1, "content": ""})).unwrap_err();
         assert!(err.contains("string"));
+    }
+
+    #[test]
+    fn accepts_ripwire_callers() {
+        validate_tool_call("callers", r#"{"symbol":"foo"}"#, &json!({"symbol": "foo"})).unwrap();
+    }
+
+    #[test]
+    fn rejects_empty_ripwire_symbol() {
+        let err = validate_tool_call("callers", "{}", &json!({"symbol": "  "})).unwrap_err();
+        assert!(err.contains("symbol"));
     }
 
     #[test]

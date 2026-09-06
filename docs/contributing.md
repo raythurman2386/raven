@@ -53,7 +53,7 @@ src/
 ├── session.rs    # JSONL session persistence, resume, list
 ├── memory.rs     # Project memory (MEMORY.md) loading, update, search
 ├── state.rs      # Persistent agent state (.raven/state/todos.json + goal.json)
-├── repomap/mod.rs # Lightweight repo symbol map
+├── repomap/       # Regex repo map + optional ripwire adapter
 ├── tokenizer.rs  # Pure-Rust token estimator
 ├── web.rs        # Keyless web tools (web_fetch, web_search)
 ├── mcp/          # Stdio MCP client (config + ACP session/new)

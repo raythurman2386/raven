@@ -36,8 +36,17 @@ use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 
 mod patterns;
+mod ripwire;
 
 use patterns::patterns_for;
+
+pub use ripwire::{
+    adapt_to_repo_map, find_ripwire, run as run_ripwire, RipwireError, RipwireVerb,
+    RIPWIRE_TIMEOUT_SECS,
+};
+
+#[cfg(test)]
+pub(crate) use ripwire::with_ripwire_bin;
 
 /// Build a map only when the workspace has at least this many source files.
 const MIN_SOURCE_FILES: usize = 15;
@@ -45,7 +54,7 @@ const MIN_SOURCE_FILES: usize = 15;
 /// few files but many declarations).
 const MIN_SYMBOLS: usize = 80;
 /// Cap the rendered map (char-safe), matching tool-output discipline.
-const MAX_MAP_CHARS: usize = 3500;
+pub(crate) const MAX_MAP_CHARS: usize = 3500;
 /// Skip source files larger than this (likely generated/minified).
 const MAX_FILE_BYTES: u64 = 256 * 1024;
 /// Stop reading source files after this many. A parent folder of many repos
@@ -122,25 +131,43 @@ pub struct Symbol {
     pub score: i32,
 }
 
-fn map_cache() -> &'static Mutex<HashMap<PathBuf, Option<String>>> {
-    static CACHE: OnceLock<Mutex<HashMap<PathBuf, Option<String>>>> = OnceLock::new();
+#[derive(Clone, Hash, Eq, PartialEq)]
+struct MapCacheKey {
+    workspace: PathBuf,
+    ripwire: bool,
+}
+
+fn map_cache() -> &'static Mutex<HashMap<MapCacheKey, Option<String>>> {
+    static CACHE: OnceLock<Mutex<HashMap<MapCacheKey, Option<String>>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn cache_lock() -> std::sync::MutexGuard<'static, HashMap<PathBuf, Option<String>>> {
+fn cache_lock() -> std::sync::MutexGuard<'static, HashMap<MapCacheKey, Option<String>>> {
     map_cache().lock().unwrap_or_else(|e| e.into_inner())
 }
 
+fn cache_key(workspace: &Path, ripwire: bool) -> MapCacheKey {
+    MapCacheKey {
+        workspace: workspace.to_path_buf(),
+        ripwire,
+    }
+}
+
 /// Drop the cached map for `workspace` so the next [`build_map`] rescans.
+///
+/// Both the regex and ripwire cache entries are dropped so a file edit
+/// refreshes whichever backend the next turn uses.
 pub fn invalidate(workspace: &Path) {
-    cache_lock().remove(workspace);
+    let mut cache = cache_lock();
+    cache.remove(&cache_key(workspace, false));
+    cache.remove(&cache_key(workspace, true));
 }
 
 /// Decide whether to build a repo map for `workspace`. This is a cheap
 /// superset check (source-file count only, no extraction); `build_map` makes
 /// the final call using both file and symbol counts.
 pub fn should_build(workspace: &Path) -> bool {
-    if let Some(cached) = cache_lock().get(workspace) {
+    if let Some(cached) = cache_lock().get(&cache_key(workspace, false)) {
         return cached.is_some();
     }
     count_source_files(workspace) >= MIN_SOURCE_FILES
@@ -156,15 +183,39 @@ fn count_source_files(workspace: &Path) -> usize {
 /// Build a compact, ranked, grouped repo map string, or `None` if the
 /// workspace is too small to be worth it.
 ///
-/// Results are cached per workspace path. Call [`invalidate`] after file
-/// edits so the next turn sees a fresh map.
+/// Always uses the regex extractor. Prefer [`build_map_with`] when the
+/// session's ripwire opt-in flag is known. Results are cached per workspace
+/// path. Call [`invalidate`] after file edits so the next turn sees a fresh
+/// map.
 pub fn build_map(workspace: &Path) -> Option<String> {
-    if let Some(cached) = cache_lock().get(workspace) {
+    build_map_with(workspace, false)
+}
+
+/// Build a repo map, preferring a ripwire subprocess when `use_ripwire` is
+/// true and a `ripwire` binary is available.
+///
+/// Missing binary, spawn failure, timeout, non-zero exit, oversize output,
+/// or a sandbox exec denial all fall back to the regex map. The agent must
+/// not fail startup solely because ripwire is absent.
+pub fn build_map_with(workspace: &Path, use_ripwire: bool) -> Option<String> {
+    let key = cache_key(workspace, use_ripwire);
+    if let Some(cached) = cache_lock().get(&key) {
         return cached.clone();
     }
-    let map = build_map_uncached(workspace);
-    cache_lock().insert(workspace.to_path_buf(), map.clone());
+    let map = if use_ripwire {
+        try_ripwire_map(workspace).or_else(|| build_map_uncached(workspace))
+    } else {
+        build_map_uncached(workspace)
+    };
+    cache_lock().insert(key, map.clone());
     map
+}
+
+fn try_ripwire_map(workspace: &Path) -> Option<String> {
+    let verb = RipwireVerb::Map {
+        root: workspace.to_path_buf(),
+    };
+    ripwire::run(workspace, &verb, false, &[], ripwire::RIPWIRE_TIMEOUT_SECS).ok()
 }
 
 fn build_map_uncached(workspace: &Path) -> Option<String> {
@@ -362,9 +413,28 @@ fn score_path(rel: &Path) -> i32 {
     score
 }
 
+/// Map a ripwire (or regex) kind string onto a `'static` label.
+pub(crate) fn intern_kind(k: &str) -> &'static str {
+    match k {
+        "fn" | "function" => "fn",
+        "method" => "method",
+        "struct" => "struct",
+        "enum" => "enum",
+        "trait" => "trait",
+        "cls" | "class" => "class",
+        "iface" | "interface" => "interface",
+        "type" => "type",
+        "const" | "var" => "const",
+        "macro" => "macro",
+        "sec" | "section" => "section",
+        "impl" => "impl",
+        _ => "symbol",
+    }
+}
+
 /// Select symbols by score under budget, then group by path, then render
 /// each file exactly once. Hard-stops cleanly: never cuts a line in half.
-fn render(symbols: &[Symbol]) -> String {
+pub(crate) fn render(symbols: &[Symbol]) -> String {
     let mut selected: Vec<&Symbol> = Vec::new();
     let mut seen: HashMap<&str, ()> = HashMap::new();
     let mut chars = "<repo_map>\n".chars().count();

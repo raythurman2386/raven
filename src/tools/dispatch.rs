@@ -193,6 +193,23 @@ pub fn dispatch(
             let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
             Ok(crate::memory::search_memory(&sandbox.workspace, query))
         }
+        "repo_map" => Ok(dispatch_ripwire_map(sandbox, args, false)),
+        "refresh_map" => Ok(dispatch_ripwire_map(sandbox, args, true)),
+        "callers" => Ok(dispatch_ripwire_graph(
+            sandbox,
+            args.get("symbol").and_then(|v| v.as_str()).unwrap_or(""),
+            RipwireGraphKind::Callers,
+        )),
+        "callees" => Ok(dispatch_ripwire_graph(
+            sandbox,
+            args.get("symbol").and_then(|v| v.as_str()).unwrap_or(""),
+            RipwireGraphKind::Callees,
+        )),
+        "impact" => Ok(dispatch_ripwire_graph(
+            sandbox,
+            args.get("target").and_then(|v| v.as_str()).unwrap_or(""),
+            RipwireGraphKind::Impact,
+        )),
         other => return Ok(format!("Unknown tool: {}", other)),
     };
     let file_path = extract_file_path(name, args);
@@ -226,4 +243,101 @@ fn is_write_tool(name: &str) -> bool {
             | "goal_set"
             | "delegate_task"
     )
+}
+
+enum RipwireGraphKind {
+    Callers,
+    Callees,
+    Impact,
+}
+
+fn dispatch_ripwire_map(sandbox: &Sandbox, args: &serde_json::Value, refresh: bool) -> String {
+    if !sandbox.ripwire {
+        return crate::repomap::RipwireError::Disabled.to_string();
+    }
+    if refresh {
+        crate::repomap::invalidate(&sandbox.workspace);
+    }
+    let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+    let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
+    let root = ripwire_root(sandbox, path);
+    let verb = if query.trim().is_empty() {
+        crate::repomap::RipwireVerb::Map { root }
+    } else {
+        crate::repomap::RipwireVerb::For {
+            root,
+            query: query.to_string(),
+        }
+    };
+    match crate::repomap::run_ripwire(
+        &sandbox.workspace,
+        &verb,
+        true,
+        &sandbox.extra_rw,
+        crate::repomap::RIPWIRE_TIMEOUT_SECS,
+    ) {
+        Ok(map) => map,
+        Err(crate::repomap::RipwireError::NotFound)
+        | Err(crate::repomap::RipwireError::Spawn(_))
+        | Err(crate::repomap::RipwireError::Timeout)
+        | Err(crate::repomap::RipwireError::NonZero(_))
+        | Err(crate::repomap::RipwireError::Oversize)
+        | Err(crate::repomap::RipwireError::Empty) => {
+            match crate::repomap::build_map(&sandbox.workspace) {
+                Some(map) => format!("ripwire unavailable; regex fallback:\n{map}"),
+                None => crate::repomap::RipwireError::NotFound.to_string(),
+            }
+        }
+        Err(e) => e.to_string(),
+    }
+}
+
+fn dispatch_ripwire_graph(sandbox: &Sandbox, ident: &str, kind: RipwireGraphKind) -> String {
+    if !sandbox.ripwire {
+        return crate::repomap::RipwireError::Disabled.to_string();
+    }
+    let root = sandbox.workspace.clone();
+    let verb = match kind {
+        RipwireGraphKind::Callers => crate::repomap::RipwireVerb::Callers {
+            root,
+            symbol: ident.to_string(),
+        },
+        RipwireGraphKind::Callees => crate::repomap::RipwireVerb::Callees {
+            root,
+            symbol: ident.to_string(),
+        },
+        RipwireGraphKind::Impact => crate::repomap::RipwireVerb::Impact {
+            root,
+            target: ident.to_string(),
+        },
+    };
+    match crate::repomap::run_ripwire(
+        &sandbox.workspace,
+        &verb,
+        true,
+        &sandbox.extra_rw,
+        crate::repomap::RIPWIRE_TIMEOUT_SECS,
+    ) {
+        Ok(map) => map,
+        Err(e) => e.to_string(),
+    }
+}
+
+fn ripwire_root(sandbox: &Sandbox, path: &str) -> std::path::PathBuf {
+    let trimmed = path.trim();
+    if trimmed.is_empty() || trimmed == "." {
+        return sandbox.workspace.clone();
+    }
+    let joined = sandbox.workspace.join(trimmed);
+    if joined.is_dir() {
+        joined
+    } else if let Some(parent) = joined.parent() {
+        if parent.starts_with(&sandbox.workspace) {
+            parent.to_path_buf()
+        } else {
+            sandbox.workspace.clone()
+        }
+    } else {
+        sandbox.workspace.clone()
+    }
 }

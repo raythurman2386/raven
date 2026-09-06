@@ -32,6 +32,11 @@ All file paths are **relative to the workspace root** and confined to it. See [a
 | `web_fetch` | Fetch a URL and return readable text | Read-only; only http/https; strips HTML; 20s timeout |
 | `skill_search` | List skills matching a query | Read-only; searches SKILL.md files |
 | `skill_load` | Load a skill's instructions into context | Read-only; returns skill body wrapped in `<skill>` envelope |
+| `repo_map` | Ranked repo map (ripwire when enabled) | Opt-in; confined spawn of `ripwire`; regex fallback on failure |
+| `refresh_map` | Invalidate cache and rebuild the map | Opt-in; same spawn rules as `repo_map` |
+| `callers` | Who calls a symbol (`ripwire --callers`) | Opt-in; errors clearly if ripwire is unavailable |
+| `callees` | What a symbol calls (`ripwire --callees`) | Opt-in; errors clearly if ripwire is unavailable |
+| `impact` | Blast radius for a symbol or file (`ripwire --impact`) | Opt-in; errors clearly if ripwire is unavailable |
 
 ---
 
@@ -313,6 +318,37 @@ Searches for skills (SKILL.md files) by name or description. Searches `.raven/sk
 ```
 
 Loads a skill's full instructions into context. Returns the skill body wrapped in a `<skill>` envelope. Read-only and available during planning.
+
+### `repo_map` / `refresh_map` (opt-in ripwire)
+
+```json
+{
+  "path": "string (optional, relative directory or file)",
+  "query": "string (optional, task lens — ripwire --for)"
+}
+```
+
+Advertised only when `ripwire = true` (or `RAVEN_RIPWIRE=1`). Spawns `ripwire` under the same Landlock confinement as other tools, cache pinned at `{workspace}/.raven/ripwire.cache`. `refresh_map` invalidates the cached prompt map first. If ripwire is missing or the spawn fails, `repo_map` may return the regex `<repo_map>` with a fallback note; dispatch stays `Ok` (no session crash). Read-only; available in plan/chat when enabled.
+
+### `callers` / `callees`
+
+```json
+{
+  "symbol": "string (required)"
+}
+```
+
+Ripwire `--callers` / `--callees`. Returns a `<repo_map>` of adapted graph rows. If ripwire is disabled or unavailable, returns a clear error string. Graph edges are a floor (name-based); a zero does not prove absence.
+
+### `impact`
+
+```json
+{
+  "target": "string (required, symbol or relative file)"
+}
+```
+
+Ripwire `--impact` blast radius. Same enablement and error rules as `callers`.
 
 ---
 

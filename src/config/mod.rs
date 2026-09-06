@@ -242,6 +242,11 @@ pub struct Settings {
     /// Cleared on spawned sub-agents so they cannot nest or overwrite the
     /// parent's persisted goal and task list.
     pub allow_delegate: bool,
+    /// Opt-in: prefer a `ripwire` subprocess for the system-prompt repo map
+    /// and advertise mid-turn `repo_map` / `callers` / `callees` / `impact`
+    /// tools. Default off. Missing binary, spawn failure, or a sandbox exec
+    /// denial fall back to the regex map and never fail agent startup.
+    pub ripwire: bool,
 }
 
 impl Settings {
@@ -457,6 +462,23 @@ pub fn env_searxng_engines() -> Option<Vec<String>> {
     }
 }
 
+/// Opt-in ripwire flag from `RAVEN_RIPWIRE` (`1`/`true`/`yes`/`on` or
+/// `0`/`false`/`no`/`off`). Unset or unrecognized values are absent so the
+/// config file / default (`false`) apply.
+pub fn env_ripwire() -> Option<bool> {
+    let raw = std::env::var("RAVEN_RIPWIRE").ok()?;
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+/// Effective ripwire opt-in: env `RAVEN_RIPWIRE` > config file > default off.
+pub fn resolve_ripwire(cfg: Option<bool>) -> bool {
+    env_ripwire().or(cfg).unwrap_or(false)
+}
+
 // ── Config file ────────────────────────────────────────────────────────
 
 /// Config file loaded from `~/.raven/config.toml` or `.raven/config.toml`.
@@ -489,6 +511,9 @@ pub struct ConfigFile {
     /// per server name over the global file.
     #[serde(default)]
     pub mcp: crate::mcp::McpConfig,
+    /// Opt-in ripwire-backed repo map (`ripwire = true`). Default off.
+    /// Overridden by `RAVEN_RIPWIRE`.
+    pub ripwire: Option<bool>,
 }
 
 /// Load config from workspace `.raven/config.toml` then `~/.raven/config.toml`.
@@ -536,6 +561,7 @@ pub fn load_config_file(workspace: &std::path::Path) -> ConfigFile {
         searxng_url: ws.searxng_url.or(global.searxng_url),
         searxng_engines: ws.searxng_engines.or(global.searxng_engines),
         mcp: global.mcp.merge(ws.mcp),
+        ripwire: ws.ripwire.or(global.ripwire),
     }
 }
 

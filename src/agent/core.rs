@@ -262,10 +262,20 @@ fn build_system_message(settings: &Settings) -> ChatMessage {
         }
     }
 
-    if let Some(map) = crate::repomap::build_map(&settings.workspace) {
+    if let Some(map) = crate::repomap::build_map_with(&settings.workspace, settings.ripwire) {
         system.push('\n');
         system.push_str(&map);
         system.push('\n');
+    }
+    if settings.ripwire {
+        system.push_str(
+            "\n<ripwire>\n\
+             - Ripwire is enabled. Prefer repo_map, refresh_map, callers, callees, and impact \
+             over grepping for symbols or listing the workspace root.\n\
+             - If a ripwire tool errors (binary missing or sandbox blocked exec), fall back to \
+             grep / search_code; do not retry the same ripwire call.\n\
+             </ripwire>\n",
+        );
     }
     let agents = load_agents_md(&settings.workspace);
     if !agents.is_empty() {
@@ -440,6 +450,7 @@ impl Agent {
         let sandbox = Sandbox::with_scope(settings.workspace.clone(), settings.scope);
         let sandbox = Sandbox {
             extra_rw: settings.sandbox_extra_rw.clone(),
+            ripwire: settings.ripwire,
             ..sandbox
         };
         let messages = vec![build_system_message(&settings)];
@@ -597,6 +608,11 @@ impl Agent {
             }
         } else {
             cached_tool_definitions().clone()
+        };
+        let tools = if self.settings.ripwire {
+            crate::tools::merge_ripwire_tools(tools)
+        } else {
+            tools
         };
         let tools = if self.settings.allow_delegate {
             tools

@@ -58,7 +58,7 @@ CLI (main.rs)
 | `src/error.rs` | Typed `AgentError` / `ToolError` |
 | `src/memory.rs` | Cross-session project memory (`.raven/MEMORY.md`) |
 | `src/plan.rs` | Structured plan mode, `parse_plan`, `format_plan` |
-| `src/repomap/mod.rs` | Cached, walk-capped repo symbol map (`<repo_map>`); `patterns.rs` holds the language regexes |
+| `src/repomap/mod.rs` | Cached, walk-capped repo symbol map (`<repo_map>`); `patterns.rs` holds the language regexes; `ripwire.rs` is the optional subprocess adapter |
 | `src/runner.rs` | Shared event-draining and plan-approval flow |
 | `src/session.rs` | JSONL session persistence, resume, list (atomic writes); scope-aware store (`for_settings`: repo → `{workspace}/.raven/sessions`, system → `~/.raven/system/sessions`) |
 | `src/skills.rs` | `SKILL.md` discovery + `skill_search`/`skill_load` |
@@ -146,13 +146,15 @@ test`, `cargo clippy`, `cargo fmt`) — do not rely on the agent's simulated
    process temp dir. `TMPDIR` is pinned under `.raven/tmp`.
 5. **Session IDs** — `{iso}-{pid}-{counter}` (issue #10 is fixed). Still
    don't invent a different scheme without updating `generate_session_id`.
-6. **Repo map is cached** per workspace path until `repomap::invalidate`
-   (called when `repo_map_stale` after a successful file edit). Discovery
-   prefers `git ls-files --exclude-standard`, else an `ignore`-crate walk;
-   both honor `.gitignore` and hard `SKIP_DIRS`. Candidates are path-scored
-   before the extract budget (`MAX_WALK_DEPTH` / `MAX_SOURCE_FILES_SCANNED`).
-   Cache key is the raw `Path`, not canonical — keep `settings.workspace`
-   consistent.
+6. **Repo map is cached** per workspace path *and* backend (regex vs
+   ripwire) until `repomap::invalidate` (called when `repo_map_stale` after
+   a successful file edit). Discovery prefers `git ls-files
+   --exclude-standard`, else an `ignore`-crate walk; both honor `.gitignore`
+   and hard `SKIP_DIRS`. Candidates are path-scored before the extract
+   budget (`MAX_WALK_DEPTH` / `MAX_SOURCE_FILES_SCANNED`). Cache key is the
+   raw `Path` plus the ripwire flag, not canonical — keep
+   `settings.workspace` consistent. Ripwire is opt-in (`Settings.ripwire`);
+   never fail startup if the binary is absent.
 7. **Session writes are atomic** (`write_atomic` temp+rename) for both
    `append_message` and `save_all_messages`. Do not reintroduce in-place
    truncate.

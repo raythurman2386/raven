@@ -23,6 +23,8 @@ I still reach for other harnesses when one fits a job better, but the loop of da
 
 **MCP:** stdio only, opt-in. Configure servers in `config.toml` (`[mcp.servers.<name>]`) or let an ACP editor forward them on `session/new`. Tools show up as `{name}__{tool}` — for example `sysmetrics-mcp` becomes `sysmetrics__get_cpu_metrics`. No marketplace, no HTTP/SSE transport.
 
+**Ripwire (optional):** the system-prompt `<repo_map>` is a regex symbol extract by default. If you install [ripwire](https://github.com/redhat-et/ripwire) on `PATH` and set `ripwire = true` in `config.toml` (or `RAVEN_RIPWIRE=1`), Raven shells out to it for a ranked map and mid-turn `repo_map` / `callers` / `callees` / `impact` tools. Ripwire is **not** a Raven dependency — missing binary or a sandbox exec denial falls back to regex and never fails startup. See [docs/configuration.md](docs/configuration.md#ripwire-optional-repo-map).
+
 ---
 
 ## Install
@@ -91,7 +93,7 @@ switch providers and models from the editor's model selector. See
 | Git worktree isolation (isolated branches per task) | Multi-model routing — one model per turn, switched explicitly |
 | Structured plan mode (parse → approve → revise → execute) | Windows / macOS release targets — Linux + Pi is the whole surface |
 | Skills (`SKILL.md` discovery + `skill_search`/`skill_load`) | |
-| Repo symbol map (`<repo_map>` for large workspaces) | |
+| Repo symbol map (`<repo_map>` for large workspaces; optional [ripwire](https://github.com/redhat-et/ripwire) accelerator) | |
 | Parallel tool execution within a single model turn | |
 | Context-window inference + automatic compaction | |
 | JSONL session persistence + `--resume` / `--list-sessions` | |

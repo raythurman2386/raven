@@ -137,7 +137,7 @@ pub fn safe_command_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r"(?i)^\s*(cargo|rustc|rustup|rustfmt|go|node|npm|npx|yarn|pnpm|bun|deno|uv|python|python3|pip|pip3|poetry|pytest|ruff|mypy|black|isort|flake8|eslint|prettier|tsc|jest|vitest|mocha|make|cmake|ninja|meson|just|gcc|g\+\+|clang|clang\+\+|ld|lld|ar|strip|objcopy|objdump|nm|readelf|size|strings|file|where|which|type|command|hash|set|env|printenv|pwd|cd|ls|dir|cat|head|tail|wc|sort|uniq|cut|tr|sed|awk|grep|rg|fd|find|findstr|xargs|tee|diff|cmp|comp|fc|comm|patch|tar|gzip|gunzip|bzip2|bunzip2|xz|unxz|zip|unzip|git|hg|svn|fossil|pijul|jj|echo|printf|true|false|test|\[|expr|sleep|date|stat|du|df|basename|dirname|realpath|readlink|mkdir|touch|copy|cp|move|mv|ren|rename|chmod|chown|icacls|attrib|id|whoami|uname|hostname|uptime|ps|tasklist|time|timeout|nice|renice|nohup|exec|source|\.|call|cmd|jq|yq|bat|delta|sccache|wasm-pack|hyperfine|tokei|buf|protoc)(\s|$)",
+            r"(?i)^\s*(cargo|rustc|rustup|rustfmt|go|node|npm|npx|yarn|pnpm|bun|deno|uv|python|python3|pip|pip3|poetry|pytest|ruff|mypy|black|isort|flake8|eslint|prettier|tsc|jest|vitest|mocha|make|cmake|ninja|meson|just|gcc|g\+\+|clang|clang\+\+|ld|lld|ar|strip|objcopy|objdump|nm|readelf|size|strings|file|where|which|type|command|hash|set|env|printenv|pwd|cd|ls|dir|cat|head|tail|wc|sort|uniq|cut|tr|sed|awk|grep|rg|fd|find|findstr|xargs|tee|diff|cmp|comp|fc|comm|patch|tar|gzip|gunzip|bzip2|bunzip2|xz|unxz|zip|unzip|git|hg|svn|fossil|pijul|jj|ripwire|echo|printf|true|false|test|\[|expr|sleep|date|stat|du|df|basename|dirname|realpath|readlink|mkdir|touch|copy|cp|move|mv|ren|rename|chmod|chown|icacls|attrib|id|whoami|uname|hostname|uptime|ps|tasklist|time|timeout|nice|renice|nohup|exec|source|\.|call|cmd|jq|yq|bat|delta|sccache|wasm-pack|hyperfine|tokei|buf|protoc)(\s|$)",
         )
         .expect("valid regex")
     })
@@ -292,6 +292,9 @@ pub struct Sandbox {
     /// The operational scope. System scope (workspace `/`) redirects
     /// `.raven` scratch/state dirs to `~/.raven` via [`Sandbox::raven_dir`].
     pub scope: crate::config::Scope,
+    /// When true, mid-turn ripwire tools (`repo_map`, `callers`, …) may spawn
+    /// `ripwire`. Default false so dispatch degrades with a clear error.
+    pub ripwire: bool,
 }
 
 impl Sandbox {
@@ -301,6 +304,7 @@ impl Sandbox {
             workspace,
             extra_rw: Vec::new(),
             scope: crate::config::Scope::Repo,
+            ripwire: false,
         }
     }
 
@@ -312,6 +316,7 @@ impl Sandbox {
             workspace,
             extra_rw,
             scope: crate::config::Scope::Repo,
+            ripwire: false,
         }
     }
 
@@ -336,6 +341,7 @@ impl Sandbox {
             workspace,
             extra_rw: Vec::new(),
             scope,
+            ripwire: false,
         }
     }
 }

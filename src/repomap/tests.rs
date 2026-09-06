@@ -620,3 +620,251 @@ fn walk_skips_files_deeper_than_max_depth() {
         "files deeper than MAX_WALK_DEPTH must not be scanned"
     );
 }
+
+fn write_many_regex_files(dir: &std::path::Path, n: usize) {
+    for i in 0..n {
+        write_rs(
+            dir,
+            &format!("src/regex_{i}.rs"),
+            &format!("pub fn regex_only_symbol_{i}() {{}}\n"),
+        );
+    }
+}
+
+fn install_ripwire_stub(workspace: &std::path::Path, body: &str) -> std::path::PathBuf {
+    let bin_dir = workspace.join("bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let bin = bin_dir.join("ripwire");
+    let mut script = String::from("#!/bin/sh\n");
+    script.push_str(body);
+    std::fs::write(&bin, script).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    bin
+}
+
+fn stub_bin(workspace: &std::path::Path) -> std::path::PathBuf {
+    workspace.join("bin").join("ripwire")
+}
+
+const RANKED_STUB: &str = r#"
+set -eu
+ws="${PWD}"
+mkdir -p "${ws}/.raven"
+n=0
+if [ -f "${ws}/.raven/ripwire-calls" ]; then
+  n=$(cat "${ws}/.raven/ripwire-calls")
+fi
+n=$((n+1))
+echo "$n" > "${ws}/.raven/ripwire-calls"
+for a in "$@"; do
+  case "$a" in
+    --callers=*)
+      printf '<f p="src/a.rs"><s t="fn" n="caller_from_stub"></s></f>\n'
+      exit 0
+      ;;
+    --callees=*)
+      printf '<f p="src/a.rs"><s t="fn" n="callee_from_stub"></s></f>\n'
+      exit 0
+      ;;
+    --impact=*)
+      printf '<f p="src/a.rs"><s t="fn" n="impact_from_stub"></s></f>\n'
+      exit 0
+      ;;
+    --for=*)
+      printf '<f p="src/a.rs"><s t="fn" n="for_from_stub"></s></f>\n'
+      exit 0
+      ;;
+  esac
+done
+printf '<r><f p="src/ripwire_only.rs"><s t="fn" n="ripwire_ranked_symbol_%s"></s></f></r>\n' "$n"
+"#;
+
+#[test]
+fn flag_off_uses_regex_repo_map() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_many_regex_files(tmp.path(), 20);
+    invalidate(tmp.path());
+    let map = build_map_with(tmp.path(), false).expect("regex map");
+    assert!(map.starts_with("<repo_map>"));
+    assert!(map.ends_with("</repo_map>"));
+    assert!(map.contains("regex_only_symbol_0 [fn]"), "{map}");
+    assert!(
+        !map.contains("ripwire_ranked_symbol"),
+        "regex path must not invent ripwire stub symbols: {map}"
+    );
+}
+
+#[test]
+fn missing_ripwire_on_path_falls_back_to_regex() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_many_regex_files(tmp.path(), 20);
+    invalidate(tmp.path());
+    let map =
+        super::with_ripwire_bin(None, || build_map_with(tmp.path(), true)).expect("regex fallback");
+    assert!(map.starts_with("<repo_map>"));
+    assert!(map.ends_with("</repo_map>"));
+    assert!(map.contains("regex_only_symbol_0 [fn]"), "{map}");
+}
+
+#[test]
+fn enabled_stub_on_path_uses_adapter_not_regex_extract() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_many_regex_files(tmp.path(), 20);
+    let bin = install_ripwire_stub(tmp.path(), RANKED_STUB);
+    invalidate(tmp.path());
+    let map = super::with_ripwire_bin(Some(&bin), || build_map_with(tmp.path(), true))
+        .expect("ripwire map");
+    assert!(map.starts_with("<repo_map>"));
+    assert!(map.ends_with("</repo_map>"));
+    assert!(map.contains("ripwire_ranked_symbol_1 [fn]"), "{map}");
+    assert!(
+        !map.contains("regex_only_symbol_0"),
+        "adapter map must not be the regex extract of the fixture: {map}"
+    );
+    assert!(map.chars().count() <= MAX_MAP_CHARS + 40);
+}
+
+#[test]
+fn ripwire_cache_invalidate_forces_rebuild() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_many_regex_files(tmp.path(), 20);
+    install_ripwire_stub(tmp.path(), RANKED_STUB);
+    invalidate(tmp.path());
+    let bin = stub_bin(tmp.path());
+    super::with_ripwire_bin(Some(&bin), || {
+        let first = build_map_with(tmp.path(), true).expect("first");
+        assert!(first.contains("ripwire_ranked_symbol_1 [fn]"), "{first}");
+        let second = build_map_with(tmp.path(), true).expect("cached");
+        assert_eq!(first, second);
+        invalidate(tmp.path());
+        let third = build_map_with(tmp.path(), true).expect("rebuilt");
+        assert!(third.contains("ripwire_ranked_symbol_2 [fn]"), "{third}");
+        assert_ne!(first, third);
+    });
+}
+
+#[test]
+fn ripwire_nonzero_falls_back_to_regex() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_many_regex_files(tmp.path(), 20);
+    install_ripwire_stub(tmp.path(), "exit 2\n");
+    invalidate(tmp.path());
+    let bin = stub_bin(tmp.path());
+    let map =
+        super::with_ripwire_bin(Some(&bin), || build_map_with(tmp.path(), true)).expect("fallback");
+    assert!(map.contains("regex_only_symbol_0 [fn]"), "{map}");
+}
+
+#[test]
+fn ripwire_timeout_is_silent_failure() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_many_regex_files(tmp.path(), 20);
+    install_ripwire_stub(tmp.path(), "sleep 30\n");
+    let bin = stub_bin(tmp.path());
+    super::with_ripwire_bin(Some(&bin), || {
+        let verb = RipwireVerb::Map {
+            root: tmp.path().to_path_buf(),
+        };
+        let spawned = run_ripwire(tmp.path(), &verb, false, &[], 1);
+        assert!(
+            matches!(spawned, Err(RipwireError::Timeout)),
+            "expected timeout, got {spawned:?}"
+        );
+    });
+    // build_map_with treats Timeout like any other spawn failure (regex
+    // fallback). Cover that with the nonzero-exit stub so this test does
+    // not wait the default 20s.
+}
+
+#[test]
+fn ripwire_oversize_is_error_then_regex_fallback() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_many_regex_files(tmp.path(), 20);
+    install_ripwire_stub(
+        tmp.path(),
+        r#"
+dd if=/dev/zero bs=1000 count=300 2>/dev/null | tr '\0' 'x'
+"#,
+    );
+    invalidate(tmp.path());
+    let bin = stub_bin(tmp.path());
+    let map = super::with_ripwire_bin(Some(&bin), || {
+        let verb = RipwireVerb::Map {
+            root: tmp.path().to_path_buf(),
+        };
+        let spawned = run_ripwire(tmp.path(), &verb, false, &[], 5);
+        assert!(
+            matches!(
+                spawned,
+                Err(RipwireError::Oversize) | Err(RipwireError::Empty)
+            ),
+            "expected oversize/empty, got {spawned:?}"
+        );
+        build_map_with(tmp.path(), true)
+    })
+    .expect("regex fallback");
+    assert!(map.contains("regex_only_symbol_0 [fn]"), "{map}");
+}
+
+#[test]
+fn ripwire_graph_verbs_adapt_stub_output() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_many_regex_files(tmp.path(), 20);
+    install_ripwire_stub(tmp.path(), RANKED_STUB);
+    let bin = stub_bin(tmp.path());
+    super::with_ripwire_bin(Some(&bin), || {
+        let ws = tmp.path();
+        let callers = run_ripwire(
+            ws,
+            &RipwireVerb::Callers {
+                root: ws.to_path_buf(),
+                symbol: "foo".into(),
+            },
+            false,
+            &[],
+            5,
+        )
+        .expect("callers");
+        assert!(callers.contains("caller_from_stub [fn]"), "{callers}");
+        let callees = run_ripwire(
+            ws,
+            &RipwireVerb::Callees {
+                root: ws.to_path_buf(),
+                symbol: "foo".into(),
+            },
+            false,
+            &[],
+            5,
+        )
+        .expect("callees");
+        assert!(callees.contains("callee_from_stub [fn]"), "{callees}");
+        let impact = run_ripwire(
+            ws,
+            &RipwireVerb::Impact {
+                root: ws.to_path_buf(),
+                target: "foo".into(),
+            },
+            false,
+            &[],
+            5,
+        )
+        .expect("impact");
+        assert!(impact.contains("impact_from_stub [fn]"), "{impact}");
+        let focused = run_ripwire(
+            ws,
+            &RipwireVerb::For {
+                root: ws.to_path_buf(),
+                query: "cache invalidation".into(),
+            },
+            false,
+            &[],
+            5,
+        )
+        .expect("for");
+        assert!(focused.contains("for_from_stub [fn]"), "{focused}");
+    });
+}
