@@ -388,13 +388,18 @@ fn dispatch_ripwire_tools_ok_with_stub() {
         r#"#!/bin/sh
 for a in "$@"; do
   case "$a" in
-    --callers=*) printf '<f p="src/a.rs"><s t="fn" n="caller_from_stub"></s></f>\n'; exit 0 ;;
-    --callees=*) printf '<f p="src/a.rs"><s t="fn" n="callee_from_stub"></s></f>\n'; exit 0 ;;
-    --impact=*) printf '<f p="src/a.rs"><s t="fn" n="impact_from_stub"></s></f>\n'; exit 0 ;;
+    --top-k=0) echo 'ripwire: --top-k does not narrow those verbs' >&2; exit 1 ;;
+  esac
+done
+for a in "$@"; do
+  case "$a" in
+    --callers=*) printf '<callers><s t="fn" n="caller_from_stub" p="src/a.rs"></s></callers>\n'; exit 0 ;;
+    --callees=*) printf '<callees><s t="fn" n="callee_from_stub" p="src/a.rs"></s></callees>\n'; exit 0 ;;
+    --impact=*) printf '<impact><s t="fn" n="impact_from_stub" p="src/a.rs"></s></impact>\n'; exit 0 ;;
     --for=*) printf '<f p="src/a.rs"><s t="fn" n="for_from_stub"></s></f>\n'; exit 0 ;;
   esac
 done
-printf '<r><f p="src/ripwire_only.rs"><s t="fn" n="ripwire_ranked_symbol"></s></f></r>\n'
+printf '<r><f p="src/ripwire_only.rs"><s t="fn" n="ripwire_ranked_symbol"><c n="nested_callee_edge"/></s></f></r>\n'
 "#,
     )
     .unwrap();
@@ -413,6 +418,10 @@ printf '<r><f p="src/ripwire_only.rs"><s t="fn" n="ripwire_ranked_symbol"></s></
         sb.ripwire = true;
         let map = dispatch(&sb, "repo_map", &serde_json::json!({}), false).unwrap();
         assert!(map.contains("ripwire_ranked_symbol [fn]"), "{map}");
+        assert!(
+            !map.contains("nested_callee_edge"),
+            "call-edge <c> must not become a definition: {map}"
+        );
         let focused = dispatch(
             &sb,
             "repo_map",

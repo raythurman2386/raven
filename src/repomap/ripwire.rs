@@ -281,7 +281,10 @@ fn wait_capped(
     }
 }
 
-fn argv(workspace: &Path, verb: &RipwireVerb) -> Result<Vec<String>, RipwireError> {
+/// Argv passed to the `ripwire` binary (positional root + flags). `cwd` is the
+/// workspace; do not pass `--top-k=0` on graph verbs — ripwire 0.3.x exits 1
+/// with empty stdout (`--limit` narrows those reports).
+pub(crate) fn argv(workspace: &Path, verb: &RipwireVerb) -> Result<Vec<String>, RipwireError> {
     let cache = workspace.join(".raven").join("ripwire.cache");
     let cache_flag = format!("--cache={}", cache.display());
     let mut args = Vec::new();
@@ -302,19 +305,19 @@ fn argv(workspace: &Path, verb: &RipwireVerb) -> Result<Vec<String>, RipwireErro
             reject_unsafe("symbol", symbol)?;
             args.push(rel_root(workspace, root)?);
             args.push(format!("--callers={symbol}"));
-            args.push("--top-k=0".into());
+            args.push("--limit=80".into());
         }
         RipwireVerb::Callees { root, symbol } => {
             reject_unsafe("symbol", symbol)?;
             args.push(rel_root(workspace, root)?);
             args.push(format!("--callees={symbol}"));
-            args.push("--top-k=0".into());
+            args.push("--limit=80".into());
         }
         RipwireVerb::Impact { root, target } => {
             reject_unsafe("target", target)?;
             args.push(rel_root(workspace, root)?);
             args.push(format!("--impact={target}"));
-            args.push("--top-k=0".into());
+            args.push("--limit=80".into());
         }
     }
     args.push(cache_flag);
@@ -402,7 +405,10 @@ fn extract_symbols_from_xml(xml: &str) -> Vec<Symbol> {
                     current_file = xml_unescape(p);
                 }
             }
-            "s" | "d" | "c" | "h" | "b" => {
+            // Ranked map / --for / --callers rows are <s> and <d>. Nested
+            // <c n="..."/> are call-*edges*, not definitions — including them
+            // lists callees as fake symbols in the caller's file.
+            "s" | "d" => {
                 let Some(n) = xml_attr(inner, "n") else {
                     continue;
                 };
@@ -463,13 +469,34 @@ mod adapter_tests {
 
     #[test]
     fn adapt_grouped_file_and_symbol_tags() {
-        let xml = r#"<r root="."><f p="src/adapter.rs"><s t="fn" n="ripwire_ranked_symbol" k="0.9"></s><s t="struct" n="RipwireOnlyType"></s></f></r>"#;
+        let xml = r#"<r root="."><f p="src/adapter.rs"><s t="fn" n="ripwire_ranked_symbol" k="0.9"><c n="callee_edge"/></s><s t="struct" n="RipwireOnlyType"></s></f></r>"#;
         let map = adapt_to_repo_map(xml).expect("adapted");
         assert!(map.starts_with("<repo_map>"));
         assert!(map.ends_with("</repo_map>"));
         assert!(map.contains("src/adapter.rs"));
         assert!(map.contains("  ripwire_ranked_symbol [fn]"));
         assert!(map.contains("  RipwireOnlyType [struct]"));
+        assert!(
+            !map.contains("callee_edge"),
+            "nested call-edge <c> must not become a definition: {map}"
+        );
+    }
+
+    #[test]
+    fn adapt_ignores_call_edge_c_tags() {
+        let xml = r#"<r><f p="src/graph.rs"><s t="fn" n="rankGraph"><c n="biasPrior"/><c n="PROFILE_SCOPE"/></s></f></r>"#;
+        let map = adapt_to_repo_map(xml).expect("adapted");
+        assert!(map.contains("  rankGraph [fn]"), "{map}");
+        assert!(!map.contains("biasPrior"), "{map}");
+        assert!(!map.contains("PROFILE_SCOPE"), "{map}");
+    }
+
+    #[test]
+    fn adapt_callers_s_rows() {
+        let xml = r#"<callers of="build_map"><s t="fn" n="rebuild_system_message" p="src/agent/core.rs:265"/></callers>"#;
+        let map = adapt_to_repo_map(xml).expect("adapted");
+        assert!(map.contains("src/agent/core.rs:265") || map.contains("src/agent/core.rs"));
+        assert!(map.contains("  rebuild_system_message [fn]"), "{map}");
     }
 
     #[test]
