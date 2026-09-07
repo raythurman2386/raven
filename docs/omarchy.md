@@ -194,8 +194,9 @@ omarchy-shell ret.agents toggle
 Session roots (in order):
 
 - `~/.raven/sessions`
-- `~/Work/.raven/sessions`
-- `~/Work/*/.raven/sessions` (one level)
+- `~/.raven/system/sessions` (OS-administration / `raven --system` audit trail)
+- `~/Work/.raven/sessions` and `~/Work/*/.raven/sessions` (one level)
+- `~/Development` and `~/src` the same way, when those trees exist
 - Extra entries from `RAVEN_SESSION_ROOTS` (colon-separated) — each entry must
   be a **sessions directory** (the folder that contains session id subdirs),
   e.g. `~/src/myapp/.raven/sessions`, not the project root alone
@@ -204,10 +205,14 @@ Session roots (in order):
 
 Raven persists the provider's real token meter on each assistant message in
 `messages.jsonl` (`usage` with `promptTokens` / `completionTokens` /
-`totalTokens`). The collector prefers those meters and reports input and
-output separately; transcripts written by older Raven builds (or providers
-that never report usage) fall back to the ≈ `ceil(len(text) / 4)` estimate,
-counted as output. Prompt and session counts are exact.
+`totalTokens`), including tool-call-only turns. The collector prefers those
+meters and reports input and output separately. **Tokens by day** and
+`todayTotalTokens` are input+output — the same contract the panel uses for
+Claude/Codex — so they can be compared with **Tokens by model** (which is
+lifetime input+output). Transcripts written by older Raven builds (or
+providers that never report usage) fall back to the ≈ `ceil(len(text) / 4)`
+estimate, counted as output. Prompt and session counts follow billed
+requests (one per metered assistant message).
 
 #### Manual refresh
 
