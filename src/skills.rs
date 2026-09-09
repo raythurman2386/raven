@@ -31,7 +31,9 @@ pub struct Skill {
 /// Parse `name` and `description` from YAML frontmatter (line-based, tolerant).
 ///
 /// Returns the body (everything after the closing `---`) and the parsed
-/// name/description. Handles quoted and unquoted scalar values.
+/// name/description. Handles quoted and unquoted scalar values, plus folded
+/// (`>`) and literal (`|`) block scalars for `description` (continuation
+/// lines joined with spaces).
 pub(crate) fn parse_skill_file(content: &str) -> (String, String, String) {
     let content = content.trim_start();
     let (front, body) = if let Some(rest) = content.strip_prefix("---") {
@@ -45,12 +47,33 @@ pub(crate) fn parse_skill_file(content: &str) -> (String, String, String) {
 
     let mut name = String::new();
     let mut description = String::new();
+    // Set while consuming the indented continuation lines of a YAML folded
+    // (`>`) or literal (`|`) block scalar: they are joined with spaces. Any
+    // blank or non-indented line ends the block.
+    let mut description_block = false;
     for line in front.lines() {
-        let line = line.trim();
-        if let Some((key, value)) = line.split_once(':') {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            description_block = false;
+            continue;
+        }
+        if description_block && (line.starts_with(' ') || line.starts_with('\t')) {
+            if !description.is_empty() {
+                description.push(' ');
+            }
+            description.push_str(trimmed);
+            continue;
+        }
+        description_block = false;
+        if let Some((key, value)) = trimmed.split_once(':') {
             let v = unquote(value.trim());
             match key.trim() {
                 "name" if name.is_empty() => name = v,
+                "description"
+                    if description.is_empty() && (v.starts_with('>') || v.starts_with('|')) =>
+                {
+                    description_block = true;
+                }
                 "description" if description.is_empty() => description = v,
                 _ => {}
             }
@@ -472,5 +495,53 @@ mod tests {
         assert_eq!(name, "a \"quoted\" name");
         assert_eq!(desc, "has \"escaped\" quotes");
         assert_eq!(body.trim(), "body");
+    }
+
+    #[test]
+    fn parse_skill_file_folds_description_block_scalar() {
+        let content = "---\nname: router\ndescription: >\n  Start here when unsure.\n  Maps the moment to a skill.\nallowed-tools: Bash, Read\n---\n\nbody\n";
+        let (name, desc, body) = parse_skill_file(content);
+        assert_eq!(name, "router");
+        assert_eq!(desc, "Start here when unsure. Maps the moment to a skill.");
+        assert_eq!(body.trim(), "body");
+    }
+
+    #[test]
+    fn parse_skill_file_folds_literal_description_scalar() {
+        let content =
+            "---\nname: lit\ndescription: |\n  First line.\n  Second line.\n---\n\nbody\n";
+        let (name, desc, _body) = parse_skill_file(content);
+        assert_eq!(name, "lit");
+        assert_eq!(desc, "First line. Second line.");
+    }
+
+    #[test]
+    fn parse_skill_file_ends_description_block_at_unindented_key() {
+        let content =
+            "---\nname: routed\ndescription: >\n  Folded text.\nlicense: MIT\n---\n\nbody\n";
+        let (name, desc, _body) = parse_skill_file(content);
+        assert_eq!(name, "routed");
+        assert_eq!(desc, "Folded text.");
+    }
+
+    #[test]
+    fn discover_follows_symlinked_skill_dirs() {
+        with_hermetic_home(|| {
+            let tmp = tempfile::tempdir().unwrap();
+            let target = tmp.path().join("staged").join("router");
+            std::fs::create_dir_all(&target).unwrap();
+            std::fs::write(
+                target.join("SKILL.md"),
+                "---\nname: router\ndescription: >\n  Folded router skill.\n---\n\nbody\n",
+            )
+            .unwrap();
+            let skills_dir = tmp.path().join(".raven").join("skills");
+            std::fs::create_dir_all(&skills_dir).unwrap();
+            std::os::unix::fs::symlink(&target, skills_dir.join("router")).unwrap();
+            let skills = discover(tmp.path());
+            assert_eq!(skills.len(), 1);
+            assert_eq!(skills[0].name, "router");
+            assert_eq!(skills[0].description, "Folded router skill.");
+        });
     }
 }
