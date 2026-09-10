@@ -29,6 +29,7 @@ fn anyhow_to_tool_error(e: anyhow::Error, path: &str, operation: &str) -> ToolEr
 /// offered, dispatch refuses to execute it.
 pub fn dispatch(
     sandbox: &Sandbox,
+    state_dir: Option<&std::path::Path>,
     name: &str,
     args: &serde_json::Value,
     read_only: bool,
@@ -126,13 +127,20 @@ pub fn dispatch(
                     .collect(),
                 None => Vec::new(),
             };
-            super::todo_write(&sandbox.workspace, todos)
+            super::todo_write(state_dir, todos)
         }
         "think" => {
             let thought = args.get("thought").and_then(|v| v.as_str()).unwrap_or("");
             Ok(format!("Thought recorded: {thought}"))
         }
         "goal_set" => {
+            let Some(state_dir) = state_dir else {
+                return Ok(
+                    "No active session: goal_set is unavailable for this agent. \
+                     Sub-agents and parallel tasks run without goal persistence."
+                        .into(),
+                );
+            };
             let description = args
                 .get("description")
                 .and_then(|v| v.as_str())
@@ -149,8 +157,7 @@ pub fn dispatch(
                 status,
                 updated_at: crate::session::now_iso_public(),
             };
-            crate::state::save_goal(&sandbox.workspace, &goal)
-                .map(|_| crate::state::format_goal(&goal))
+            crate::state::save_goal(state_dir, &goal).map(|_| crate::state::format_goal(&goal))
         }
         "memory_update" => {
             let section = args.get("section").and_then(|v| v.as_str()).unwrap_or("");

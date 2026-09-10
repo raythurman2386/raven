@@ -394,6 +394,9 @@ async fn main() -> Result<()> {
         sandbox_extra_rw: Vec::new(),
         // System scope: no sub-agents, no nested goal/todo persistence.
         allow_delegate: !scope.is_system(),
+        // Set per-run below once the active session id is known; system
+        // scope keeps no goal/todo state.
+        session_state_dir: None,
     };
 
     if cli.acp {
@@ -538,7 +541,7 @@ async fn main() -> Result<()> {
 /// produces a plan, then prompts for `[Y/n]` approval on stdin before
 /// executing it. Approval is accepted for empty input, `y`, `yes`, or `ok`.
 async fn headless_run(
-    settings: Settings,
+    mut settings: Settings,
     task: &str,
     resume_session: Option<Session>,
     store: SessionStore,
@@ -578,6 +581,12 @@ async fn headless_run(
     } else {
         store.create(&settings.model)?
     };
+
+    // Goal/todo state lives in the session dir: a fresh session starts
+    // empty, a resumed one restores its goal/todos (issue #185).
+    if !settings.scope.is_system() {
+        settings.session_state_dir = Some(store.state_dir(&session.summary.id));
+    }
 
     let user_msg = ChatMessage::plain("user", Some(task.to_string()));
     store.append_message(&session, &user_msg)?;

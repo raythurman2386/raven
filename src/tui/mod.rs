@@ -600,6 +600,10 @@ pub async fn run_tui(
         store.create(&settings.model)?
     };
 
+    // Goal/todo state lives in the session dir: a fresh session starts
+    // empty, a resumed one restores its goal/todos (issue #185).
+    settings.session_state_dir = Some(store.state_dir(&session.summary.id));
+
     // Argument-completion candidates per command. Slash commands with values
     // should complete from real, live choices: theme names, known providers,
     // and a useful set of model names for the current provider.
@@ -756,7 +760,7 @@ pub async fn run_tui(
                                     &mut state,
                                     &mut session,
                                     &store,
-                                    &settings,
+                                    &mut settings,
                                     app_name,
                                     compact_at,
                                 )?;
@@ -2438,7 +2442,7 @@ fn reset_session(
     state: &mut TuiState,
     session: &mut Session,
     store: &SessionStore,
-    settings: &Settings,
+    settings: &mut Settings,
     _app_name: &str,
     compact_at: usize,
 ) -> Result<()> {
@@ -2446,6 +2450,8 @@ fn reset_session(
     let _ = store.save_all_messages(session, &state.session_messages);
     let _ = store.update_summary(session, None);
     *session = store.create(&settings.model)?;
+    // A fresh session starts with fresh goal/todo state (issue #185).
+    settings.session_state_dir = Some(store.state_dir(&session.summary.id));
     state.session_messages.clear();
     state.blocks.clear();
     state.pending_question = None;

@@ -121,9 +121,11 @@ retrying every 4th iteration so a later prune can resume shrinking.
 
 ## Persistent agent state
 
-Raven keeps long-horizon task state on disk under `.raven/state/` (see
-[`src/state.rs`](../src/state.rs)) so it survives context compaction, session
-resume, and process restarts:
+Raven keeps long-horizon task state on disk in the session's `state/`
+directory (`.raven/sessions/{id}/state/`; see [`src/state.rs`](../src/state.rs))
+so it survives context compaction and process restarts. State is
+**session-scoped** (issue #185): a fresh session starts with empty state, and
+only resuming that session restores it:
 
 - `todos.json` — the structured task list written by `todo_write`.
 - `goal.json` — the current goal written by `goal_set`.

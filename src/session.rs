@@ -380,6 +380,13 @@ impl SessionStore {
         self.sessions_dir.join(id)
     }
 
+    /// Directory holding a session's goal/todo state
+    /// (`{sessions_dir}/{id}/state/`). Session-scoped so a fresh session
+    /// starts with empty state and only `--resume` restores it (issue #185).
+    pub fn state_dir(&self, id: &str) -> PathBuf {
+        self.session_dir(id).join("state")
+    }
+
     fn write_summary(&self, summary: &SessionSummary) -> Result<()> {
         let path = self.session_dir(&summary.id).join(SUMMARY_FILE);
         let content = serde_json::to_string_pretty(summary)?;
@@ -606,6 +613,7 @@ mod tests {
             searxng_engines: Vec::new(),
             sandbox_extra_rw: Vec::new(),
             allow_delegate: true,
+            session_state_dir: None,
         }
     }
 

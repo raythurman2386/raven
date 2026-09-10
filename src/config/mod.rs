@@ -242,6 +242,13 @@ pub struct Settings {
     /// Cleared on spawned sub-agents so they cannot nest or overwrite the
     /// parent's persisted goal and task list.
     pub allow_delegate: bool,
+    /// Directory holding this session's goal/todo state (`state/goal.json`,
+    /// `state/todos.json` under the session's dir). Empty for agents without
+    /// a persisted session (parallel sub-agents, plan-turn agents): goal and
+    /// todo tools then report that no session is active and the system
+    /// prompt injects no goal/todos. Fresh sessions yield an empty dir, so
+    /// state starts empty; only `--resume` restores it (issue #185).
+    pub session_state_dir: Option<PathBuf>,
 }
 
 impl Settings {

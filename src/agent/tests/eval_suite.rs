@@ -31,6 +31,9 @@ fn settings_for(workspace: &std::path::Path) -> Settings {
         searxng_engines: Vec::new(),
         sandbox_extra_rw: Vec::new(),
         allow_delegate: true,
+        // Eval agents model a persisted session: goal/todo state goes to
+        // this dir, so a fresh dir means fresh state (issue #185).
+        session_state_dir: Some(workspace.join(".raven/sessions/eval-default/state")),
     }
 }
 
@@ -434,12 +437,14 @@ async fn eval_suite_readonly_read_then_answer() {
     }));
 }
 
-/// 13_goal_set — goal_set persists to `.raven/state/goal.json` and is
-/// injected into the system prompt on the next turn.
+/// 13_goal_set — goal_set persists to the session's `state/goal.json` and is
+/// injected into the system prompt on the next turn of the same session; a
+/// fresh session starts with no goal (issue #185).
 #[tokio::test]
 async fn eval_suite_goal_set_persists_and_injects() {
     let tmp = tempfile::tempdir().unwrap();
-    let mut agent = Agent::new(settings_for(tmp.path()))
+    let settings = settings_for(tmp.path());
+    let mut agent = Agent::new(settings.clone())
         .unwrap()
         .with_completion_source(scripted(vec![
             sse_tool_call(
@@ -453,11 +458,17 @@ async fn eval_suite_goal_set_persists_and_injects() {
     agent.run("set a goal", tx).await.unwrap();
     let _ = drain(&mut rx).await;
 
-    let goal_path = tmp.path().join(".raven/state/goal.json");
-    assert!(goal_path.exists(), "goal.json should be written");
-    let goal = crate::state::load_goal(tmp.path()).expect("goal should load");
+    let state_dir = settings.session_state_dir.clone().expect("state dir set");
+    let goal_path = state_dir.join("goal.json");
+    assert!(goal_path.exists(), "session goal.json should be written");
+    let goal = crate::state::load_goal_from_dir(&state_dir).expect("goal should load");
     assert_eq!(goal.description, "Ship the feature");
     assert_eq!(goal.status, "in_progress");
+    // The legacy workspace-global file must stay untouched.
+    assert!(
+        !tmp.path().join(".raven/state/goal.json").exists(),
+        "goal_set must not write the legacy workspace-global file"
+    );
 
     let sys = agent.messages[0].content.clone().unwrap_or_default();
     assert!(
@@ -465,21 +476,25 @@ async fn eval_suite_goal_set_persists_and_injects() {
         "same-turn system prompt should include the goal: {sys}"
     );
 
-    // A fresh agent should inject the goal into its system prompt.
-    let agent2 = Agent::new(settings_for(tmp.path())).unwrap();
+    // A fresh session (new state dir) starts with no goal.
+    let mut fresh_settings = settings_for(tmp.path());
+    fresh_settings.session_state_dir = Some(tmp.path().join(".raven/sessions/other/state"));
+    let agent2 = Agent::new(fresh_settings).unwrap();
     let sys = agent2.messages[0].content.clone().unwrap_or_default();
     assert!(
-        sys.contains("Ship the feature"),
-        "system prompt should include the goal: {sys}"
+        !sys.contains("Ship the feature"),
+        "a fresh session must not inherit the previous session's goal: {sys}"
     );
 }
 
-/// 14_todo_write — todo_write persists to `.raven/state/todos.json` and is
-/// injected into the system prompt on the next turn.
+/// 14_todo_write — todo_write persists to the session's `state/todos.json`
+/// and is injected into the system prompt on the next turn of the same
+/// session; a fresh session starts with no todos (issue #185).
 #[tokio::test]
 async fn eval_suite_todo_write_persists_and_injects() {
     let tmp = tempfile::tempdir().unwrap();
-    let mut agent = Agent::new(settings_for(tmp.path()))
+    let settings = settings_for(tmp.path());
+    let mut agent = Agent::new(settings.clone())
         .unwrap()
         .with_completion_source(scripted(vec![
             sse_tool_call(
@@ -493,16 +508,67 @@ async fn eval_suite_todo_write_persists_and_injects() {
     agent.run("track tasks", tx).await.unwrap();
     let _ = drain(&mut rx).await;
 
-    let todos = crate::state::load_todos(tmp.path());
+    let state_dir = settings.session_state_dir.clone().expect("state dir set");
+    let todos = crate::state::load_todos_from_dir(&state_dir);
     assert_eq!(todos.len(), 2);
     assert_eq!(todos[0].content, "Do A");
     assert_eq!(todos[0].status, "in_progress");
 
-    let agent2 = Agent::new(settings_for(tmp.path())).unwrap();
+    // A fresh session (new state dir) starts with no todos.
+    let mut fresh_settings = settings_for(tmp.path());
+    fresh_settings.session_state_dir = Some(tmp.path().join(".raven/sessions/other/state"));
+    let agent2 = Agent::new(fresh_settings).unwrap();
     let sys = agent2.messages[0].content.clone().unwrap_or_default();
     assert!(
-        sys.contains("Do A") && sys.contains("Do B"),
-        "system prompt should include todos: {sys}"
+        !(sys.contains("Do A") || sys.contains("Do B")),
+        "a fresh session must not inherit the previous session's todos: {sys}"
+    );
+}
+
+/// Session isolation — two agents running concurrently in the same workspace
+/// with different session state dirs cannot see each other's goal (issue
+/// #185 regression test for the workspace-global clobber).
+#[tokio::test]
+async fn eval_suite_goal_state_is_isolated_between_sessions() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir_a = tmp.path().join(".raven/sessions/sA/state");
+    let dir_b = tmp.path().join(".raven/sessions/sB/state");
+
+    let mut settings_a = settings_for(tmp.path());
+    settings_a.session_state_dir = Some(dir_a.clone());
+    let mut settings_b = settings_for(tmp.path());
+    settings_b.session_state_dir = Some(dir_b.clone());
+
+    let mut agent_a = Agent::new(settings_a)
+        .unwrap()
+        .with_completion_source(scripted(vec![
+            sse_tool_call("g1", "goal_set", r#"{"description":"Session A goal"}"#),
+            sse_text("done"),
+        ]));
+    let (tx, mut rx) = mpsc::channel(64);
+    agent_a.run("set goal", tx).await.unwrap();
+    let _ = drain(&mut rx).await;
+
+    // Agent B (concurrent session) sees no goal and cannot observe A's.
+    let sys_b = Agent::new(settings_b).unwrap().messages[0]
+        .content
+        .clone()
+        .unwrap_or_default();
+    assert!(
+        !sys_b.contains("Session A goal"),
+        "session B must not see session A's goal: {sys_b}"
+    );
+
+    // Resuming session A restores its goal.
+    let mut resumed = settings_for(tmp.path());
+    resumed.session_state_dir = Some(dir_a);
+    let sys_a = Agent::new(resumed).unwrap().messages[0]
+        .content
+        .clone()
+        .unwrap_or_default();
+    assert!(
+        sys_a.contains("Session A goal"),
+        "resumed session A must restore its goal: {sys_a}"
     );
 }
 

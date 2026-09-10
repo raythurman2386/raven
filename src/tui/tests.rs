@@ -676,6 +676,7 @@ fn test_settings(workspace: &std::path::Path) -> Settings {
         searxng_engines: Vec::new(),
         sandbox_extra_rw: Vec::new(),
         allow_delegate: true,
+        session_state_dir: None,
     }
 }
 
