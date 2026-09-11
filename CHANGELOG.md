@@ -4,6 +4,28 @@ All notable changes to Raven are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.5] - 2026-09-10
+
+### Fixed
+
+- **Session-scoped goal/todo state** — The current goal and todo list now
+  live in the session directory (`.raven/sessions/{id}/state/`) instead of
+  the workspace-global `.raven/state/`, so a fresh session (`/new`, a new
+  TUI or headless launch, or a new ACP session) starts with empty state and
+  only resuming that session restores its goal and todos. Previously every
+  new session inherited the previous session's goal and was re-anchored on
+  it mid-turn, pulling the agent off track on unrelated tasks; concurrent
+  raven processes in one workspace also clobbered each other's goal.
+  Sub-agents (`delegate_task`, parallel tasks) can no longer write goal or
+  todo state. An existing workspace-global goal/todos file is still read
+  (read-only fallback) so resumed work is not lost; new writes always land
+  in the session directory. (#185)
+- **Skill frontmatter block-scalar descriptions** — `SKILL.md` files whose
+  YAML `description:` uses a folded (`>`) or literal (`|`) block scalar are
+  now parsed correctly: continuation lines are folded into the description
+  and the block ends at the next unindented key. Previously such skills
+  loaded with an empty description, breaking discovery and search. (#184)
+
 ## [Unreleased]
 
 ### Fixed
