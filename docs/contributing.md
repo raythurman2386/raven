@@ -52,7 +52,7 @@ src/
 ├── plugins/      # Agent Plugins v1.0.0 (skills + stdio MCP) discovery + validation
 ├── session.rs    # JSONL session persistence, resume, list
 ├── memory.rs     # Project memory (MEMORY.md) loading, update, search
-├── state.rs      # Persistent agent state (.raven/state/todos.json + goal.json)
+├── state.rs      # Persistent agent state (session-scoped goal.json + todos.json)
 ├── repomap/mod.rs # Lightweight repo symbol map
 ├── tokenizer.rs  # Pure-Rust token estimator
 ├── web.rs        # Keyless web tools (web_fetch, web_search)

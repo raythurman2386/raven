@@ -15,8 +15,8 @@ All file paths are **relative to the workspace root** and confined to it. See [a
 | `grep` | Regex content search with optional glob filter | Read-only; skips hidden dirs and build artifacts |
 | `run_shell` | Run a shell command | `cwd` forced to workspace; dangerous patterns blocked; secret env vars stripped; direct-exec for safe commands; OS-level confinement (Landlock/seccomp/rlimits); Landlock writes are workspace + extras + `/dev` only (`TMPDIR` pinned under `.raven/tmp`); 60s default timeout; output capped at 12 000 chars |
 | `search_code` | Literal case-insensitive search across source files | Read-only; source extensions only |
-| `todo_write` | Create/replace a structured task list (full-replace) | Persists to `.raven/state/todos.json`; injected into the system prompt |
-| `goal_set` | Set/update the current goal for a task | Persists to `.raven/state/goal.json`; injected into the system prompt |
+| `todo_write` | Create/replace a structured task list (full-replace) | Persists to the session's `state/todos.json`; injected into the system prompt |
+| `goal_set` | Set/update the current goal for a task | Persists to the session's `state/goal.json`; injected into the system prompt |
 | `delegate_task` | Spawn a focused sub-agent in a fresh context window, return its summary | Runs a nested agent; shares the workspace; nesting disabled (no recursive delegate); output capped |
 | `think` | Record a thought for structured mid-task reasoning | Read-only no-op; available in plan/chat |
 | `memory_update` | Save a durable project fact to `.raven/MEMORY.md` | Writes to workspace memory file |
@@ -148,9 +148,10 @@ Full-replace semantics: each call replaces the entire todo list. Returns a summa
 [pending] 3: Write tests
 ```
 
-State is **persisted** to `.raven/state/todos.json` (atomic write) and injected
-into the system prompt on each turn, so it survives context compaction and
-session resume.
+State is **persisted** to the session's `state/todos.json` (atomic write) and
+injected into the system prompt on each turn, so it survives context compaction
+and session resume. It is session-scoped: a fresh session starts with an empty
+list.
 
 ### `goal_set`
 
@@ -161,9 +162,11 @@ session resume.
 }
 ```
 
-Sets or updates the current goal. Persisted to `.raven/state/goal.json` and
-injected into the system prompt on each turn. Use at the start of a multi-step
-task and whenever the objective changes.
+Sets or updates the current goal. Persisted to the session's
+`state/goal.json` and injected into the system prompt on each turn. It is
+session-scoped: a fresh session starts with no goal, and `--resume` restores
+the session's goal. Use at the start of a multi-step task and whenever the
+objective changes.
 
 ### `delegate_task`
 

@@ -59,9 +59,17 @@ pub fn glob_segment_match(text: &str, pat: &str) -> bool {
 // ── Todo state ────────────────────────────────────────────────────────
 
 /// Full-replace todo list (Grok Build `todo_write` semantics), persisted to
-/// `.raven/state/todos.json` so it survives compaction and sessions.
-pub fn todo_write(workspace: &Path, todos: Vec<TodoItem>) -> anyhow::Result<String> {
-    crate::state::save_todos(workspace, &todos)?;
+/// the session's `state/todos.json` so it survives compaction and resumes
+/// but not a fresh session. Unavailable without an active session.
+pub fn todo_write(state_dir: Option<&Path>, todos: Vec<TodoItem>) -> anyhow::Result<String> {
+    let Some(state_dir) = state_dir else {
+        return Ok(
+            "No active session: todo_write is unavailable for this agent. \
+             Sub-agents and parallel tasks run without todo persistence."
+                .into(),
+        );
+    };
+    crate::state::save_todos(state_dir, &todos)?;
     Ok(crate::state::format_todos(&todos))
 }
 

@@ -316,6 +316,7 @@ impl Agent {
                 })
                 .await;
             let sandbox = self.sandbox.clone();
+            let state_dir = self.state_dir.clone();
             let name = tc.function.name.clone();
             let id = tc.id.clone();
             let cache_key = format!("{}:{}", name, tc.function.arguments);
@@ -393,7 +394,13 @@ impl Agent {
                 let dispatch_name = name.clone();
                 let dispatch_result: Result<String, ToolError> =
                     tokio::task::spawn_blocking(move || {
-                        dispatch(&sandbox, &dispatch_name, &args, read_only)
+                        dispatch(
+                            &sandbox,
+                            state_dir.as_deref(),
+                            &dispatch_name,
+                            &args,
+                            read_only,
+                        )
                     })
                     .await
                     .unwrap_or_else(|e| {
@@ -413,7 +420,8 @@ impl Agent {
                 handles.push((
                     idx,
                     tokio::task::spawn_blocking(move || {
-                        let result = dispatch(&sandbox, &name, &args, read_only);
+                        let result =
+                            dispatch(&sandbox, state_dir.as_deref(), &name, &args, read_only);
                         (id, name, result, cache_key, is_verification)
                     }),
                 ));

@@ -354,6 +354,10 @@ async fn on_session_new(
         }
     };
     let sid = persisted.summary.id.clone();
+    // Goal/todo state lives in the session dir; fresh ACP session → empty
+    // state (issue #185).
+    let mut settings = settings;
+    settings.session_state_dir = Some(store.state_dir(&sid));
     let mode = settings.mode.label().to_string();
     let config_options =
         build_config_options(srv.cfg.clone(), current_model_id(&settings), mode.clone()).await;
@@ -466,6 +470,10 @@ async fn on_session_load(
         }
     }
     let mode = settings.mode.label().to_string();
+    // Resumed ACP session restores its session-dir goal/todo state (issue
+    // #185).
+    let mut settings = settings;
+    settings.session_state_dir = Some(store.state_dir(&sid));
     let config_options =
         build_config_options(srv.cfg.clone(), current_model_id(&settings), mode.clone()).await;
     let job = McpAttach {
@@ -575,6 +583,10 @@ async fn on_session_resume(
         }
     };
     let mode = settings.mode.label().to_string();
+    // Resumed ACP session restores its session-dir goal/todo state (issue
+    // #185).
+    let mut settings = settings;
+    settings.session_state_dir = Some(store.state_dir(&sid));
     let config_options =
         build_config_options(srv.cfg.clone(), current_model_id(&settings), mode.clone()).await;
     let job = McpAttach {

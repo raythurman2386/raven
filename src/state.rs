@@ -1,9 +1,11 @@
 //! Persistent agent state — todos and the current goal.
 //!
-//! Unlike the in-memory todo store this replaces, state is written to
-//! `.raven/state/` so it survives context compaction, session resume, and
-//! process restarts. The current goal and pending todos are injected into the
-//! system prompt each turn so the model always sees its objective and
+//! State is scoped to the active session: the files live next to the
+//! session's `messages.jsonl` (`{workspace}/.raven/sessions/{id}/state/`),
+//! so a fresh session starts with no goal or todos and only `--resume`
+//! carries them forward. Memory (`MEMORY.md`) is the cross-session store
+//! and is unaffected. The current goal and pending todos are injected into
+//! the system prompt each turn so the model always sees its objective and
 //! remaining work (Claude Code's todo system / Grok Build's `goal/state.json`).
 
 use anyhow::{Context, Result};
@@ -18,7 +20,8 @@ pub struct TodoItem {
     pub priority: String,
 }
 
-/// The agent's current goal, persisted across turns and sessions.
+/// The agent's current goal, persisted across turns and — via session resume
+/// — across process restarts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Goal {
     pub description: String,
@@ -26,46 +29,87 @@ pub struct Goal {
     pub updated_at: String,
 }
 
-const STATE_DIR: &str = ".raven/state";
+const STATE_DIR_NAME: &str = "state";
 const TODOS_FILE: &str = "todos.json";
 const GOAL_FILE: &str = "goal.json";
 
-fn state_dir(workspace: &Path) -> PathBuf {
-    workspace.join(STATE_DIR)
+/// Build the state directory for a session id under a session store root:
+/// `{sessions_dir}/{session_id}/state/`.
+pub fn session_state_dir(sessions_dir: &Path, session_id: &str) -> PathBuf {
+    sessions_dir.join(session_id).join(STATE_DIR_NAME)
 }
 
-/// Load the persisted todo list, or an empty list if none exists.
-pub fn load_todos(workspace: &Path) -> Vec<TodoItem> {
-    let path = state_dir(workspace).join(TODOS_FILE);
-    match std::fs::read_to_string(&path) {
-        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
-        Err(_) => Vec::new(),
+/// Read a goal/todo JSON file, falling back to the legacy workspace-global
+/// location (`.raven/state/`) for state written before goals became
+/// session-scoped. The fallback is read-only: writes always land in the
+/// session directory so legacy files age out naturally.
+fn read_json_with_legacy<T: serde::de::DeserializeOwned>(
+    primary: &Path,
+    legacy: Option<&Path>,
+) -> Option<T> {
+    if let Ok(content) = std::fs::read_to_string(primary) {
+        return serde_json::from_str(&content).ok();
     }
+    let legacy = legacy?;
+    let content = std::fs::read_to_string(legacy).ok()?;
+    serde_json::from_str(&content).ok()
 }
 
-/// Persist the todo list atomically.
-pub fn save_todos(workspace: &Path, todos: &[TodoItem]) -> Result<()> {
-    let dir = state_dir(workspace);
-    std::fs::create_dir_all(&dir)?;
-    let content = serde_json::to_string_pretty(todos)?;
-    write_atomic(&dir.join(TODOS_FILE), content.as_bytes())
-}
-
-/// Load the persisted goal, or `None` if none has been set.
-pub fn load_goal(workspace: &Path) -> Option<Goal> {
-    let path = state_dir(workspace).join(GOAL_FILE);
-    match std::fs::read_to_string(&path) {
-        Ok(content) => serde_json::from_str(&content).ok(),
-        Err(_) => None,
+/// Atomically write a state file, creating the parent directory as needed.
+fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
     }
+    let content = serde_json::to_string_pretty(value)?;
+    write_atomic(path, content.as_bytes())
 }
 
-/// Persist the goal atomically.
-pub fn save_goal(workspace: &Path, goal: &Goal) -> Result<()> {
-    let dir = state_dir(workspace);
-    std::fs::create_dir_all(&dir)?;
-    let content = serde_json::to_string_pretty(goal)?;
-    write_atomic(&dir.join(GOAL_FILE), content.as_bytes())
+/// Load the session's todo list, or an empty list if none exists.
+///
+/// Falls back to the legacy workspace-global file when the session has no
+/// todos of its own (one-release migration; see module docs).
+pub fn load_todos(sessions_dir: &Path, session_id: &str, workspace: &Path) -> Vec<TodoItem> {
+    read_json_with_legacy(
+        &session_state_dir(sessions_dir, session_id).join(TODOS_FILE),
+        Some(&workspace.join(STATE_DIR_NAME).join(TODOS_FILE)),
+    )
+    .unwrap_or_default()
+}
+
+/// Persist the todo list atomically under a session state directory.
+pub fn save_todos(state_dir: &Path, todos: &[TodoItem]) -> Result<()> {
+    write_json(&state_dir.join(TODOS_FILE), &todos)
+}
+
+/// Load the session's persisted goal, or `None` if none has been set.
+///
+/// Falls back to the legacy workspace-global file when the session has no
+/// goal of its own (one-release migration; see module docs).
+pub fn load_goal(sessions_dir: &Path, session_id: &str, workspace: &Path) -> Option<Goal> {
+    read_json_with_legacy(
+        &session_state_dir(sessions_dir, session_id).join(GOAL_FILE),
+        Some(&workspace.join(STATE_DIR_NAME).join(GOAL_FILE)),
+    )
+}
+
+/// Persist the goal atomically under a session state directory.
+pub fn save_goal(state_dir: &Path, goal: &Goal) -> Result<()> {
+    write_json(&state_dir.join(GOAL_FILE), goal)
+}
+
+/// Load a goal from a state directory directly (no legacy fallback).
+pub fn load_goal_from_dir(state_dir: &Path) -> Option<Goal> {
+    let path = state_dir.join(GOAL_FILE);
+    serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok()
+}
+
+/// Load todos from a state directory directly (no legacy fallback).
+pub fn load_todos_from_dir(state_dir: &Path) -> Vec<TodoItem> {
+    let path = state_dir.join(TODOS_FILE);
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|c| serde_json::from_str(&c).ok())
+        .unwrap_or_default()
 }
 
 const MAX_INJECTED_TODOS: usize = 20;
@@ -134,15 +178,37 @@ mod tests {
         std::env::temp_dir().join(format!("raven_state_test_{}_{n}", std::process::id()))
     }
 
+    /// A session store root with two created session dirs, so state paths
+    /// exist the way `SessionStore::create` leaves them.
+    fn store_with_sessions(tmp: &Path) -> (PathBuf, String, String) {
+        let sessions = tmp.join(".raven/sessions");
+        let a = "20260910T090000Z-1-1".to_string();
+        let b = "20260910T090000Z-1-2".to_string();
+        std::fs::create_dir_all(sessions.join(&a)).unwrap();
+        std::fs::create_dir_all(sessions.join(&b)).unwrap();
+        (sessions, a, b)
+    }
+
+    #[test]
+    fn session_state_dir_is_under_the_session() {
+        let tmp = ws();
+        let (sessions, a, _) = store_with_sessions(&tmp);
+        let dir = session_state_dir(&sessions, &a);
+        assert!(dir.starts_with(sessions.join(&a)));
+        assert!(dir.ends_with("state"));
+    }
+
     #[test]
     fn load_todos_empty_when_none() {
-        let dir = ws();
-        assert!(load_todos(&dir).is_empty());
+        let tmp = ws();
+        let (sessions, a, _) = store_with_sessions(&tmp);
+        assert!(load_todos(&sessions, &a, &tmp).is_empty());
     }
 
     #[test]
     fn save_and_load_todos_roundtrip() {
-        let dir = ws();
+        let tmp = ws();
+        let (sessions, a, _) = store_with_sessions(&tmp);
         let todos = vec![
             TodoItem {
                 content: "Do X".into(),
@@ -155,8 +221,8 @@ mod tests {
                 priority: "low".into(),
             },
         ];
-        save_todos(&dir, &todos).unwrap();
-        let loaded = load_todos(&dir);
+        save_todos(&session_state_dir(&sessions, &a), &todos).unwrap();
+        let loaded = load_todos(&sessions, &a, &tmp);
         assert_eq!(loaded.len(), 2);
         assert_eq!(loaded[0].content, "Do X");
         assert_eq!(loaded[0].status, "in_progress");
@@ -165,9 +231,10 @@ mod tests {
 
     #[test]
     fn save_todos_overwrites() {
-        let dir = ws();
+        let tmp = ws();
+        let (sessions, a, _) = store_with_sessions(&tmp);
         save_todos(
-            &dir,
+            &session_state_dir(&sessions, &a),
             &[TodoItem {
                 content: "A".into(),
                 status: "pending".into(),
@@ -176,7 +243,7 @@ mod tests {
         )
         .unwrap();
         save_todos(
-            &dir,
+            &session_state_dir(&sessions, &a),
             &[TodoItem {
                 content: "B".into(),
                 status: "completed".into(),
@@ -184,27 +251,83 @@ mod tests {
             }],
         )
         .unwrap();
-        let loaded = load_todos(&dir);
+        let loaded = load_todos(&sessions, &a, &tmp);
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].content, "B");
     }
 
     #[test]
+    fn state_is_isolated_between_sessions() {
+        let tmp = ws();
+        let (sessions, a, b) = store_with_sessions(&tmp);
+        let goal = Goal {
+            description: "Session A goal".into(),
+            status: "in_progress".into(),
+            updated_at: "2026-09-10".into(),
+        };
+        save_goal(&session_state_dir(&sessions, &a), &goal).unwrap();
+        assert!(load_goal(&sessions, &b, &tmp).is_none());
+        assert_eq!(
+            load_goal(&sessions, &a, &tmp).unwrap().description,
+            "Session A goal"
+        );
+    }
+
+    #[test]
+    fn legacy_goal_is_read_but_not_session_scoped() {
+        let tmp = ws();
+        let (sessions, a, _) = store_with_sessions(&tmp);
+        let legacy = Goal {
+            description: "Legacy goal".into(),
+            status: "in_progress".into(),
+            updated_at: "2026-09-09".into(),
+        };
+        let legacy_dir = tmp.join(STATE_DIR_NAME);
+        std::fs::create_dir_all(&legacy_dir).unwrap();
+        std::fs::write(
+            legacy_dir.join(GOAL_FILE),
+            serde_json::to_string_pretty(&legacy).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            load_goal(&sessions, &a, &tmp).unwrap().description,
+            "Legacy goal"
+        );
+
+        // Saving a new goal writes to the session dir only; the session goal
+        // then shadows the legacy one.
+        let fresh = Goal {
+            description: "Fresh goal".into(),
+            status: "in_progress".into(),
+            updated_at: "2026-09-10".into(),
+        };
+        save_goal(&session_state_dir(&sessions, &a), &fresh).unwrap();
+        assert_eq!(
+            load_goal(&sessions, &a, &tmp).unwrap().description,
+            "Fresh goal"
+        );
+        assert!(legacy_dir.join(GOAL_FILE).exists());
+    }
+
+    #[test]
     fn load_goal_none_when_missing() {
-        let dir = ws();
-        assert!(load_goal(&dir).is_none());
+        let tmp = ws();
+        let (sessions, a, _) = store_with_sessions(&tmp);
+        assert!(load_goal(&sessions, &a, &tmp).is_none());
     }
 
     #[test]
     fn save_and_load_goal_roundtrip() {
-        let dir = ws();
+        let tmp = ws();
+        let (sessions, a, _) = store_with_sessions(&tmp);
         let goal = Goal {
             description: "Ship the feature".into(),
             status: "in_progress".into(),
             updated_at: "2026-01-01".into(),
         };
-        save_goal(&dir, &goal).unwrap();
-        let loaded = load_goal(&dir).unwrap();
+        save_goal(&session_state_dir(&sessions, &a), &goal).unwrap();
+        let loaded = load_goal(&sessions, &a, &tmp).unwrap();
         assert_eq!(loaded.description, "Ship the feature");
         assert_eq!(loaded.status, "in_progress");
     }

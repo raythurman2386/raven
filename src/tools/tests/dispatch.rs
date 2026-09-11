@@ -9,7 +9,7 @@ use super::sandbox;
 #[test]
 fn dispatch_rejects_missing_required_field() {
     let sb = sandbox();
-    let result = dispatch(&sb, "read_file", &serde_json::json!({}), false).unwrap();
+    let result = dispatch(&sb, None, "read_file", &serde_json::json!({}), false).unwrap();
     assert!(
         result.contains("path"),
         "missing path should be rejected: {result}"
@@ -19,7 +19,14 @@ fn dispatch_rejects_missing_required_field() {
 #[test]
 fn dispatch_rejects_empty_shell_command() {
     let sb = sandbox();
-    let result = dispatch(&sb, "run_shell", &serde_json::json!({"command": ""}), false).unwrap();
+    let result = dispatch(
+        &sb,
+        None,
+        "run_shell",
+        &serde_json::json!({"command": ""}),
+        false,
+    )
+    .unwrap();
     assert!(
         result.contains("command"),
         "empty command should be rejected: {result}"
@@ -29,7 +36,7 @@ fn dispatch_rejects_empty_shell_command() {
 #[test]
 fn dispatch_unknown_tool_returns_error() {
     let sb = sandbox();
-    let result = dispatch(&sb, "nonexistent_tool", &serde_json::json!({}), false).unwrap();
+    let result = dispatch(&sb, None, "nonexistent_tool", &serde_json::json!({}), false).unwrap();
     assert!(result.contains("Unknown tool"));
 }
 
@@ -40,6 +47,7 @@ fn dispatch_read_file() {
     let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
     let result = dispatch(
         &sb,
+        None,
         "read_file",
         &serde_json::json!({"path": "test.txt"}),
         false,
@@ -54,6 +62,7 @@ fn dispatch_write_file() {
     let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
     let result = dispatch(
         &sb,
+        None,
         "write_file",
         &serde_json::json!({"path": "out.txt", "content": "data"}),
         false,
@@ -216,6 +225,7 @@ fn dispatch_read_only_rejects_write_file() {
     let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
     let result = dispatch(
         &sb,
+        None,
         "write_file",
         &serde_json::json!({"path": "out.txt", "content": "data"}),
         true,
@@ -237,6 +247,7 @@ fn dispatch_read_only_rejects_run_shell() {
     let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
     let result = dispatch(
         &sb,
+        None,
         "run_shell",
         &serde_json::json!({"command": "echo hi"}),
         true,
@@ -255,6 +266,7 @@ fn dispatch_read_only_allows_read_file() {
     let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
     let result = dispatch(
         &sb,
+        None,
         "read_file",
         &serde_json::json!({"path": "test.txt"}),
         true,
@@ -295,6 +307,7 @@ fn git_commit_is_not_a_tool() {
     let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
     let result = dispatch(
         &sb,
+        None,
         "git_commit",
         &serde_json::json!({"message": "nope"}),
         false,
@@ -347,7 +360,7 @@ fn dispatch_run_lint_on_cargo_project() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("Cargo.toml"), "[package]\n\n[workspace]\n").unwrap();
     let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
-    let out = dispatch(&sb, "run_lint", &serde_json::json!({}), false)
+    let out = dispatch(&sb, None, "run_lint", &serde_json::json!({}), false)
         .unwrap_or_else(|e| format!("Tool error: {e}"));
     assert!(out.contains("--- run_lint (cargo)"), "{out}");
 }

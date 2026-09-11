@@ -9,6 +9,7 @@
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use tokio::sync::mpsc;
 
@@ -207,6 +208,17 @@ pub(crate) fn rebuild_system_message(settings: &Settings) -> ChatMessage {
     build_system_message(settings)
 }
 
+/// Load the goal from a session state directory, or `None` when the file is
+/// absent/corrupt (state lives in `state/goal.json`).
+fn load_goal_dir(state_dir: &std::path::Path) -> Option<crate::state::Goal> {
+    crate::state::load_goal_from_dir(state_dir)
+}
+
+/// Load todos from a session state directory, or an empty list.
+fn load_todos_dir(state_dir: &std::path::Path) -> Vec<crate::state::TodoItem> {
+    crate::state::load_todos_from_dir(state_dir)
+}
+
 /// Build the system message from settings, including the repo map if applicable.
 fn build_system_message(settings: &Settings) -> ChatMessage {
     if settings.scope.is_system() {
@@ -279,16 +291,18 @@ fn build_system_message(settings: &Settings) -> ChatMessage {
         system.push_str(&mem);
         system.push('\n');
     }
-    if let Some(goal) = crate::state::load_goal(&settings.workspace) {
-        system.push_str("\n--- Current goal ---\n");
-        system.push_str(&crate::state::format_goal(&goal));
-        system.push('\n');
-    }
-    let todos = crate::state::load_todos(&settings.workspace);
-    if !todos.is_empty() {
-        system.push_str("\n--- Task list ---\n");
-        system.push_str(&crate::state::format_todos(&todos));
-        system.push('\n');
+    if let Some(state_dir) = &settings.session_state_dir {
+        if let Some(goal) = load_goal_dir(state_dir) {
+            system.push_str("\n--- Current goal ---\n");
+            system.push_str(&crate::state::format_goal(&goal));
+            system.push('\n');
+        }
+        let todos = load_todos_dir(state_dir);
+        if !todos.is_empty() {
+            system.push_str("\n--- Task list ---\n");
+            system.push_str(&crate::state::format_todos(&todos));
+            system.push('\n');
+        }
     }
     if let Some(rules) = &settings.rules {
         system.push_str("\n--- Session rules ---\n");
@@ -428,6 +442,10 @@ pub struct Agent {
     pub(crate) completion_source: Option<CompletionSource>,
     /// Optional MCP tools attached for this turn (session-scoped handle).
     pub(crate) mcp: Option<McpHandle>,
+    /// Directory holding this session's goal/todo state; `None` for agents
+    /// without a persisted session (parallel sub-agents, plan-turn agents),
+    /// which see no goal/todos and cannot set them.
+    pub(crate) state_dir: Option<PathBuf>,
 }
 
 impl Agent {
@@ -444,6 +462,7 @@ impl Agent {
         };
         let messages = vec![build_system_message(&settings)];
         let usage_supported = load_usage_supported(settings.base_url());
+        let state_dir = settings.session_state_dir.clone();
         Ok(Self {
             settings,
             sandbox,
@@ -471,6 +490,7 @@ impl Agent {
             #[cfg(test)]
             completion_source: None,
             mcp: None,
+            state_dir,
             client: shared_http_client()?,
         })
     }
@@ -786,12 +806,18 @@ impl Agent {
             let _ = tx.send(AgentEvent::PlanProgress(plan.clone())).await;
         }
 
-        let mut reminders = compute_reminders(
-            &self.messages,
-            iter,
-            crate::state::load_goal(&self.settings.workspace).as_ref(),
-            &crate::state::load_todos(&self.settings.workspace),
-        );
+        let goal = self
+            .settings
+            .session_state_dir
+            .as_deref()
+            .and_then(load_goal_dir);
+        let todos = self
+            .settings
+            .session_state_dir
+            .as_deref()
+            .map(load_todos_dir)
+            .unwrap_or_default();
+        let mut reminders = compute_reminders(&self.messages, iter, goal.as_ref(), &todos);
         // Mid-turn steering: pull anything queued since the last boundary and
         // append it as persisted user messages, so the next request sees the
         // redirect (after the tool results, keeping strict alternation).

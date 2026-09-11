@@ -57,6 +57,8 @@ pub async fn delegate_task(
     }
     settings.allow_delegate = false;
     settings.max_iterations = settings.max_iterations.min(8);
+    // Sub-agents never touch the parent session's goal/todo state.
+    settings.session_state_dir = None;
     let mut agent = Agent::new(settings)?;
     let (tx, mut rx) = mpsc::channel::<AgentEvent>(64);
     // Box the run future: delegate_task is reachable from agent.run (via the
@@ -117,7 +119,9 @@ pub async fn run_parallel(settings: &Settings, tasks: Vec<String>) -> Result<Vec
 
     let mut handles = Vec::new();
     for (i, task) in tasks.into_iter().enumerate() {
-        let s = settings.clone();
+        let mut s = settings.clone();
+        // Sub-agents run without goal/todo state (issue #185).
+        s.session_state_dir = None;
         let branch_name = format!("raven-sub-{}-{}", i, timestamp);
         let wt_dir = worktree_dir.as_ref().map(|d| d.path().to_path_buf());
         eprintln!("[sub-agent {}] starting: {}", i, task);

@@ -352,14 +352,16 @@ a git diff, a snapshot is saved to `.raven/sessions/<id>/last.patch`.
 For multi-step tasks, Raven keeps the agent on track with persistent state and
 context hygiene:
 
-- **`goal_set(description)`** records the current objective to
-  `.raven/state/goal.json`. It is injected into the system prompt each turn, so
-  the agent re-anchors on its goal even after context compaction or a session
-  resume.
-- **`todo_write(todos)`** maintains a structured task list persisted to
-  `.raven/state/todos.json` (full-replace semantics). The pending items are
-  injected into the system prompt, and from iteration 4 the harness injects a
-  reminder restating the goal and the next pending task.
+- **`goal_set(description)`** records the current objective to the session's
+  `state/goal.json`. It is injected into the system prompt each turn, so the
+  agent re-anchors on its goal even after context compaction or a session
+  resume. State is session-scoped (issue #185): a fresh session starts with no
+  goal, and only resuming that session restores it.
+- **`todo_write(todos)`** maintains a structured task list persisted to the
+  session's `state/todos.json` (full-replace semantics), also session-scoped.
+  The pending items are injected into the system prompt, and from iteration 4
+  the harness injects a reminder restating the goal and the next pending
+  task.
 - **`delegate_task(description)`** spawns a focused sub-agent in a **fresh
   context window** and returns a distilled summary, so exploration or isolated
   work doesn't bloat the main conversation.

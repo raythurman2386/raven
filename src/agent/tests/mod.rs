@@ -208,6 +208,7 @@ fn settings_for(workspace: &std::path::Path, base_url: &str) -> crate::config::S
         searxng_engines: Vec::new(),
         sandbox_extra_rw: Vec::new(),
         allow_delegate: true,
+        session_state_dir: None,
     }
 }
 
