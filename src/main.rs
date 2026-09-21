@@ -345,12 +345,6 @@ async fn main() -> Result<()> {
     // config `provider` > builtin `ollama`. Endpoint + auth come from the
     // provider (config `[providers.*]` table + provider-scoped key env vars).
     let provider = resolve_provider(&cfg, cli.provider);
-    if provider.name == "grok" && provider.api_key.is_none() {
-        anyhow::bail!(
-            "No Grok session in {}. Run `raven login` (or `grok login`), then start raven again.",
-            raven::config::grok_auth_path().display()
-        );
-    }
 
     // Model: explicit --model overrides the provider's default_model.
     let model = cli.model.unwrap_or_else(|| provider.default_model.clone());
@@ -565,14 +559,22 @@ async fn main() -> Result<()> {
 
     let task = cli.prompt.unwrap_or_else(|| cli.task.join(" "));
 
+    // Headless with no prompt fails before auth so `--headless` alone stays
+    // a usage error even when the default provider is grok and no session exists.
+    if task.is_empty() && cli.headless && !cli.tui {
+        eprintln!("No task provided. Pass a prompt or run without args for TUI.");
+        std::process::exit(1);
+    }
+    if settings.provider.name == "grok" && settings.api_key().is_none() {
+        anyhow::bail!(
+            "No Grok session in {}. Run `raven login` (or `grok login`), then start raven again.",
+            raven::config::grok_auth_path().display()
+        );
+    }
+
     // Default to TUI when no task given
     if (task.is_empty() && !cli.headless) || cli.tui {
         return raven::tui::run_tui(settings, cfg_for_tui, resume_session).await;
-    }
-
-    if task.is_empty() {
-        eprintln!("No task provided. Pass a prompt or run without args for TUI.");
-        std::process::exit(1);
     }
 
     let workspace = settings.workspace.clone();
