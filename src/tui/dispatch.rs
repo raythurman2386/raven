@@ -60,6 +60,33 @@ pub(super) async fn dispatch_slash_command(
                 state.log_dirty = true;
             }
         }
+        "effort" => {
+            let raw = pc.args.trim();
+            if raw.is_empty() {
+                let current = settings
+                    .reasoning_effort
+                    .clone()
+                    .unwrap_or_else(|| "provider default".into());
+                state.push_system(format!(
+                    "reasoning effort: {current}  (none, minimal, low, medium, high, xhigh)"
+                ));
+                state.log_dirty = true;
+            } else {
+                match crate::config::parse_reasoning_effort(raw) {
+                    Some(level) => {
+                        settings.reasoning_effort = Some(level.to_string());
+                        state.push_system(format!("reasoning effort → {level}"));
+                        state.log_dirty = true;
+                    }
+                    None => {
+                        state.push_system(
+                            "unknown effort — use none, minimal, low, medium, high, or xhigh",
+                        );
+                        state.log_dirty = true;
+                    }
+                }
+            }
+        }
         "model" => {
             let name = pc.args.trim();
             if name.is_empty() {

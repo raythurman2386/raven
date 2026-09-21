@@ -38,9 +38,9 @@ Raven confines subprocesses with several layers. A denial usually shows one of:
   destructive-command denylist (`rm -rf /`, `mkfs`, `curl | sh`, fork bombs,
   etc.). This is a hard block; rephrase the command.
 - **`Error: command killed by signal`** — the child was killed by the seccomp
-  network block (SIGSYS) or a resource limit. Sanctioned test runners
-  (`cargo test`, `npm test`, `vitest`, `pytest`, …) are exempted from the
-  network block; an arbitrary command that opens an internet socket is not.
+  network block (SIGSYS) or a resource limit. Test runners and normal
+  toolchain commands (`cargo build`, `git fetch`, `npm install`, `curl` that
+  is not piped into a shell) are exempt. Other commands stay offline.
 - **`Error: path escapes workspace`** — a file tool tried to read/write outside
   the workspace (Landlock / `openat2`). Use paths relative to the workspace.
 

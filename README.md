@@ -35,7 +35,7 @@ curl -fsSL https://raw.githubusercontent.com/raythurman2386/raven/master/install
 
 The script detects your platform, downloads the latest prebuilt binary from GitHub Releases, verifies the SHA-256 checksum against a manifest signed with a pinned Ed25519 key (a bad signature refuses the install), and installs to `~/.cargo/bin`. Build from source with `cargo build --release` or `cargo install --path .`. macOS code paths still compile (rlimits-only confinement) but there are no release builds for it.
 
-**Requirements:** Rust 1.88+ (MSRV) and a model endpoint — local Ollama, [Ollama Cloud](https://ollama.ai/cloud), [OpenRouter](https://openrouter.ai), or any OpenAI-compatible `/v1` API.
+**Requirements:** Rust 1.88+ (MSRV) and a model endpoint — local Ollama, [Ollama Cloud](https://ollama.ai/cloud), [OpenRouter](https://openrouter.ai), Grok Build subscription (`--provider grok` after `grok login`), or any OpenAI-compatible `/v1` API.
 
 ---
 
@@ -61,6 +61,7 @@ raven --yolo -p "Write unit tests for auth"
 
 # Pick a provider / model for this session
 raven --provider openrouter -m x-ai/grok-4.5 -p "Task"
+raven --provider grok -p "Task"   # grok-4.7 via ~/.grok/auth.json (grok login)
 
 # Continue a previous session
 raven --resume          # resume latest
@@ -342,17 +343,21 @@ src/
   agent/            # Core agent loop (core, tools_exec, stream, parallel)
   commands/         # Slash-command registry + parser (/retry, /loop, /steer, /cleanup, ...)
   tools/            # Tool implementations (24 total) + sandbox/
-  tui/              # ratatui TUI (render, markdown, completion)
-  config/           # Layered config.toml loading, provider presets
+  tui/              # ratatui TUI (render, markdown, completion, dispatch)
+  config/           # Layered config.toml loading, provider presets, onboarding
   context.rs        # Context-window management and compaction
   tokenizer.rs      # Pure-Rust token counter (no vocab file)
   session.rs        # JSONL persistence, resume, list
   plan.rs           # Structured plan mode
   memory.rs         # Cross-session `.raven/MEMORY.md`
+  state.rs          # Session-scoped goal.json + todos.json
   skills.rs         # SKILL.md discovery
   plugins/          # Agent Plugins v1.0.0 (skills + stdio MCP) discovery
+  mcp/              # Stdio MCP client
+  acp/              # Agent Client Protocol v1 stdio adapter
   repomap/          # Repo symbol map for large codebases
   web.rs            # web_search / web_fetch
+  update.rs         # Signed self-update (`raven self update`)
 evals/              # Agent evaluation suite
 docs/               # Documentation
 ```

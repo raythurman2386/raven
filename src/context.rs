@@ -63,6 +63,10 @@ pub fn fold_usage(messages: &[ChatMessage]) -> Option<TokenUsage> {
 ///   - fallback                                             → 32_768
 pub fn infer_context_window(model: &str) -> usize {
     let m = model.to_lowercase();
+    // Grok Build catalog (grok-4.5 / 4.6 / 4.7) is 500k on the CLI chat proxy.
+    if m.contains("grok-4") {
+        return 500_000;
+    }
     // Cloud glm (via Ollama) has a 1M-token context.
     if m.contains("glm") && m.contains("cloud") {
         1_000_000
@@ -106,6 +110,7 @@ pub async fn fetch_context_window(provider: &crate::config::Provider, model: &st
         "opencode.ai",
         "api.openai.com",
         "api.x.ai",
+        "cli-chat-proxy.grok.com",
         "api.anthropic.com",
         "together.xyz",
         "groq.com",
@@ -164,16 +169,12 @@ async fn fetch_ollama_context(base_url: &str, model: &str) -> Option<usize> {
 async fn fetch_openai_context(provider: &crate::config::Provider, model: &str) -> Option<usize> {
     let models_url = format!("{}/models", provider.base_url.trim_end_matches('/'));
 
-    let mut req = reqwest::Client::builder()
+    let req = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .ok()?
         .get(&models_url);
-
-    // Pass the provider's API key if available.
-    if let Some(key) = &provider.api_key {
-        req = req.bearer_auth(key);
-    }
+    let req = provider.apply_auth(req);
 
     let resp = req.send().await.ok()?;
     if !resp.status().is_success() {
@@ -187,7 +188,10 @@ async fn fetch_openai_context(provider: &crate::config::Provider, model: &str) -
     for m in models {
         let id = m.get("id")?.as_str()?;
         if id == model {
-            let ctx = m.get("context_length")?.as_u64()?;
+            let ctx = m
+                .get("context_length")
+                .or_else(|| m.get("context_window"))
+                .and_then(|v| v.as_u64())?;
             if ctx > 0 {
                 return Some(ctx as usize);
             }

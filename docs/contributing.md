@@ -34,19 +34,20 @@ cargo doc --no-deps
 src/
 ├── main.rs       # CLI entry, headless runner
 ├── lib.rs        # Library crate re-exports
-├── config/mod.rs  # Settings, defaults, context-window inference, AGENTS.md loader
-├── agent/       # Streaming loop (core, stream, tools_exec, loop_control, parallel, types)
+├── config/       # Settings, providers, onboarding, Grok auth, AGENTS.md loader
+├── agent/        # Streaming loop (core, stream, tools_exec, loop_control, parallel, types)
 ├── context.rs    # Token estimation, compaction
 ├── tools/
-│   ├── mod.rs        # Tool module root, glob matcher, todo_write
+│   ├── mod.rs         # Tool module root, glob matcher, todo_write
 │   ├── definitions.rs # OpenAI function-calling tool schemas
 │   ├── dispatch.rs    # Tool dispatch by name
-│   ├── sandbox.rs     # Sandbox (path confinement, shell filtering, file ops)
+│   ├── validate.rs    # Tool-argument schema checks before dispatch
+│   ├── sandbox/       # Path confinement, shell filtering, Landlock/seccomp/rlimits, file ops
 │   ├── document.rs    # Document extraction (.docx, .pdf, .xlsx, .odt, .epub)
 │   ├── git.rs         # Git operations (status, diff, log, worktrees, patch-apply)
 │   └── patch.rs       # Unified diff parsing and application
-├── tui/          # ratatui interactive UI (mod, render, markdown, blocks, status, selection)
-├── commands.rs   # Slash-command registry and parsing
+├── tui/          # ratatui interactive UI (mod, render, markdown, dispatch, completion, …)
+├── commands/     # Slash-command registry and parsing
 ├── plan.rs       # Structured plan data model, parsing, step advancement
 ├── skills.rs     # SKILL.md discovery + skill_search/skill_load
 ├── plugins/      # Agent Plugins v1.0.0 (skills + stdio MCP) discovery + validation
@@ -59,7 +60,8 @@ src/
 ├── mcp/          # Stdio MCP client (config + ACP session/new)
 ├── acp/          # Agent Client Protocol v1 stdio adapter
 ├── error.rs      # Typed error enums (AgentError, ToolError)
-└── runner.rs     # Shared event-draining and plan-approval flow
+├── runner.rs     # Shared event-draining and plan-approval flow
+└── update.rs     # Signed self-update (`raven self update`)
 docs/
 ├── README.md           # index
 ├── usage.md            # user workflows
@@ -67,6 +69,7 @@ docs/
 ├── architecture.md     # design, agent loop, compaction, sandbox
 ├── tools.md            # tool contracts and sandbox rules
 ├── testing.md          # test structure, coverage, mutation testing
+├── security.md         # threat model and defense layers
 └── contributing.md     # this file
 ```
 
@@ -184,7 +187,7 @@ let _ = tx.send(AgentEvent::MyEvent { detail: "..." }).await;
 
 ## Adding a slash command
 
-Slash commands live in [`src/commands.rs`](../src/commands.rs). The registry
+Slash commands live in [`src/commands/`](../src/commands/). The registry
 is the single source of truth, so `/help` auto-lists any command you add.
 
 ### 1. Add a `CommandSpec` to the registry
@@ -200,7 +203,7 @@ CommandSpec {
 
 ### 2. Handle it in the TUI dispatcher
 
-In [`src/tui/mod.rs`](../src/tui/mod.rs), add a match arm in `dispatch_slash_command`.
+In [`src/tui/dispatch.rs`](../src/tui/dispatch.rs), add a match arm in `dispatch_slash_command`.
 It receives the parsed command, shared UI state (`log`, `mode`,
 `session`, `quit`, ...), and `&SessionStore` — push any user-visible feedback
 to `log`.
@@ -230,7 +233,7 @@ Compaction lives in [`src/context.rs`](../src/context.rs).
 ## Running tests
 
 ```bash
-cargo test                    # 816 tests, all offline
+cargo test                    # offline suite (~850 tests; no live model)
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```

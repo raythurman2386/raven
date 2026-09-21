@@ -287,6 +287,8 @@ pub(crate) async fn summarize_request(
     base_url: String,
     model: String,
     api_key: Option<String>,
+    request_headers: Vec<(String, String)>,
+    reasoning_effort: Option<String>,
     middle: Vec<ChatMessage>,
 ) -> Option<String> {
     let prompt = format!(
@@ -316,10 +318,17 @@ pub(crate) async fn summarize_request(
         "max_tokens": 512,
         "stream": false
     });
+    let mut body = body;
+    if let Some(effort) = reasoning_effort {
+        body["reasoning_effort"] = serde_json::json!(effort);
+    }
 
     let mut req = client.post(&url).json(&body);
     if let Some(key) = &api_key {
         req = req.header("Authorization", format!("Bearer {key}"));
+    }
+    for (name, value) in &request_headers {
+        req = req.header(name.as_str(), value.as_str());
     }
     let resp = req.send().await.ok()?;
     if !resp.status().is_success() {

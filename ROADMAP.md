@@ -26,7 +26,7 @@ cross-agent research (Aider/Goose/Cline/Continue).
 ## Done (≤ 0.2.6)
 
 The mini-harness rework against Grok Build is complete. All phases below are
-shipped and verified by `cargo test` (593 offline tests), clippy `-D warnings`,
+shipped and verified by `cargo test` (~850 offline tests), clippy `-D warnings`,
 fmt.
 
 ### Agent loop & context

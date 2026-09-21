@@ -78,6 +78,12 @@ pub fn commands() -> Vec<CommandSpec> {
             arg_help: Some("[name]"),
         },
         CommandSpec {
+            name: "effort",
+            aliases: &["e"],
+            summary: "Set Grok reasoning effort: /effort <none|minimal|low|medium|high|xhigh>",
+            arg_help: Some("[level]"),
+        },
+        CommandSpec {
             name: "quit",
             aliases: &["q", "exit"],
             summary: "Quit Raven",

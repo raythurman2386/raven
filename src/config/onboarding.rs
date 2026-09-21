@@ -72,6 +72,8 @@ pub fn fallback_models(provider_name: &str) -> Vec<String> {
             "qwen3.8-max".into(),
             "minimax-m3".into(),
         ],
+        // Grok Build subscription proxy model ids.
+        "grok" => vec!["grok-4.7".into(), "grok-4.6".into(), "grok-4.5".into()],
         // Custom OpenAI-compatible endpoints: suggest a sensible OpenAI-model
         // default so the user always has a starting point, then let them type
         // the exact model id their endpoint exposes.
@@ -208,17 +210,27 @@ pub async fn run_onboarding() -> anyhow::Result<ConfigFile> {
         anyhow::bail!("no provider selected");
     };
 
-    // 2. Optional API key (blank for none; local Ollama needs none).
-    println!("API key for {provider_name} (blank for none):");
-    let api_key = read_line_trimmed().filter(|s| !s.is_empty());
+    // 2. Optional API key (blank for none; local Ollama / grok session need none).
+    let api_key = if provider_name == "grok" {
+        println!(
+            "Provider `grok` uses your Grok Build login (~/.grok/auth.json).\n\
+             Run `grok login` if you have not signed in yet. No API key needed."
+        );
+        None
+    } else {
+        println!("API key for {provider_name} (blank for none):");
+        read_line_trimmed().filter(|s| !s.is_empty())
+    };
 
     // 3. Model selection: live list when reachable, else curated fallback.
+    let builtin = crate::config::Provider::builtin(&provider_name);
     let mut provider = crate::config::Provider {
         name: provider_name.clone(),
         base_url: base_url.clone(),
         api_key: api_key.clone(),
-        api_key_env: crate::config::Provider::builtin(&provider_name).and_then(|p| p.api_key_env),
+        api_key_env: builtin.as_ref().and_then(|p| p.api_key_env.clone()),
         default_model: String::new(),
+        request_headers: builtin.map(|p| p.request_headers).unwrap_or_default(),
     };
     let live = crate::tui::fetch_live_provider_models(&provider);
     let candidates = if live.is_empty() {
@@ -424,6 +436,14 @@ mod tests3 {
     fn fallback_models_openrouter() {
         let m = fallback_models("openrouter");
         assert!(m.contains(&"x-ai/grok-4.5".to_string()));
+    }
+
+    #[test]
+    fn fallback_models_grok() {
+        let m = fallback_models("grok");
+        assert!(m.iter().any(|s| s == "grok-4.7"));
+        assert!(m.iter().any(|s| s == "grok-4.6"));
+        assert!(m.iter().any(|s| s == "grok-4.5"));
     }
 
     #[test]

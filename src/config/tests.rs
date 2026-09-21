@@ -3,6 +3,7 @@
 //! `provider.rs` where they can reach the private helpers.
 
 use super::*;
+use crate::config::parse_reasoning_effort;
 use crate::context::infer_context_window;
 
 #[test]
@@ -139,6 +140,21 @@ fn infer_context_window_deepseek_cloud_variants() {
     assert_eq!(infer_context_window("deepseek-v4-pro:cloud"), 1_000_000);
     // Non-cloud deepseek falls back to the generic 128K.
     assert_eq!(infer_context_window("deepseek-r1:14b"), 128_000);
+}
+
+#[test]
+fn parse_reasoning_effort_accepts_grok_levels() {
+    assert_eq!(parse_reasoning_effort("low"), Some("low"));
+    assert_eq!(parse_reasoning_effort(" MED "), Some("medium"));
+    assert_eq!(parse_reasoning_effort("x-high"), Some("xhigh"));
+    assert_eq!(parse_reasoning_effort("turbo"), None);
+}
+
+#[test]
+fn infer_context_window_grok4_is_500k() {
+    assert_eq!(infer_context_window("grok-4.5"), 500_000);
+    assert_eq!(infer_context_window("grok-4.6"), 500_000);
+    assert_eq!(infer_context_window("grok-4.7-build-fast"), 500_000);
 }
 
 #[test]

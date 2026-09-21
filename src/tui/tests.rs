@@ -664,6 +664,7 @@ fn test_settings(workspace: &std::path::Path) -> Settings {
         scope: Scope::Repo,
         yolo: true,
         temperature: 0.0,
+        reasoning_effort: None,
         max_tokens: 4096,
         rules: None,
         context_window: 128_000,
@@ -678,6 +679,15 @@ fn test_settings(workspace: &std::path::Path) -> Settings {
         allow_delegate: true,
         session_state_dir: None,
     }
+}
+
+#[test]
+fn auxiliary_effort_is_low_only_for_grok() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut settings = test_settings(tmp.path());
+    assert_eq!(settings.auxiliary_effort(), None);
+    settings.provider = Provider::builtin("grok").expect("grok");
+    assert_eq!(settings.auxiliary_effort(), Some("low"));
 }
 
 #[test]
@@ -719,6 +729,7 @@ async fn model_switch_updates_settings_compact_and_header_blocks() {
         api_key: None,
         api_key_env: None,
         default_model: "gemma4:latest".into(),
+        request_headers: Vec::new(),
     };
     let mut state = dummy_state();
     // Seed the header blocks the way TuiState::new does.

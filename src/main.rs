@@ -45,7 +45,8 @@ use raven::agent::{run_parallel, Agent, ChatMessage};
 use raven::config::{
     default_max_iter, env_compact_threshold, env_context_window, env_searxng_engines,
     env_searxng_url, load_config_file, load_dotenv_from, load_global_dotenv, needs_onboarding,
-    resolve_mode, resolve_provider, resolve_scope, run_onboarding, Mode, Settings,
+    parse_reasoning_effort, resolve_mode, resolve_provider, resolve_scope, run_onboarding, Mode,
+    Settings,
 };
 use raven::context::{fetch_context_window, infer_context_window};
 use raven::runner;
@@ -91,6 +92,10 @@ struct Cli {
     /// Model name (overrides the active provider's default_model for this session)
     #[arg(short, long)]
     model: Option<String>,
+
+    /// Reasoning effort for models that accept it (none, minimal, low, medium, high, xhigh).
+    #[arg(long, env = "RAVEN_REASONING_EFFORT")]
+    effort: Option<String>,
 
     /// Named provider to use (e.g. ollama, openrouter). See config.toml [providers.*].
     #[arg(long, env = "RAVEN_PROVIDER")]
@@ -182,7 +187,7 @@ struct Cli {
     command: Option<Command>,
 }
 
-/// Top-level subcommands (currently only `self`).
+/// Top-level subcommands.
 #[derive(clap::Subcommand, Debug)]
 enum Command {
     /// Manage raven itself (update / rollback).
@@ -191,6 +196,8 @@ enum Command {
         #[command(subcommand)]
         cmd: SelfSubcommand,
     },
+    /// Sign in through Grok Build (`grok login`) so raven can use the subscription.
+    Login,
 }
 
 /// Subcommands under `raven self`.
@@ -198,6 +205,29 @@ enum Command {
 enum SelfSubcommand {
     /// Update raven to the latest (or a pinned) release.
     Update(raven::update::UpdateArgs),
+}
+
+/// Run `grok login` so `~/.grok/auth.json` is refreshed for the grok provider.
+fn run_grok_login() -> Result<()> {
+    let status = std::process::Command::new("grok")
+        .arg("login")
+        .status()
+        .map_err(|e| {
+            anyhow::anyhow!("could not run `grok login` ({e}). Install Grok Build, then retry.")
+        })?;
+    if !status.success() {
+        anyhow::bail!("`grok login` exited with {status}");
+    }
+    match raven::config::grok_auth::resolve_session() {
+        Ok(_) => {
+            println!(
+                "Grok session ready ({})",
+                raven::config::grok_auth_path().display()
+            );
+            Ok(())
+        }
+        Err(e) => anyhow::bail!("login finished but raven could not read the session: {e}"),
+    }
 }
 
 /// Initialize tracing: default filter `warn` when `RUST_LOG` is unset.
@@ -259,9 +289,12 @@ async fn main() -> Result<()> {
 
     // `raven self update` / `raven self update --rollback` are handled before
     // any agent setup: they replace the running binary and exit.
-    if let Some(Command::SelfCmd { cmd }) = &cli.command {
-        match cmd {
-            SelfSubcommand::Update(args) => return raven::update::run(args.clone()).await,
+    if let Some(command) = &cli.command {
+        match command {
+            Command::SelfCmd { cmd } => match cmd {
+                SelfSubcommand::Update(args) => return raven::update::run(args.clone()).await,
+            },
+            Command::Login => return run_grok_login(),
         }
     }
 
@@ -312,6 +345,12 @@ async fn main() -> Result<()> {
     // config `provider` > builtin `ollama`. Endpoint + auth come from the
     // provider (config `[providers.*]` table + provider-scoped key env vars).
     let provider = resolve_provider(&cfg, cli.provider);
+    if provider.name == "grok" && provider.api_key.is_none() {
+        anyhow::bail!(
+            "No Grok session in {}. Run `raven login` (or `grok login`), then start raven again.",
+            raven::config::grok_auth_path().display()
+        );
+    }
 
     // Model: explicit --model overrides the provider's default_model.
     let model = cli.model.unwrap_or_else(|| provider.default_model.clone());
@@ -359,6 +398,18 @@ async fn main() -> Result<()> {
     )?;
 
     let temperature = cfg.temperature.unwrap_or(0.2);
+    let reasoning_effort = match cli.effort.clone().or(cfg.reasoning_effort.clone()) {
+        Some(raw) => Some(
+            parse_reasoning_effort(&raw)
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                "unknown reasoning effort {raw:?}; use none, minimal, low, medium, high, or xhigh"
+            )
+                })?,
+        ),
+        None => None,
+    };
 
     let settings = Settings {
         model,
@@ -375,6 +426,7 @@ async fn main() -> Result<()> {
         scope,
         yolo: cli.yolo,
         temperature,
+        reasoning_effort,
         max_tokens,
         rules: cli.rules,
         context_window,
@@ -556,10 +608,15 @@ async fn headless_run(
         println!("Raven (headless)");
     }
     println!("Model:     {}", settings.model);
+    if let Some(effort) = &settings.reasoning_effort {
+        println!("Effort:    {effort}");
+    }
     println!("Host:      {}", settings.base_url());
     println!(
         "Auth:      {}",
-        if settings.api_key().is_some() {
+        if settings.provider.name == "grok" && settings.api_key().is_some() {
+            "Grok session (~/.grok/auth.json)"
+        } else if settings.api_key().is_some() {
             "provider API key set (Bearer)"
         } else {
             "none (local / unauthenticated)"

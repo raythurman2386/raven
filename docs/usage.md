@@ -258,7 +258,7 @@ so what you see always matches the toolset the agent actually has.
 - A message typed just as the turn finishes is replayed as a fresh turn, so
   it is never silently dropped.
 
-The command registry lives in `src/commands.rs`; adding a command is one
+The command registry lives in `src/commands/`; adding a command is one
 registry entry plus one TUI dispatch arm, and it auto-appears in `/help`.
 
 ### Tool activity is collapsed

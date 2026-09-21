@@ -1,8 +1,10 @@
 # cargo-mutants configuration
 # Focus mutation testing on logic-heavy modules; exclude UI glue.
+# Prefer: `cargo mutants --config mutants.toml`
+# (cargo-mutants' default path is `.cargo/mutants.toml`.)
 
-[exclude]
-# Main entry point — argument parsing glue, not logic
-"src/main.rs" = true
-# TUI rendering — not unit-testable
-"src/tui.rs" = true
+# Main entry + TUI — argument parsing / UI glue, not mutation targets
+exclude_globs = [
+    "src/main.rs",
+    "src/tui/**/*.rs",
+]
