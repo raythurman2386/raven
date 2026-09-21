@@ -22,11 +22,13 @@ use anyhow::Result;
 use serde::Deserialize;
 use std::path::PathBuf;
 
+pub use grok_auth::{auth_path as grok_auth_path, DEFAULT_PROXY_BASE_URL as GROK_PROXY_BASE_URL};
 pub use onboarding::{config_paths, fallback_models, needs_onboarding, run_onboarding};
 pub use provider::{
     is_known_provider, known_provider_names, resolve_provider, Provider, ProviderConfig,
 };
 
+pub mod grok_auth;
 mod onboarding;
 mod provider;
 
@@ -207,6 +209,9 @@ pub struct Settings {
     pub scope: Scope,
     pub yolo: bool,
     pub temperature: f32,
+    /// Reasoning effort sent as `reasoning_effort` when set (`low`, `high`, …).
+    /// `None` omits the field so the provider uses its own default.
+    pub reasoning_effort: Option<String>,
     pub max_tokens: u32,
     /// Extra rules appended to the system prompt (from `--rules`).
     pub rules: Option<String>,
@@ -257,9 +262,26 @@ impl Settings {
         &self.provider.base_url
     }
 
+    /// Effort for short side requests (titles, compaction).
+    ///
+    /// Grok's catalog default is `high`, which can consume a 24- or 512-token
+    /// budget before any visible text. Those calls always use `low`.
+    pub fn auxiliary_effort(&self) -> Option<&'static str> {
+        if self.provider.name == "grok" {
+            Some("low")
+        } else {
+            None
+        }
+    }
+
     /// The provider's API key, if any.
     pub fn api_key(&self) -> Option<&str> {
         self.provider.api_key.as_deref()
+    }
+
+    /// Attach Bearer auth and provider-specific request headers to a request.
+    pub fn apply_auth(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        self.provider.apply_auth(req)
     }
 
     /// Verify the workspace directory exists; bail with a path message if not.
@@ -303,6 +325,19 @@ impl Settings {
     /// which some OpenRouter providers (e.g. Stealth) reject with HTTP 400.
     pub fn temperature_json(&self) -> f64 {
         round_temperature(self.temperature)
+    }
+}
+
+/// Canonical reasoning-effort values Grok accepts on chat completions.
+pub fn parse_reasoning_effort(raw: &str) -> Option<&'static str> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "none" => Some("none"),
+        "minimal" | "min" => Some("minimal"),
+        "low" => Some("low"),
+        "medium" | "med" => Some("medium"),
+        "high" => Some("high"),
+        "xhigh" | "x-high" | "extra-high" => Some("xhigh"),
+        _ => None,
     }
 }
 
@@ -482,6 +517,9 @@ pub struct ConfigFile {
     pub max_iterations: Option<usize>,
     pub mode: Option<Mode>,
     pub temperature: Option<f32>,
+    /// Reasoning effort for models that accept it (`none`, `minimal`, `low`,
+    /// `medium`, `high`, `xhigh`). CLI `--effort` wins.
+    pub reasoning_effort: Option<String>,
     /// Disable streaming and use a single non-streaming request instead.
     pub no_stream: Option<bool>,
     /// Enforce the agent runs tests after editing files before finishing.
@@ -537,6 +575,7 @@ pub fn load_config_file(workspace: &std::path::Path) -> ConfigFile {
         max_iterations: ws.max_iterations.or(global.max_iterations),
         mode: ws.mode.or(global.mode),
         temperature: ws.temperature.or(global.temperature),
+        reasoning_effort: ws.reasoning_effort.or(global.reasoning_effort),
         no_stream: ws.no_stream.or(global.no_stream),
         verify: ws.verify.or(global.verify),
         theme: ws.theme.or(global.theme),

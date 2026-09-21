@@ -20,9 +20,9 @@
 # ---------------------------------------------------------------------------
 
 # The active provider. Names a table from [providers.<name>] below, or one of
-# the built-in presets: "ollama", "openrouter", and "opencode-go".
+# the built-in presets: "grok", "ollama", "openrouter", and "opencode-go".
 # Overridden by: --provider flag, RAVEN_PROVIDER env var.
-#provider = "ollama"
+#provider = "grok"
 
 # --- Context management -----------------------------------------------------
 
@@ -116,6 +116,14 @@ base_url = "https://opencode.ai/zen/go/v1"
 default_model = "deepseek-v4-flash"
 # api_key_env = "OPENCODE_GO_API_KEY"
 
+[providers.grok]
+# Built-in default: https://cli-chat-proxy.grok.com/v1
+# Uses your Grok Build / SuperGrok subscription via ~/.grok/auth.json
+# (run `grok login` first). No API key env var — session OAuth instead.
+# Override the proxy with RAVEN_GROK_PROXY_BASE_URL or GROK_CLI_CHAT_PROXY_BASE_URL.
+base_url = "https://cli-chat-proxy.grok.com/v1"
+default_model = "grok-4.7"
+
 # --- Adding a brand-new provider (example: Groq) ----------------------------
 # The endpoint MUST speak OpenAI-compatible /v1/chat/completions. Native APIs
 # with a different wire format need a proxy/gateway first.
@@ -130,10 +138,11 @@ default_model = "deepseek-v4-flash"
 # ---------------------------------------------------------------------------
 # 1. Config-file api_key on that provider (if set — NOT overridden by env)
 # 2. RAVEN_API_KEY (universal override, works for all providers)
-# 3. The provider's declared api_key_env, or built-in mapping
+# 3. For `grok`: SpaceXAI session token from ~/.grok/auth.json (refreshed)
+# 4. The provider's declared api_key_env, or built-in mapping
 #    (OPENROUTER_API_KEY / OLLAMA_API_KEY / OPENCODE_GO_API_KEY), else a
 #    conventional {NAME}_API_KEY (e.g. GROQ_API_KEY for a provider named "groq")
-# 4. None (public/local-only endpoints)
+# 5. None (public/local-only endpoints)
 #
 # Prefer the provider-scoped env var over a config-file api_key so the secret
 # never lands in a committed file or shell history.

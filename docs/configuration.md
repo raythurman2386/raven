@@ -10,11 +10,15 @@ See the [root README quick start](../README.md#quick-start) for the full flag li
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `RAVEN_PROVIDER` | `ollama` | Active provider name (overridden by `--provider`) |
+| `RAVEN_PROVIDER` | `grok` | Active provider name (overridden by `--provider`) |
 | `RAVEN_API_KEY` | _(unset)_ | Universal Bearer token override for the active provider |
 | `OPENROUTER_API_KEY` | _(unset)_ | Bearer token for the `openrouter` provider |
 | `OLLAMA_API_KEY` | _(unset)_ | Bearer token for the `ollama` provider (Ollama Cloud / authenticated hosts) |
 | `OPENCODE_GO_API_KEY` | _(unset)_ | Bearer token for the `opencode-go` provider (OpenCode Go subscription) |
+| `RAVEN_GROK_AUTH` | _(unset)_ | Override path to Grok Build `auth.json` (default `~/.grok/auth.json`) |
+| `GROK_HOME` | _(unset)_ | Grok Build home dir; Raven reads `$GROK_HOME/auth.json` when set |
+| `RAVEN_GROK_PROXY_BASE_URL` / `GROK_CLI_CHAT_PROXY_BASE_URL` | `https://cli-chat-proxy.grok.com/v1` | Grok subscription chat-proxy base URL |
+| `RAVEN_REASONING_EFFORT` | _(unset)_ | Reasoning effort (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`). Also `--effort` and `/effort`. |
 | `RAVEN_MAX_ITER` / `OG_MAX_ITER` | `60` | Max agent iterations per run |
 | `RAVEN_CONTEXT_WINDOW` / `OG_CONTEXT_WINDOW` | _(inferred)_ | Override the model's context window size (tokens) |
 | `RAVEN_COMPACT_THRESHOLD` / `OG_COMPACT_THRESHOLD` | `0.75` | Fraction of usable context at which compaction triggers |
@@ -53,13 +57,14 @@ single unit — `--provider`, `/provider`, or the `provider` config key.
 
 ### Built-in presets
 
-Two providers ship built in (no config needed):
+Built-in presets (no config needed):
 
-| Name | Base URL | Default model |
-|---|---|---|
-| `ollama` | `http://localhost:11434/v1` | `glm-5.3-flash:cloud` |
-| `openrouter` | `https://openrouter.ai/api/v1` | `x-ai/grok-4.5` |
-| `opencode-go` | `https://opencode.ai/zen/go/v1` | `deepseek-v4-flash` |
+| Name | Base URL | Default model | Auth |
+|---|---|---|---|
+| `ollama` | `http://localhost:11434/v1` | `glm-5.3-flash:cloud` | optional `OLLAMA_API_KEY` |
+| `openrouter` | `https://openrouter.ai/api/v1` | `x-ai/grok-4.5` | `OPENROUTER_API_KEY` |
+| `opencode-go` | `https://opencode.ai/zen/go/v1` | `deepseek-v4-flash` | `OPENCODE_GO_API_KEY` |
+| `grok` | `https://cli-chat-proxy.grok.com/v1` | `grok-4.7` | `~/.grok/auth.json` (via `grok login`) |
 
 ### Declaring providers
 
@@ -123,9 +128,27 @@ $12 / 5h, $30 / week, $60 / month) — raven surfaces those as normal HTTP
 429/402 errors. `/model` autocomplete lists all models returned by the
 live `/models` endpoint.
 
+### Grok (subscription / Grok Build login)
+
+The `grok` provider bills against your Grok Build / SuperGrok seat. Raven
+reuses the SpaceXAI OIDC session that `grok login` writes to
+`~/.grok/auth.json`, refreshes it when near expiry, and calls the CLI chat
+proxy (`/v1/chat/completions`) with the required client-identity headers.
+
+```bash
+grok login   # once, in Grok Build
+raven --provider grok -m grok-4.7 -p "Explain this repo"
+```
+
+This is **not** the metered developer API at `api.x.ai` (that path uses
+`XAI_API_KEY`). Pointing `grok` at a custom proxy is supported via
+`RAVEN_GROK_PROXY_BASE_URL` / `GROK_CLI_CHAT_PROXY_BASE_URL` or
+`[providers.grok] base_url`. Override the auth file with `RAVEN_GROK_AUTH`
+or `$GROK_HOME/auth.json`.
+
 ### Selecting the active provider
 
-Precedence (highest wins): **`--provider` flag > `RAVEN_PROVIDER` env > config `provider` key > built-in `ollama`**.
+Precedence (highest wins): **`--provider` flag > `RAVEN_PROVIDER` env > config `provider` key > built-in `grok`**.
 
 ```bash
 # CLI flag

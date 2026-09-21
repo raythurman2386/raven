@@ -125,10 +125,7 @@ pub(crate) fn fetch_live_provider_models(provider: &crate::config::Provider) -> 
     };
 
     for url in urls {
-        let mut req = client.get(&url);
-        if let Some(key) = &provider.api_key {
-            req = req.bearer_auth(key);
-        }
+        let req = provider.apply_auth_blocking(client.get(&url));
 
         let Ok(resp) = req.send() else {
             continue;
@@ -177,6 +174,10 @@ pub fn completion_arg_candidates(
 ) -> Vec<String> {
     match cmd {
         "theme" => Theme::all().iter().map(|(n, _)| n.to_string()).collect(),
+        "effort" => ["none", "minimal", "low", "medium", "high", "xhigh"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
         "provider" => crate::config::known_provider_names(config_file),
         "model" => {
             let live_names = provider_model_candidates(&settings.provider);
@@ -1625,6 +1626,45 @@ fn plan_step_progress(plan: &crate::plan::Plan) -> (usize, usize) {
     (done, total)
 }
 
+/// One-line goal / open-task hint for the status strip (Grok Build's task row,
+/// collapsed so the transcript keeps the height).
+fn task_hint(settings: &Settings) -> String {
+    let Some(dir) = settings.session_state_dir.as_deref() else {
+        return String::new();
+    };
+    let todos = crate::state::load_todos_from_dir(dir);
+    let open: Vec<_> = todos
+        .iter()
+        .filter(|t| t.status != "completed" && t.status != "cancelled")
+        .collect();
+    let goal = crate::state::load_goal_from_dir(dir).filter(|g| {
+        !g.description.trim().is_empty() && g.status != "done" && g.status != "completed"
+    });
+    if open.is_empty() && goal.is_none() {
+        return String::new();
+    }
+    let mut parts = Vec::new();
+    if let Some(g) = goal {
+        let desc = g.description.trim().replace('\n', " ");
+        let desc: String = desc.chars().take(48).collect();
+        parts.push(format!("goal {desc}"));
+    }
+    if !open.is_empty() {
+        let done = todos.iter().filter(|t| t.status == "completed").count();
+        let current = open
+            .iter()
+            .find(|t| t.status == "in_progress")
+            .or_else(|| open.first())
+            .map(|t| {
+                let c = t.content.trim().replace('\n', " ");
+                c.chars().take(36).collect::<String>()
+            })
+            .unwrap_or_default();
+        parts.push(format!("tasks {done}/{} · {current}", todos.len()));
+    }
+    parts.join("  ·  ")
+}
+
 fn compute_layout(area: Rect, state: &TuiState) -> Vec<Rect> {
     let plan_h = if show_plan(state) {
         (state.plan_preview.len().saturating_add(2) as u16).clamp(3, 10)
@@ -1675,6 +1715,7 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &mut TuiSt
     };
 
     let chunks = compute_layout(f.area(), state);
+    let task_hint = task_hint(settings);
 
     // Top bar — product · model · provider | context meter (right-aligned)
     let left = Line::from(vec![
@@ -1863,6 +1904,13 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &mut TuiSt
                 Style::default().fg(theme.accent),
             ));
         }
+    }
+
+    if !task_hint.is_empty() {
+        status_line.push(Span::styled(
+            format!("  {task_hint}"),
+            Style::default().fg(theme.plan),
+        ));
     }
 
     if state.running {

@@ -26,7 +26,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and the block ends at the next unindented key. Previously such skills
   loaded with an empty description, breaking discovery and search. (#184)
 
-## [Unreleased]
+## [0.6.6] - 2026-09-21
+
+### Added
+
+- **`grok` provider (Grok Build subscription auth)** — reuse `~/.grok/auth.json`
+  from `grok login` (`raven login` runs that flow), refresh SpaceXAI OIDC
+  tokens near expiry and once after HTTP 401, and call the CLI chat proxy
+  (`https://cli-chat-proxy.grok.com/v1`) with the required client-identity
+  headers. Default provider and model are `grok` / `grok-4.7`. Reasoning
+  effort is `--effort`, `RAVEN_REASONING_EFFORT`, or `/effort`. Short title
+  and compaction calls use `low` so a high catalog default cannot consume
+  their token budget. Override auth path / proxy via `RAVEN_GROK_AUTH`,
+  `GROK_HOME`, `RAVEN_GROK_PROXY_BASE_URL`, or `GROK_CLI_CHAT_PROXY_BASE_URL`.
+- **Toolchain shell confinement** — `cargo build`, `git fetch`, `npm install`,
+  and the other package-manager commands keep network and large-output room.
+  The destructive denylist still blocks `curl | sh` and similar. A shell
+  wrapper (`bash -c …`) stays confined.
 
 ### Fixed
 
@@ -35,6 +51,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   content), adds input+output into the daily / today totals the panel
   charts, and scans `~/.raven/system/sessions` so system-scope usage shows
   up next to repo sessions.
+
+### Dependencies
+
+- `rustls` 0.23.43 → 0.23.45 (RUSTSEC-2026-0285).
 
 ## [0.6.4] - 2026-09-04
 

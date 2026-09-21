@@ -92,9 +92,14 @@ fn title_case_word(w: &str) -> String {
 }
 
 /// JSON body for a toolless title completion (tiny system prompt, no tools).
-pub fn title_request_body(model: &str, user_text: &str, stream: bool) -> serde_json::Value {
+pub fn title_request_body(
+    model: &str,
+    user_text: &str,
+    stream: bool,
+    reasoning_effort: Option<&str>,
+) -> serde_json::Value {
     let source = extract_title_source(user_text);
-    json!({
+    let mut body = json!({
         "model": model,
         "messages": [
             {"role": "system", "content": TITLE_SYSTEM},
@@ -103,7 +108,11 @@ pub fn title_request_body(model: &str, user_text: &str, stream: bool) -> serde_j
         "max_tokens": 24,
         "temperature": 0.0,
         "stream": stream,
-    })
+    });
+    if let Some(effort) = reasoning_effort {
+        body["reasoning_effort"] = json!(effort);
+    }
+    body
 }
 
 /// Fire-and-forget title completion used by the TUI/ACP on the first real
@@ -118,11 +127,13 @@ pub async fn generate_session_title(settings: &Settings, user_text: &str) -> Opt
         "{}/chat/completions",
         settings.base_url().trim_end_matches('/')
     );
-    let body = title_request_body(&settings.model, user_text, false);
-    let mut req = client.post(&url).json(&body);
-    if let Some(key) = settings.api_key() {
-        req = req.header("Authorization", format!("Bearer {key}"));
-    }
+    let body = title_request_body(
+        &settings.model,
+        user_text,
+        false,
+        settings.auxiliary_effort(),
+    );
+    let req = settings.apply_auth(client.post(&url).json(&body));
     let resp = req.send().await.ok()?;
     if !resp.status().is_success() {
         return None;
@@ -186,8 +197,16 @@ mod tests {
 
     #[test]
     fn title_request_has_no_tools_and_tiny_system() {
-        let body = title_request_body("m", "fix the parser", false);
+        let body = title_request_body("m", "fix the parser", false, None);
         assert!(body.get("tools").is_none());
+        assert_eq!(body["max_tokens"], 24);
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn title_request_uses_low_effort_when_asked() {
+        let body = title_request_body("grok-4.7", "fix the parser", false, Some("low"));
+        assert_eq!(body["reasoning_effort"], "low");
         assert_eq!(body["max_tokens"], 24);
         let msgs = body["messages"].as_array().unwrap();
         assert_eq!(msgs.len(), 2);

@@ -727,9 +727,13 @@ impl Agent {
             &self.settings.model,
             user_text,
             !self.settings.no_stream,
+            self.settings.auxiliary_effort(),
         );
         if !self.settings.no_stream && self.usage_supported {
             body["stream_options"] = json!({"include_usage": true});
+        }
+        if let Some(effort) = self.settings.auxiliary_effort() {
+            body["reasoning_effort"] = json!(effort);
         }
         let url = format!(
             "{}/chat/completions",
@@ -845,6 +849,8 @@ impl Agent {
         let base_url = self.settings.base_url().to_string();
         let model = self.settings.model.clone();
         let api_key = self.settings.api_key().map(str::to_string);
+        let request_headers = self.settings.provider.request_headers.clone();
+        let compact_effort = self.settings.auxiliary_effort().map(str::to_string);
         // Thrashing protection: if compaction keeps failing to bring the
         // history under the soft limit (a single huge file/tool output refills
         // context immediately), pause auto-compaction after a few attempts so
@@ -866,6 +872,8 @@ impl Agent {
                         base_url.clone(),
                         model.clone(),
                         api_key.clone(),
+                        request_headers.clone(),
+                        compact_effort.clone(),
                         middle,
                     ))
                 },
@@ -951,6 +959,9 @@ impl Agent {
         // rejected the field — see `send_with_retry`.
         if !self.settings.no_stream && self.usage_supported {
             body["stream_options"] = json!({"include_usage": true});
+        }
+        if let Some(effort) = &self.settings.reasoning_effort {
+            body["reasoning_effort"] = json!(effort);
         }
 
         let url = format!(
@@ -1169,27 +1180,50 @@ impl Agent {
         let max_retries = 3usize;
         let mut delay = std::time::Duration::from_secs(1);
         let mut attempt = 0usize;
+        let mut grok_refreshed = false;
 
         while attempt < max_retries {
             let mut req = self
                 .client
                 .post(url)
                 .header("Content-Type", "application/json");
-            if let Some(key) = self.settings.api_key() {
-                req = req.header("Authorization", format!("Bearer {key}"));
-            }
-            // OpenRouter optional ranking headers (harmless elsewhere).
-            if url.contains("openrouter.ai") {
-                req = req
-                    .header("HTTP-Referer", "https://github.com/raven-agent/raven")
-                    .header("X-Title", "Raven");
-            }
+            req = self.settings.apply_auth(req);
 
             match req.json(body).send().await {
                 Ok(resp) if resp.status().is_success() => return Ok(resp),
 
                 Ok(resp) => {
                     let status = resp.status().as_u16();
+                    // Grok subscription token rejected: refresh once and retry.
+                    if status == 401 && self.settings.provider.name == "grok" && !grok_refreshed {
+                        let _ = resp.text().await;
+                        grok_refreshed = true;
+                        match tokio::task::spawn_blocking(crate::config::grok_auth::force_refresh)
+                            .await
+                        {
+                            Ok(Ok(token)) => {
+                                tracing::info!("grok auth: refreshed session after HTTP 401");
+                                self.settings.provider.api_key = Some(token);
+                                continue;
+                            }
+                            Ok(Err(e)) => {
+                                return Err(AgentError::HttpError {
+                                    provider: self.settings.provider.name.clone(),
+                                    status,
+                                    body: format!(
+                                        "{e}. Run `grok login` (or `raven login`), then retry."
+                                    ),
+                                });
+                            }
+                            Err(e) => {
+                                return Err(AgentError::HttpError {
+                                    provider: self.settings.provider.name.clone(),
+                                    status,
+                                    body: format!("token refresh task failed: {e}"),
+                                });
+                            }
+                        }
+                    }
                     // 404 = model not found — don't retry
                     if status == 404 {
                         let text = resp.text().await.unwrap_or_default();
@@ -1206,20 +1240,31 @@ impl Agent {
                             body: cap_http_body(text),
                         });
                     }
-                    // 400 that blames `stream_options` = strip + disable +
-                    // retry immediately without burning a transient attempt.
-                    if status == 400 && body.get("stream_options").is_some() {
+                    // 400 that blames an optional field: strip that field and
+                    // retry. Read the body once so a stream_options rejection
+                    // still falls through when reasoning_effort is also set.
+                    if status == 400
+                        && (body.get("reasoning_effort").is_some()
+                            || body.get("stream_options").is_some())
+                    {
                         let text = resp.text().await.unwrap_or_default();
-                        if text.contains("stream_options") {
-                            if let Some(obj) = body.as_object_mut() {
-                                obj.remove("stream_options");
-                            }
+                        let (dropped_effort, dropped_usage) =
+                            strip_rejected_optional_fields(body, &text);
+                        if dropped_effort {
+                            self.settings.reasoning_effort = None;
+                            tracing::info!(
+                                "provider rejected reasoning_effort (400); retrying without it"
+                            );
+                        }
+                        if dropped_usage {
                             self.usage_supported = false;
                             store_usage_supported(self.settings.base_url(), false);
                             tracing::info!(
                                 "provider rejected stream_options.include_usage (400); \
                                  retrying without it — usage calibration disabled for this provider"
                             );
+                        }
+                        if dropped_effort || dropped_usage {
                             continue;
                         }
                         return Err(AgentError::HttpError {
@@ -1285,6 +1330,28 @@ impl Agent {
             body: "retries exhausted — all attempts failed with transient errors".into(),
         })
     }
+}
+
+/// Drop optional request fields the provider's 400 body actually names.
+///
+/// Returns `(dropped_reasoning_effort, dropped_stream_options)`. A complaint
+/// about one field must not hide the other.
+pub(crate) fn strip_rejected_optional_fields(body: &mut Value, error_text: &str) -> (bool, bool) {
+    let mut dropped_effort = false;
+    let mut dropped_usage = false;
+    if body.get("reasoning_effort").is_some() && error_text.to_lowercase().contains("reasoning") {
+        if let Some(obj) = body.as_object_mut() {
+            obj.remove("reasoning_effort");
+        }
+        dropped_effort = true;
+    }
+    if body.get("stream_options").is_some() && error_text.contains("stream_options") {
+        if let Some(obj) = body.as_object_mut() {
+            obj.remove("stream_options");
+        }
+        dropped_usage = true;
+    }
+    (dropped_effort, dropped_usage)
 }
 
 /// Serialize chat messages for the wire format.
@@ -1373,5 +1440,29 @@ mod wire_format_tests {
         }];
         let v = request_messages_json(&msgs);
         assert!(v.as_array().unwrap()[0].get("usage").is_none());
+    }
+
+    #[test]
+    fn stream_options_rejection_still_strips_when_effort_is_set() {
+        let mut body = json!({
+            "reasoning_effort": "low",
+            "stream_options": {"include_usage": true}
+        });
+        let (effort, usage) =
+            super::strip_rejected_optional_fields(&mut body, "unknown field stream_options");
+        assert!(!effort);
+        assert!(usage);
+        assert!(body.get("reasoning_effort").is_some());
+        assert!(body.get("stream_options").is_none());
+    }
+
+    #[test]
+    fn reasoning_rejection_strips_only_effort() {
+        let mut body = json!({"reasoning_effort": "high", "model": "grok-4.7"});
+        let (effort, usage) =
+            super::strip_rejected_optional_fields(&mut body, "Unsupported reasoning_effort");
+        assert!(effort);
+        assert!(!usage);
+        assert!(body.get("reasoning_effort").is_none());
     }
 }

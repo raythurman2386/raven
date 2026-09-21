@@ -36,6 +36,7 @@ fn settings_for(workspace: &std::path::Path) -> Settings {
         scope: Scope::Repo,
         yolo: true,
         temperature: 0.0,
+        reasoning_effort: None,
         max_tokens: 4096,
         rules: None,
         context_window: 128_000,

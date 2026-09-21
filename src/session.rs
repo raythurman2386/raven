@@ -601,6 +601,7 @@ mod tests {
             scope,
             yolo: false,
             temperature: 0.2,
+            reasoning_effort: None,
             max_tokens: 1024,
             rules: None,
             context_window: 8192,

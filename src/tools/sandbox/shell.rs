@@ -61,14 +61,14 @@ impl Sandbox {
         // shell is not killed. The predicate is the same one the enforced-verify
         // gate uses to credit shell-based verification, so the exemption is
         // limited to user-sanctioned commands, not arbitrary model output.
-        let skip_network_block = Self::is_verification_command(command);
+        let (skip_network_block, skip_rlimits) = confinement_for(command);
         run_confined(
             &mut cmd,
             &self.workspace,
             timeout_secs,
             &self.extra_rw,
             skip_network_block,
-            skip_network_block,
+            skip_rlimits,
         )
     }
 }
@@ -109,6 +109,78 @@ fn parse_argv(command: &str) -> Option<Vec<String>> {
     shlex::split(command)
 }
 
+/// Confinement exemptions for a shell command.
+///
+/// Returns `(skip_network_block, skip_rlimits)`.
+///
+/// Verification commands (`cargo test`, `pytest`, …) skip both: they open
+/// sockets for workers and write large linker outputs. Ordinary toolchain
+/// commands (`cargo build`, `git fetch`, `npm install`, `curl` that is not
+/// piped into a shell) also need the network and large outputs, so they get
+/// the same exemption. The destructive denylist still runs first, so
+/// `curl … | sh` never reaches this function.
+pub(crate) fn confinement_for(command: &str) -> (bool, bool) {
+    if Sandbox::is_verification_command(command) {
+        return (true, true);
+    }
+    let bin = first_executable(command);
+    let toolchain = matches!(
+        bin.as_str(),
+        "cargo"
+            | "rustc"
+            | "rustup"
+            | "rustfmt"
+            | "go"
+            | "npm"
+            | "npx"
+            | "pnpm"
+            | "yarn"
+            | "bun"
+            | "uv"
+            | "pip"
+            | "pip3"
+            | "git"
+            | "gh"
+            | "curl"
+            | "wget"
+            | "gcc"
+            | "clang"
+            | "clang++"
+            | "g++"
+    );
+    (toolchain, toolchain)
+}
+
+/// First program token after a leading `cd … &&` and `VAR=value` prefixes.
+fn first_executable(command: &str) -> String {
+    let mut rest = command.trim();
+    if let Some((head, tail)) = rest.split_once("&&") {
+        let head = head.trim();
+        if head == "cd" || head.starts_with("cd ") {
+            rest = tail.trim();
+        }
+    }
+    loop {
+        let rest_trim = rest.trim_start();
+        if rest_trim.is_empty() {
+            return String::new();
+        }
+        let (tok, after) = rest_trim
+            .split_once(char::is_whitespace)
+            .unwrap_or((rest_trim, ""));
+        if let Some((name, _)) = tok.split_once('=') {
+            if !name.is_empty() && name.chars().all(|c| c == '_' || c.is_ascii_alphanumeric()) {
+                rest = after;
+                continue;
+            }
+        }
+        let name = tok.rsplit('/').next().unwrap_or(tok);
+        return name
+            .trim_matches(|c: char| c == '"' || c == '\'')
+            .to_string();
+    }
+}
+
 /// Whether a command can be run via direct exec (no shell).
 ///
 /// The first token must be on the `safe_command_re` allowlist AND the command
@@ -134,4 +206,38 @@ fn shell_command(command: &str) -> Command {
     let mut cmd = Command::new("sh");
     cmd.arg("-c").arg(command);
     cmd
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn toolchain_commands_keep_network_and_large_writes() {
+        assert_eq!(confinement_for("cargo build --release"), (true, true));
+        assert_eq!(confinement_for("git fetch origin"), (true, true));
+        assert_eq!(confinement_for("cd crates && cargo check"), (true, true));
+        assert_eq!(
+            confinement_for("CARGO_TARGET_DIR=/tmp/t cargo build"),
+            (true, true)
+        );
+    }
+
+    #[test]
+    fn plain_commands_stay_confined() {
+        assert_eq!(confinement_for("ls -la"), (false, false));
+        assert_eq!(confinement_for("echo hello"), (false, false));
+    }
+
+    #[test]
+    fn verification_commands_stay_exempt() {
+        assert_eq!(confinement_for("cargo test --lib"), (true, true));
+    }
+
+    #[test]
+    fn shell_wrapper_does_not_inherit_toolchain_exemption() {
+        // First token is the shell, so the network block stays on.
+        assert_eq!(confinement_for("bash -c 'cargo build'"), (false, false));
+        assert_eq!(confinement_for("npm install"), (true, true));
+    }
 }

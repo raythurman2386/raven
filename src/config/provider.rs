@@ -5,11 +5,14 @@
 //! (`--provider`, `/provider`, `provider = "…"` in config.toml). API keys are
 //! resolved per provider: config-file `api_key` (if set) → `RAVEN_API_KEY`
 //! (universal override) → the provider's declared `api_key_env` (or built-in
-//! mapping, e.g. `OPENROUTER_API_KEY` / `OLLAMA_API_KEY`).
+//! mapping, e.g. `OPENROUTER_API_KEY` / `OLLAMA_API_KEY`). The built-in
+//! `grok` provider instead resolves a SpaceXAI session from `~/.grok/auth.json`
+//! (see [`super::grok_auth`]).
 
 use serde::Deserialize;
 use std::borrow::Cow;
 
+use super::grok_auth;
 use super::ConfigFile;
 
 /// Bundles everything needed to talk to one provider so switching is a
@@ -28,6 +31,9 @@ pub struct Provider {
     pub api_key_env: Option<String>,
     /// Model used when no explicit `--model` / `/model` override is set.
     pub default_model: String,
+    /// Extra HTTP headers attached to every inference request (for example
+    /// Grok CLI chat-proxy client identity). Empty for most providers.
+    pub request_headers: Vec<(String, String)>,
 }
 
 impl Provider {
@@ -41,6 +47,7 @@ impl Provider {
                 api_key: None,
                 api_key_env: Some("OLLAMA_API_KEY".into()),
                 default_model: "glm-5.3-flash:cloud".into(),
+                request_headers: Vec::new(),
             }),
             "openrouter" => Some(Provider {
                 name: name.into(),
@@ -48,6 +55,15 @@ impl Provider {
                 api_key: None,
                 api_key_env: Some("OPENROUTER_API_KEY".into()),
                 default_model: "x-ai/grok-4.5".into(),
+                // Optional ranking headers. OpenRouter does not require them
+                // to accept the request.
+                request_headers: vec![
+                    (
+                        "HTTP-Referer".into(),
+                        "https://github.com/raythurman2386/raven".into(),
+                    ),
+                    ("X-Title".into(), "Raven".into()),
+                ],
             }),
             "opencode-go" => Some(Provider {
                 name: name.into(),
@@ -57,6 +73,18 @@ impl Provider {
                 api_key: None,
                 api_key_env: Some("OPENCODE_GO_API_KEY".into()),
                 default_model: "deepseek-v4-flash".into(),
+                request_headers: Vec::new(),
+            }),
+            "grok" => Some(Provider {
+                name: name.into(),
+                // Subscription proxy (not api.x.ai). Override with
+                // RAVEN_GROK_PROXY_BASE_URL / GROK_CLI_CHAT_PROXY_BASE_URL or
+                // `[providers.grok] base_url`.
+                base_url: grok_auth::proxy_base_url(),
+                api_key: None,
+                api_key_env: None,
+                default_model: "grok-4.7".into(),
+                request_headers: grok_auth::client_headers(),
             }),
             _ => None,
         }
@@ -76,28 +104,83 @@ impl Provider {
             // Explicit arm required: the conventional fallback would produce
             // OPENCODE-GO_API_KEY (invalid env var — hyphen in the name).
             "opencode-go" => Cow::Borrowed("OPENCODE_GO_API_KEY"),
+            // Session auth via ~/.grok/auth.json — no conventional env key.
+            "grok" => Cow::Borrowed(""),
             other => Cow::Owned(format!("{}_API_KEY", other.to_uppercase())),
         }
     }
 
-    /// Fill `api_key` from env if unset.
+    /// Fill `api_key` (and grok session headers) when unset.
     ///
     /// Precedence (first non-empty wins):
     /// 1. Config-file `api_key` already on `self` — **not** overridden by env
     /// 2. `RAVEN_API_KEY` (universal override)
-    /// 3. Provider-scoped var (`api_key_env` or built-in / conventional name)
+    /// 3. For `grok`: SpaceXAI session from `~/.grok/auth.json` (refreshed)
+    /// 4. Provider-scoped var (`api_key_env` or built-in / conventional name)
     ///
     /// Empty/whitespace env values are treated as absent — an empty
     /// `RAVEN_API_KEY` must NOT shadow the provider-scoped var. Prefer env vars
     /// over a committed config `api_key` so secrets stay out of the file; once
     /// a literal `api_key` is set in TOML it wins for that provider.
     pub fn resolve_key(mut self) -> Provider {
+        if self.name == "grok" && self.request_headers.is_empty() {
+            self.request_headers = grok_auth::client_headers();
+        }
         if self.api_key.is_none() {
             let universal = std::env::var("RAVEN_API_KEY").ok();
-            let scoped = std::env::var(self.key_env_var().as_ref()).ok();
+            let scoped = {
+                let env = self.key_env_var();
+                if env.is_empty() {
+                    None
+                } else {
+                    std::env::var(env.as_ref()).ok()
+                }
+            };
             self.api_key = Self::pick_key(universal, scoped);
         }
+        if self.api_key.is_none() && self.name == "grok" {
+            match grok_auth::resolve_session() {
+                Ok(session) => {
+                    self.api_key = Some(session.access_token);
+                    if self.request_headers.is_empty() {
+                        self.request_headers = session.request_headers;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("{e}");
+                }
+            }
+        }
         self
+    }
+
+    /// Authorization + provider-specific headers as `(name, value)` pairs.
+    pub fn auth_headers(&self) -> Vec<(String, String)> {
+        let mut headers = Vec::with_capacity(1 + self.request_headers.len());
+        if let Some(key) = &self.api_key {
+            headers.push(("Authorization".into(), format!("Bearer {key}")));
+        }
+        headers.extend(self.request_headers.iter().cloned());
+        headers
+    }
+
+    /// Attach Bearer auth and any provider-specific request headers (async client).
+    pub fn apply_auth(&self, mut req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        for (name, value) in self.auth_headers() {
+            req = req.header(name, value);
+        }
+        req
+    }
+
+    /// Attach Bearer auth and any provider-specific request headers (blocking client).
+    pub fn apply_auth_blocking(
+        &self,
+        mut req: reqwest::blocking::RequestBuilder,
+    ) -> reqwest::blocking::RequestBuilder {
+        for (name, value) in self.auth_headers() {
+            req = req.header(name, value);
+        }
+        req
     }
 
     /// Pure key-selection helper (no env access) so it is trivially testable
@@ -138,7 +221,7 @@ impl ProviderConfig {
 
 /// Resolve the active provider from an explicit CLI name, the config file,
 /// and env. Precedence: `explicit` (CLI) > `RAVEN_PROVIDER` env >
-/// `cfg.provider` > built-in default `ollama`.
+/// `cfg.provider` > built-in default `grok`.
 ///
 /// The named provider is looked up in `cfg.providers` first, then the
 /// built-in presets. Unknown names fall back to the built-in `ollama` with a
@@ -147,27 +230,33 @@ pub fn resolve_provider(cfg: &ConfigFile, explicit: Option<String>) -> Provider 
     let name = explicit
         .or_else(|| std::env::var("RAVEN_PROVIDER").ok())
         .or_else(|| cfg.provider.clone())
-        .unwrap_or_else(|| "ollama".into());
+        .unwrap_or_else(|| "grok".into());
 
     let p = match cfg.providers.get(&name) {
-        Some(pc) => Provider {
-            name: name.clone(),
-            base_url: pc.base_url.clone().unwrap_or_else(|| {
-                Provider::builtin(&name)
-                    .map(|b| b.base_url)
-                    .unwrap_or_else(|| "http://localhost:11434/v1".into())
-            }),
-            api_key: pc.api_key.clone(),
-            api_key_env: pc
-                .api_key_env
-                .clone()
-                .or_else(|| Provider::builtin(&name).and_then(|b| b.api_key_env)),
-            default_model: pc.default_model.clone().unwrap_or_else(|| {
-                Provider::builtin(&name)
-                    .map(|b| b.default_model)
-                    .unwrap_or_else(|| "glm-5.3-flash:cloud".into())
-            }),
-        },
+        Some(pc) => {
+            let builtin = Provider::builtin(&name);
+            Provider {
+                name: name.clone(),
+                base_url: pc.base_url.clone().unwrap_or_else(|| {
+                    builtin
+                        .as_ref()
+                        .map(|b| b.base_url.clone())
+                        .unwrap_or_else(|| "http://localhost:11434/v1".into())
+                }),
+                api_key: pc.api_key.clone(),
+                api_key_env: pc
+                    .api_key_env
+                    .clone()
+                    .or_else(|| builtin.as_ref().and_then(|b| b.api_key_env.clone())),
+                default_model: pc.default_model.clone().unwrap_or_else(|| {
+                    builtin
+                        .as_ref()
+                        .map(|b| b.default_model.clone())
+                        .unwrap_or_else(|| "glm-5.3-flash:cloud".into())
+                }),
+                request_headers: builtin.map(|b| b.request_headers).unwrap_or_default(),
+            }
+        }
         None => match Provider::builtin(&name) {
             Some(b) => b,
             None => {
@@ -184,7 +273,7 @@ pub fn resolve_provider(cfg: &ConfigFile, explicit: Option<String>) -> Provider 
 /// Built-in presets are always included; config-declared names are merged in.
 pub fn known_provider_names(cfg: &ConfigFile) -> Vec<String> {
     let mut names: Vec<String> = cfg.providers.keys().cloned().collect();
-    for builtin in ["ollama", "openrouter", "opencode-go"] {
+    for builtin in ["ollama", "openrouter", "opencode-go", "grok"] {
         if !names.iter().any(|n| n == builtin) {
             names.push(builtin.to_string());
         }
@@ -211,10 +300,16 @@ mod tests {
         assert_eq!(ollama.base_url, "http://localhost:11434/v1");
         assert_eq!(ollama.default_model, "glm-5.3-flash:cloud");
         assert!(ollama.api_key.is_none());
+        assert!(ollama.request_headers.is_empty());
 
         let or = Provider::builtin("openrouter").expect("openrouter builtin");
         assert_eq!(or.base_url, "https://openrouter.ai/api/v1");
         assert_eq!(or.default_model, "x-ai/grok-4.5");
+        assert!(or
+            .request_headers
+            .iter()
+            .any(|(k, v)| k == "HTTP-Referer" && v == "https://github.com/raythurman2386/raven"));
+        assert!(or.request_headers.iter().any(|(k, _)| k == "X-Title"));
         assert!(
             or.api_key.is_none(),
             "key comes from env/config, not the preset"
@@ -228,6 +323,17 @@ mod tests {
             go.api_key.is_none(),
             "key comes from env/config, not the preset"
         );
+        assert!(go.request_headers.is_empty());
+
+        let grok = Provider::builtin("grok").expect("grok builtin");
+        assert_eq!(grok.base_url, grok_auth::DEFAULT_PROXY_BASE_URL);
+        assert_eq!(grok.default_model, "grok-4.7");
+        assert!(grok.api_key_env.is_none());
+        assert!(grok.api_key.is_none());
+        assert!(grok
+            .request_headers
+            .iter()
+            .any(|(k, _)| k == "X-XAI-Token-Auth"));
     }
 
     #[test]
@@ -277,8 +383,9 @@ mod tests {
     fn resolve_provider_falls_back_to_builtin_default() {
         let cfg = ConfigFile::default();
         let p = resolve_provider(&cfg, None);
-        assert_eq!(p.name, "ollama");
-        assert_eq!(p.base_url, "http://localhost:11434/v1");
+        assert_eq!(p.name, "grok");
+        assert_eq!(p.base_url, grok_auth::DEFAULT_PROXY_BASE_URL);
+        assert_eq!(p.default_model, "grok-4.7");
     }
 
     #[test]
@@ -314,10 +421,12 @@ mod tests {
         assert!(names.contains(&"ollama".into()));
         assert!(names.contains(&"openrouter".into()));
         assert!(names.contains(&"opencode-go".into()));
+        assert!(names.contains(&"grok".into()));
         assert!(names.contains(&"acme".into()));
         assert!(is_known_provider(&cfg, "acme"));
         assert!(is_known_provider(&cfg, "ollama"));
         assert!(is_known_provider(&cfg, "opencode-go"));
+        assert!(is_known_provider(&cfg, "grok"));
         assert!(!is_known_provider(&cfg, "nope"));
     }
 
@@ -405,6 +514,7 @@ mod tests {
             api_key: None,
             api_key_env: None,
             default_model: "llama-3.3-70b-versatile".into(),
+            request_headers: Vec::new(),
         };
         assert_eq!(p.key_env_var().as_ref(), "GROQ_API_KEY");
     }
@@ -427,6 +537,7 @@ mod tests {
             api_key: None,
             api_key_env: Some("CUSTOM_API_KEY".into()),
             default_model: "m".into(),
+            request_headers: Vec::new(),
         };
         // No env var set → no key (proves it reads CUSTOM_API_KEY, not a
         // hardcoded one). The pick_key tests cover the selection logic.
