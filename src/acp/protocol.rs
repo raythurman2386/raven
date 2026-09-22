@@ -120,7 +120,7 @@ pub fn auth_methods() -> Value {
     json!([{
         "id": AUTH_METHOD_ID,
         "name": "Agent auth",
-        "description": "Authenticates with the provider credentials configured in-process (OLLAMA_API_KEY / RAVEN_API_KEY)",
+        "description": "Uses provider credentials already on this machine (Grok session from `raven login`, or a provider API key)",
         "type": "agent"
     }])
 }

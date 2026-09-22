@@ -232,6 +232,9 @@ pub async fn run_onboarding() -> anyhow::Result<ConfigFile> {
         default_model: String::new(),
         request_headers: builtin.map(|p| p.request_headers).unwrap_or_default(),
     };
+    // Fill the Grok session (or a provider API key) before listing models,
+    // or the proxy answers 401 and the wizard falls back to the curated list.
+    provider = provider.resolve_key();
     let live = crate::tui::fetch_live_provider_models(&provider);
     let candidates = if live.is_empty() {
         fallback_models(&provider_name)

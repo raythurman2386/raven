@@ -164,6 +164,57 @@ impl Provider {
         headers
     }
 
+    /// Why a Grok session cannot be used yet, if the provider is `grok` and no
+    /// token was resolved. ACP and headless callers surface this instead of a
+    /// raw 401 from the chat proxy.
+    pub fn grok_login_required(&self) -> Option<String> {
+        if self.name != "grok" {
+            return None;
+        }
+        let missing = self
+            .api_key
+            .as_deref()
+            .map(str::trim)
+            .is_none_or(str::is_empty);
+        if !missing {
+            return None;
+        }
+        Some(format!(
+            "No Grok session in {}. Run `raven login` (or `grok login`), then start raven again.",
+            super::grok_auth::auth_path().display()
+        ))
+    }
+
+    /// Re-read `~/.grok/auth.json` when this provider is grok and has no token.
+    ///
+    /// A long-lived ACP process starts before `raven login`. The next prompt
+    /// picks up the new session without restarting Zed's agent.
+    pub fn refresh_grok_session(&mut self) -> bool {
+        if self.name != "grok" {
+            return self
+                .api_key
+                .as_deref()
+                .is_some_and(|k| !k.trim().is_empty());
+        }
+        if self
+            .api_key
+            .as_deref()
+            .is_some_and(|k| !k.trim().is_empty())
+        {
+            return true;
+        }
+        match super::grok_auth::resolve_session() {
+            Ok(session) => {
+                self.api_key = Some(session.access_token);
+                if self.request_headers.is_empty() {
+                    self.request_headers = session.request_headers;
+                }
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
     /// Attach Bearer auth and any provider-specific request headers (async client).
     pub fn apply_auth(&self, mut req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         for (name, value) in self.auth_headers() {
@@ -334,6 +385,8 @@ mod tests {
             .request_headers
             .iter()
             .any(|(k, _)| k == "X-XAI-Token-Auth"));
+        assert!(grok.grok_login_required().unwrap().contains("raven login"));
+        assert!(ollama.grok_login_required().is_none());
     }
 
     #[test]

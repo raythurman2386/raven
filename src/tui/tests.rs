@@ -553,6 +553,8 @@ fn dummy_state() -> TuiState {
         last_click: None,
         copy_status: None,
         theme: Theme::RAVENWOOD,
+        follow_omarchy: false,
+        omarchy_mtime: None,
         prompt_history: Vec::new(),
         hist_idx: 0,
         last_turn: None,

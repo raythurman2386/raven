@@ -26,6 +26,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and the block ends at the next unindented key. Previously such skills
   loaded with an empty description, breaking discovery and search. (#184)
 
+## [0.6.7] - 2026-09-21
+
+### Added
+
+- **Omarchy theme follow** — the TUI default `theme = "omarchy"` reads the
+  active Omarchy `colors.toml` and reloads it when the desktop theme changes.
+  `/theme omarchy` turns follow back on; a named preset stays fixed.
+- **ACP without a Grok session** — a Zed thread started before `raven login`
+  stays connected. The first prompt explains how to sign in, and the next
+  prompt re-reads `~/.grok/auth.json` so the agent process does not have to
+  restart. Onboarding also attaches the session before listing models.
+
 ## [0.6.6] - 2026-09-21
 
 ### Added
