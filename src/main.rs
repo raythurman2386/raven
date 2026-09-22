@@ -359,6 +359,7 @@ async fn main() -> Result<()> {
     let context_window = if cli.context_window.is_none()
         && env_context_window().is_none()
         && cfg.context_window.is_none()
+        && provider.grok_login_required().is_none()
     {
         fetch_context_window(&provider, &model).await
     } else {
@@ -434,7 +435,7 @@ async fn main() -> Result<()> {
         theme: cli
             .theme
             .or(cfg.theme)
-            .unwrap_or_else(|| "ravenwood".to_string()),
+            .unwrap_or_else(|| "omarchy".to_string()),
         searxng_url,
         searxng_engines,
         sandbox_extra_rw: Vec::new(),
@@ -565,11 +566,8 @@ async fn main() -> Result<()> {
         eprintln!("No task provided. Pass a prompt or run without args for TUI.");
         std::process::exit(1);
     }
-    if settings.provider.name == "grok" && settings.api_key().is_none() {
-        anyhow::bail!(
-            "No Grok session in {}. Run `raven login` (or `grok login`), then start raven again.",
-            raven::config::grok_auth_path().display()
-        );
+    if let Some(msg) = settings.provider.grok_login_required() {
+        anyhow::bail!(msg);
     }
 
     // Default to TUI when no task given

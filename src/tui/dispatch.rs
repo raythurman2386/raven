@@ -418,18 +418,34 @@ pub(super) async fn dispatch_slash_command(
         }
         "theme" => {
             let name = pc.args.trim();
+            let current = if state.follow_omarchy {
+                "omarchy"
+            } else {
+                theme_name(state.theme)
+            };
             if name.is_empty() {
-                // List available themes.
                 let names: Vec<&str> = Theme::all().iter().map(|(n, _)| *n).collect();
                 state.push_system(format!(
-                    "themes: {}  (current: {})  ·  /theme <name>",
-                    names.join(", "),
-                    theme_name(state.theme)
+                    "themes: omarchy, {}  (current: {current})  ·  /theme <name>",
+                    names.join(", ")
                 ));
                 state.log_dirty = true;
+            } else if name.eq_ignore_ascii_case("omarchy") {
+                state.follow_omarchy = true;
+                if let Some((theme, mtime)) = Theme::read_omarchy_theme() {
+                    state.theme = theme;
+                    state.omarchy_mtime = Some(mtime);
+                    state.push_system("theme → omarchy (follows the desktop theme)");
+                } else {
+                    state.theme = Theme::default_theme();
+                    state.push_system(
+                        "theme → omarchy, but no desktop palette was found; using ravenwood until it appears",
+                    );
+                }
+                state.log_dirty = true;
             } else if let Some(t) = Theme::by_name(name) {
+                state.follow_omarchy = false;
                 state.theme = t;
-                // Force a full re-render so the whole scrollback recolors.
                 state.push_system(format!("theme → {}", theme_name(t)));
                 state.log_dirty = true;
             } else {

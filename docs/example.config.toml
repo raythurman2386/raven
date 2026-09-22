@@ -62,7 +62,7 @@
 
 # TUI color theme: ravenwood, nord, dracula, solarized-dark.
 # Overridden by: --theme flag.
-#theme = "ravenwood"
+#theme = "omarchy"
 
 # --- web_search backend -----------------------------------------------------
 

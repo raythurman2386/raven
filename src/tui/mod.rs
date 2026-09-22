@@ -173,7 +173,11 @@ pub fn completion_arg_candidates(
     cmd: &str,
 ) -> Vec<String> {
     match cmd {
-        "theme" => Theme::all().iter().map(|(n, _)| n.to_string()).collect(),
+        "theme" => {
+            let mut names = vec!["omarchy".to_string()];
+            names.extend(Theme::all().iter().map(|(n, _)| n.to_string()));
+            names
+        }
         "effort" => ["none", "minimal", "low", "medium", "high", "xhigh"]
             .into_iter()
             .map(str::to_string)
@@ -304,6 +308,10 @@ struct TuiState {
     last_click: Option<(u64, DisplayPos)>,
     copy_status: Option<(u64, String)>,
     theme: Theme,
+    /// When set, `theme` is the live Omarchy palette and is reloaded when
+    /// `~/.local/state/omarchy/current/theme/colors.toml` changes.
+    follow_omarchy: bool,
+    omarchy_mtime: Option<std::time::SystemTime>,
     /// Set when the user dismissed the completion popup with Esc. While set,
     /// further typing does not reopen it; deleting back below the dismissal
     /// point does. `None` means the popup may open normally.
@@ -329,6 +337,7 @@ struct TuiState {
 
 impl TuiState {
     fn new(settings: &Settings, app_name: &str, compact_at: usize) -> Self {
+        let (theme, follow_omarchy, omarchy_mtime) = initial_theme(&settings.theme);
         Self {
             blocks: vec![
                 BlockKind::System(SystemBlock::new(format!(
@@ -393,7 +402,9 @@ impl TuiState {
             selection: None,
             last_click: None,
             copy_status: None,
-            theme: Theme::by_name(&settings.theme).unwrap_or_else(Theme::default_theme),
+            theme,
+            follow_omarchy,
+            omarchy_mtime,
             completion_dismissed_at: None,
             quit_armed: None,
             prompt_history: Vec::new(),
@@ -626,6 +637,20 @@ pub async fn run_tui(
         // waiting for the DRAW_INTERVAL throttle).
         let dirty =
             state.log_dirty || state.stream_patch || state.messages_dirty || state.input_dirty;
+
+        if state.follow_omarchy {
+            if let Some(mtime) = crate::tui::theme::omarchy_colors_mtime() {
+                if state.omarchy_mtime != Some(mtime) {
+                    if let Some((theme, mtime)) = Theme::read_omarchy_theme() {
+                        state.omarchy_mtime = Some(mtime);
+                        if state.theme != theme {
+                            state.theme = theme;
+                            state.log_dirty = true;
+                        }
+                    }
+                }
+            }
+        }
 
         if state.log_dirty {
             let (rendered, tail) = render_blocks(&state.blocks, state.tick, state.theme);
@@ -2749,6 +2774,22 @@ fn spawn_agent_turn(
         agent.run(&prompt, tx).await?;
         Ok(agent.messages)
     })
+}
+
+/// Resolve the startup theme. `omarchy` (the default) tracks the desktop
+/// palette; a named preset is static.
+fn initial_theme(name: &str) -> (Theme, bool, Option<std::time::SystemTime>) {
+    if name.eq_ignore_ascii_case("omarchy") || name.eq_ignore_ascii_case("default") {
+        if let Some((theme, mtime)) = Theme::read_omarchy_theme() {
+            return (theme, true, Some(mtime));
+        }
+        return (Theme::default_theme(), true, None);
+    }
+    (
+        Theme::by_name(name).unwrap_or_else(Theme::default_theme),
+        false,
+        None,
+    )
 }
 
 /// The canonical name of a theme, for display in `/theme` output.

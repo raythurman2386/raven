@@ -138,6 +138,120 @@ impl Theme {
     pub const fn default_theme() -> Theme {
         Theme::RAVENWOOD
     }
+
+    /// Palette from an Omarchy `colors.toml` body. Missing required roles
+    /// return `None` so the caller keeps the previous theme.
+    pub fn from_omarchy_toml(text: &str) -> Option<Theme> {
+        let colors: OmarchyColors = toml::from_str(text).ok()?;
+        let fg = parse_hex(colors.foreground.as_deref()?)?;
+        let dim = parse_hex(
+            colors
+                .dark_foreground
+                .as_deref()
+                .or(colors.muted.as_deref())?,
+        )?;
+        let accent = parse_hex(colors.accent.as_deref().or(colors.blue.as_deref())?)?;
+        let user = parse_hex(colors.green.as_deref().unwrap_or("#4ade80"))?;
+        let tool = parse_hex(colors.orange.as_deref().or(colors.yellow.as_deref())?)?;
+        let system = parse_hex(colors.muted.as_deref().unwrap_or("#7f897d"))?;
+        let error = parse_hex(colors.red.as_deref().unwrap_or("#e67e80"))?;
+        let plan = parse_hex(colors.magenta.as_deref().or(colors.accent.as_deref())?)?;
+        let border = parse_hex(
+            colors
+                .lighter_background
+                .as_deref()
+                .or(colors.selection.as_deref())?,
+        )?;
+        let status_bg = parse_hex(
+            colors
+                .dark_background
+                .as_deref()
+                .or(colors.background.as_deref())?,
+        )?;
+        let select_bg = parse_hex(
+            colors
+                .selection
+                .as_deref()
+                .or(colors.lighter_background.as_deref())?,
+        )?;
+        let tool_rgb = rgb_of(tool)?;
+        let dim_rgb = rgb_of(dim)?;
+        Some(Theme {
+            fg,
+            dim,
+            accent,
+            user,
+            tool,
+            system,
+            error,
+            plan,
+            border,
+            status_bg,
+            select_bg,
+            tool_rgb,
+            dim_rgb,
+        })
+    }
+
+    /// Live Omarchy palette plus the colors file mtime, if Omarchy is installed.
+    pub fn read_omarchy_theme() -> Option<(Theme, std::time::SystemTime)> {
+        let path = omarchy_colors_path()?;
+        let mtime = omarchy_colors_mtime_at(&path)?;
+        let text = std::fs::read_to_string(&path).ok()?;
+        Some((Theme::from_omarchy_toml(&text)?, mtime))
+    }
+}
+
+/// mtime of the active Omarchy `colors.toml`, without reading the file.
+pub fn omarchy_colors_mtime() -> Option<std::time::SystemTime> {
+    omarchy_colors_mtime_at(&omarchy_colors_path()?)
+}
+
+fn omarchy_colors_mtime_at(path: &std::path::Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).ok()?.modified().ok()
+}
+
+/// `~/.local/state/omarchy/current/theme/colors.toml`.
+pub fn omarchy_colors_path() -> Option<std::path::PathBuf> {
+    Some(dirs::home_dir()?.join(".local/state/omarchy/current/theme/colors.toml"))
+}
+
+#[derive(serde::Deserialize)]
+struct OmarchyColors {
+    accent: Option<String>,
+    selection: Option<String>,
+    muted: Option<String>,
+    background: Option<String>,
+    dark_background: Option<String>,
+    lighter_background: Option<String>,
+    foreground: Option<String>,
+    dark_foreground: Option<String>,
+    red: Option<String>,
+    orange: Option<String>,
+    green: Option<String>,
+    blue: Option<String>,
+    magenta: Option<String>,
+    yellow: Option<String>,
+}
+
+fn parse_hex(raw: &str) -> Option<Color> {
+    let s = raw.trim().trim_start_matches('#');
+    if s.len() != 6 {
+        return None;
+    }
+    let n = u32::from_str_radix(s, 16).ok()?;
+    Some(Color::Rgb(
+        ((n >> 16) & 0xff) as u8,
+        ((n >> 8) & 0xff) as u8,
+        (n & 0xff) as u8,
+    ))
+}
+
+fn rgb_of(color: Color) -> Option<(u8, u8, u8)> {
+    match color {
+        Color::Rgb(r, g, b) => Some((r, g, b)),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -178,5 +292,34 @@ mod tests {
     #[test]
     fn default_is_ravenwood() {
         assert_eq!(Theme::default_theme(), Theme::RAVENWOOD);
+    }
+
+    #[test]
+    fn omarchy_colors_toml_maps_roles() {
+        let theme = Theme::from_omarchy_toml(
+            r##"
+            foreground = "#cdd6f4"
+            dark_foreground = "#6c7086"
+            accent = "#89b4fa"
+            green = "#a6e3a1"
+            orange = "#f6b6ab"
+            muted = "#585b70"
+            red = "#f38ba8"
+            magenta = "#f5c2e7"
+            lighter_background = "#313244"
+            dark_background = "#161622"
+            selection = "#45475a"
+            "##,
+        )
+        .expect("palette");
+        assert_eq!(theme.fg, Color::Rgb(0xcd, 0xd6, 0xf4));
+        assert_eq!(theme.accent, Color::Rgb(0x89, 0xb4, 0xfa));
+        assert_eq!(theme.error, Color::Rgb(0xf3, 0x8b, 0xa8));
+        assert_eq!(theme.status_bg, Color::Rgb(0x16, 0x16, 0x22));
+    }
+
+    #[test]
+    fn omarchy_colors_toml_rejects_incomplete_palette() {
+        assert!(Theme::from_omarchy_toml("foreground = \"#ffffff\"\n").is_none());
     }
 }

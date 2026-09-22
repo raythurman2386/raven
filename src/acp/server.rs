@@ -912,6 +912,26 @@ async fn run_prompt_inner(
         )
     };
 
+    let mut settings = settings;
+    if settings.provider.name == "grok" && !settings.provider.refresh_grok_session() {
+        let msg = format!(
+            "No Grok session in {}. Run `raven login` in a terminal, then send this message again.",
+            crate::config::grok_auth_path().display()
+        );
+        let _ = writer.lock().await.write_frame(&session_update(
+            &sid,
+            json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": msg}}),
+        ));
+        return Ok(StopReason::Refusal);
+    }
+    {
+        let mut srv = server.lock().await;
+        if let Some(sess) = srv.sessions.get_mut(&sid) {
+            sess.settings.provider.api_key = settings.provider.api_key.clone();
+            sess.settings.provider.request_headers = settings.provider.request_headers.clone();
+        }
+    }
+
     let (tx, mut rx) = mpsc::channel::<AgentEvent>(128);
     let prompt_text = text.clone();
     let mcp_for_agent = mcp.clone();

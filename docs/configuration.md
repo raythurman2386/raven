@@ -217,7 +217,7 @@ Layered TOML config, loaded from the workspace first (higher priority), then the
 | `temperature` | `0.2` | Sampling temperature |
 | `no_stream` | `false` | Disable streaming (single request per turn) |
 | `verify` | `true` | Enforce verification gate (agent must run tests after edits) |
-| `theme` | `ravenwood` | TUI color theme: `ravenwood`, `nord`, `dracula`, `solarized-dark` |
+| `theme` | `omarchy` | TUI color theme. `omarchy` follows `~/.local/state/omarchy/current/theme/colors.toml` and live-updates. Presets: `ravenwood`, `nord`, `dracula`, `solarized-dark` |
 | `searxng_url` | _(unset)_ | Optional self-hosted SearXNG base URL for `web_search` (e.g. `http://127.0.0.1:8080`) |
 | `searxng_engines` | _(unset)_ | Optional SearXNG engine list (e.g. `["google", "bing"]`) |
 
@@ -236,7 +236,7 @@ mode = "plan"
 temperature = 0.2
 no_stream = false
 verify = true
-theme = "ravenwood"
+theme = "omarchy"
 ```
 
 CLI flags still win over config file values; env vars take precedence over the config file but lose to explicit CLI flags.

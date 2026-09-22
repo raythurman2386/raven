@@ -22,8 +22,10 @@ discovers ACP agents on its own — point it at the same `raven --acp` command.
 - **Zed 1.14+** (external agents require a recent Zed)
 - **Raven** installed and on your `PATH` (see the root [README](../README.md#install));
   verify with `raven --version` → should print `raven 0.5.17` or newer.
-- A reachable model endpoint for Raven (local Ollama, Ollama Cloud, or
-  OpenRouter — whatever your `~/.raven/config.toml` already uses).
+- A reachable model endpoint. The default provider is `grok` (`grok-4.7`).
+  On a new machine run `raven login` once before the first Zed thread.
+  Zed's ACP process is not a terminal, so the first-run wizard does not run
+  there. Ollama and OpenRouter still work if you pin `--provider`.
 
 ## 1. Add Raven as a custom agent
 
@@ -36,7 +38,7 @@ Zed registers external agents in `~/.config/zed/settings.json` under the
     "Raven": {
       "type": "custom",
       "command": "raven",
-      "args": ["--acp", "--provider", "ollama", "--model", "deepseek-v4-flash:cloud"],
+      "args": ["--acp"],
       "env": {}
     }
   }
