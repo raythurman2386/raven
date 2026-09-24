@@ -393,6 +393,7 @@ impl Agent {
                 // two edits to the same file apply in call order instead of
                 // racing (issue #111). Recording still goes through slots.
                 let dispatch_name = name.clone();
+                let tool_offload = self.settings.efficiency.tool_offload;
                 let dispatch_result: Result<String, ToolError> =
                     tokio::task::spawn_blocking(move || {
                         dispatch(
@@ -401,6 +402,7 @@ impl Agent {
                             &dispatch_name,
                             &args,
                             read_only,
+                            tool_offload,
                         )
                     })
                     .await
@@ -418,11 +420,18 @@ impl Agent {
                         .with_verification(is_verification),
                 );
             } else {
+                let tool_offload = self.settings.efficiency.tool_offload;
                 handles.push((
                     idx,
                     tokio::task::spawn_blocking(move || {
-                        let result =
-                            dispatch(&sandbox, state_dir.as_deref(), &name, &args, read_only);
+                        let result = dispatch(
+                            &sandbox,
+                            state_dir.as_deref(),
+                            &name,
+                            &args,
+                            read_only,
+                            tool_offload,
+                        );
                         (id, name, result, cache_key, is_verification)
                     }),
                 ));
