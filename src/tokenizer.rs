@@ -267,28 +267,30 @@ pub fn api_equivalent_usd(model: &str, usage: &TokenUsage) -> Option<f64> {
     )
 }
 
+/// Public list-price table (USD / million tokens).
+///
+/// Values track xAI's published text API rates for named Grok models. Update
+/// this table when list prices change — this estimate is not fetched from the
+/// network. Tuple order: `(uncached input, cached input, output)`.
+/// The `long` row applies when `prompt_tokens >= GROK_LONG_CONTEXT_TOKENS`.
+const GROK_LONG_CONTEXT_TOKENS: u64 = 200_000;
+const GROK_47_46_SHORT: (f64, f64, f64) = (2.0, 0.5, 6.0);
+const GROK_47_46_LONG: (f64, f64, f64) = (4.0, 1.0, 12.0);
+const GROK_45_SHORT: (f64, f64, f64) = (2.0, 0.3, 6.0);
+const GROK_45_LONG: (f64, f64, f64) = (4.0, 0.6, 12.0);
+const GROK_BUILD_SHORT: (f64, f64, f64) = (1.0, 0.2, 2.0);
+const GROK_BUILD_LONG: (f64, f64, f64) = (2.0, 0.4, 4.0);
+
 /// `(uncached input, cached input, output)` USD per million tokens.
 fn grok_rates_per_million(model: &str, prompt_tokens: u64) -> Option<(f64, f64, f64)> {
     let m = model.to_ascii_lowercase();
-    let long = prompt_tokens >= 200_000;
+    let long = prompt_tokens >= GROK_LONG_CONTEXT_TOKENS;
     if m.contains("grok-4.7") || m.contains("grok-4.6") {
-        Some(if long {
-            (4.0, 1.0, 12.0)
-        } else {
-            (2.0, 0.5, 6.0)
-        })
+        Some(if long { GROK_47_46_LONG } else { GROK_47_46_SHORT })
     } else if m.contains("grok-4.5") {
-        Some(if long {
-            (4.0, 0.6, 12.0)
-        } else {
-            (2.0, 0.3, 6.0)
-        })
+        Some(if long { GROK_45_LONG } else { GROK_45_SHORT })
     } else if m.contains("grok-build") {
-        Some(if long {
-            (2.0, 0.4, 4.0)
-        } else {
-            (1.0, 0.2, 2.0)
-        })
+        Some(if long { GROK_BUILD_LONG } else { GROK_BUILD_SHORT })
     } else {
         None
     }

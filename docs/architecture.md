@@ -135,6 +135,12 @@ and `compute_reminders` re-anchors the model on the goal + next pending task
 at iteration 4 and then every 8th iteration (12, 20, …). Writes are atomic
 (unique temp name + rename).
 
+Large tool results may also land under `.raven/tool-output/` (see
+`Sandbox::present_output`), and compacted middle turns under `.raven/compact/`.
+Those spill files can retain sensitive tool output longer than an in-memory
+truncate would; treat the workspace `.raven/` tree as sensitive (it is already
+gitignored).
+
 ---
 
 ## Sub-agents
