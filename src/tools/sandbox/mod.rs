@@ -387,13 +387,18 @@ impl Sandbox {
         let bytes = body.len();
         let lines = body.lines().count();
         let tail = output_tail(&body, 40, 1500);
+        // The status line is what the verify gate and the model use
+        // (`exit=0`, `killed by signal`). It sits at the front, so a tail-only
+        // stub would hide a passing run and the network-block note.
+        let preamble = status_preamble(&body);
         if std::fs::create_dir_all(&dir).is_ok() && std::fs::write(&path, &body).is_ok() {
             let shown = path
                 .strip_prefix(&self.workspace)
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|_| path.display().to_string());
             format!(
-                "Full output saved to {shown} ({bytes} bytes, {lines} lines).\n\
+                "{preamble}\
+                 Full output saved to {shown} ({bytes} bytes, {lines} lines).\n\
                  Use read_file or grep on that path for any part not shown.\n\
                  Tail:\n{tail}"
             )
@@ -405,6 +410,24 @@ impl Sandbox {
             )
         }
     }
+}
+
+/// Leading status lines that must survive a spill: the first line, plus a
+/// following `exit=` / signal header and the sandbox network-block note.
+fn status_preamble(body: &str) -> String {
+    let mut out = String::new();
+    for (i, line) in body.lines().take(6).enumerate() {
+        let keep = i == 0
+            || line.contains("exit=")
+            || line.contains("killed by signal")
+            || line.starts_with("This sandbox blocks network access");
+        if !keep {
+            break;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
 }
 
 fn output_tail(body: &str, max_lines: usize, max_chars: usize) -> String {

@@ -990,6 +990,7 @@ impl Agent {
                 self.settings.compact_threshold,
                 Some(&self.calibration),
                 Some(&transcript_dir),
+                Some(self.sandbox.workspace.as_path()),
                 move |middle| {
                     Box::pin(summarize_request(
                         client.clone(),
@@ -1402,9 +1403,12 @@ impl Agent {
                     // 400 that blames an optional field: strip that field and
                     // retry. Read the body once so a stream_options rejection
                     // still falls through when reasoning_effort is also set.
+                    // Replayed reasoning_content is on messages, not a top-level
+                    // key, so it has its own presence check.
                     if status == 400
                         && (body.get("reasoning_effort").is_some()
-                            || body.get("stream_options").is_some())
+                            || body.get("stream_options").is_some()
+                            || body_has_reasoning_content(body))
                     {
                         let text = resp.text().await.unwrap_or_default();
                         let (dropped_effort, dropped_usage, dropped_reasoning) =
@@ -1430,6 +1434,16 @@ impl Agent {
                                 "provider rejected reasoning_content (400); \
                                  retrying without replayed reasoning"
                             );
+                            // A 400 that keeps naming the field after it is gone
+                            // must not spin. This retry counts toward the cap.
+                            if attempt + 1 >= max_retries {
+                                return Err(AgentError::HttpError {
+                                    provider: self.settings.provider.name.clone(),
+                                    status,
+                                    body: cap_http_body(text),
+                                });
+                            }
+                            attempt += 1;
                         }
                         if dropped_effort || dropped_usage || dropped_reasoning {
                             continue;
@@ -1501,8 +1515,9 @@ impl Agent {
 
 /// Drop optional request fields the provider's 400 body actually names.
 ///
-/// Returns `(dropped_reasoning_effort, dropped_stream_options)`. A complaint
-/// about one field must not hide the other.
+/// Returns `(dropped_reasoning_effort, dropped_stream_options, dropped_reasoning_content)`.
+/// `dropped_reasoning_content` is true only when a `reasoning_content` field
+/// was removed. A complaint about one field must not hide the other.
 pub(crate) fn strip_rejected_optional_fields(
     body: &mut Value,
     error_text: &str,
@@ -1522,8 +1537,7 @@ pub(crate) fn strip_rejected_optional_fields(
         }
         dropped_effort = true;
     }
-    if lower.contains("reasoning_content") {
-        strip_reasoning_fields(body);
+    if lower.contains("reasoning_content") && strip_reasoning_fields(body) {
         dropped_reasoning = true;
     }
     if body.get("stream_options").is_some() && error_text.contains("stream_options") {
@@ -1570,15 +1584,26 @@ fn completion_body(
     Value::Object(body)
 }
 
-fn strip_reasoning_fields(body: &mut Value) {
+fn body_has_reasoning_content(body: &Value) -> bool {
+    body.get("messages")
+        .and_then(|m| m.as_array())
+        .is_some_and(|msgs| msgs.iter().any(|m| m.get("reasoning_content").is_some()))
+}
+
+/// Remove replayed `reasoning_content` fields. Returns whether any were present.
+fn strip_reasoning_fields(body: &mut Value) -> bool {
     let Some(messages) = body.get_mut("messages").and_then(|m| m.as_array_mut()) else {
-        return;
+        return false;
     };
+    let mut removed = false;
     for msg in messages {
         if let Some(obj) = msg.as_object_mut() {
-            obj.remove("reasoning_content");
+            if obj.remove("reasoning_content").is_some() {
+                removed = true;
+            }
         }
     }
+    removed
 }
 
 fn log_prompt_sections(messages: &[ChatMessage], tools: &Value) {
@@ -1748,6 +1773,18 @@ mod wire_format_tests {
         assert!(reasoning);
         assert!(body.get("reasoning_effort").is_some());
         assert!(body["messages"][0].get("reasoning_content").is_none());
+    }
+
+    #[test]
+    fn reasoning_content_rejection_is_a_noop_when_absent() {
+        let mut body = json!({
+            "messages": [{"role": "assistant", "content": "hi"}]
+        });
+        let (effort, usage, reasoning) =
+            super::strip_rejected_optional_fields(&mut body, "unknown field reasoning_content");
+        assert!(!effort);
+        assert!(!usage);
+        assert!(!reasoning);
     }
 
     #[test]

@@ -630,15 +630,7 @@ impl Agent {
     }
 }
 
-/// Inspect a verification tool result to determine whether it represents a
-/// genuinely successful run (fail-closed, issue #136).
-///
-/// Returns `true` only when the output shows `exit=0` and contains no signal
-/// kill, linker/compile failure, timeout, or test-failure markers. A
-/// SIGSYS-killed, timed-out, linker-crashed, or non-zero-exit "verification"
-/// does NOT count as verified.
 /// Coarse class for a tool result the model will see. `ok` is not an error.
-/// Unexpected classes are harness bugs until a transcript shows otherwise.
 fn tool_error_class(text: &str) -> &'static str {
     if !(text.starts_with("Error:") || text.starts_with("Tool error:")) {
         return "ok";
@@ -650,19 +642,27 @@ fn tool_error_class(text: &str) -> &'static str {
         "user_abort"
     } else if lower.contains("invalid") || lower.contains("required") || lower.contains("missing") {
         "invalid_arguments"
-    } else if lower.contains("sigsys")
+    } else if lower.contains("dangerous-command denylist")
+        || lower.contains("sigsys")
         || lower.contains("does not exist")
         || lower.contains("not a file")
         || lower.contains("sandbox")
     {
         "environment"
-    } else if lower.contains("http") || lower.contains("status") {
+    } else if lower.contains("http") {
         "provider"
     } else {
         "unexpected"
     }
 }
 
+/// Inspect a verification tool result to determine whether it represents a
+/// genuinely successful run (fail-closed, issue #136).
+///
+/// Returns `true` only when the output shows `exit=0` and contains no signal
+/// kill, linker/compile failure, timeout, or test-failure markers. A
+/// SIGSYS-killed, timed-out, linker-crashed, or non-zero-exit "verification"
+/// does not count as verified.
 fn verification_passed(output: &str) -> bool {
     if output.contains("Error: command killed by signal")
         || output.contains("killed by signal")
@@ -774,6 +774,12 @@ mod tests {
     fn verification_passed_no_exit_line() {
         let output = "No test runner detected\n";
         assert!(!verification_passed(output));
+    }
+
+    #[test]
+    fn verification_passed_spilled_shell_keeps_exit_zero() {
+        let output = "exit=0\nFull output saved to .raven/tool-output/shell-1.log (20000 bytes, 400 lines).\nTail:\nok\n";
+        assert!(verification_passed(output));
     }
 
     #[test]

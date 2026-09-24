@@ -556,6 +556,7 @@ fn assemble_compaction(
     llm_summary: Option<String>,
     calib: Option<&UsageCalibration>,
     transcript_dir: Option<&std::path::Path>,
+    workspace: Option<&std::path::Path>,
 ) -> CompactionReport {
     let floor = pinned_prefix_len(messages);
     let facts = extract_facts(&messages[..floor.min(messages.len())], &plan.middle);
@@ -578,13 +579,14 @@ fn assemble_compaction(
         content = content.chars().take(MAX_SUMMARY_CHARS).collect();
         content.push_str("...[summary truncated]");
     }
-    if let Some(dir) = transcript_dir {
-        if let Some(path) = save_compacted_transcript(dir, &plan.middle) {
-            content.push_str(&format!(
-                "\nFull transcript of the dropped messages: {path}\n\
-                 Search that file for details this summary left out.\n"
-            ));
-        }
+    // Path is reserved here so the summary size includes it, but the file is
+    // written only after we know compaction will be kept.
+    let planned_transcript = transcript_dir.map(|dir| plan_transcript_path(dir, workspace));
+    if let Some((_, shown)) = &planned_transcript {
+        content.push_str(&format!(
+            "\nFull transcript of the dropped messages: {shown}\n\
+             Search that file for details this summary left out.\n"
+        ));
     }
     let summary_user = ChatMessage::plain("user", Some(content));
     let summary_assistant = ChatMessage::plain(
@@ -634,6 +636,10 @@ fn assemble_compaction(
         };
     }
 
+    if let Some((abs, _)) = planned_transcript {
+        let _ = save_compacted_transcript(&abs, &plan.middle);
+    }
+
     *messages = compacted;
     CompactionReport {
         before_tokens: plan.before,
@@ -655,6 +661,7 @@ pub async fn compact_if_needed_llm(
     compact_threshold: f32,
     calib: Option<&UsageCalibration>,
     transcript_dir: Option<&std::path::Path>,
+    workspace: Option<&std::path::Path>,
     summarizer: impl FnOnce(
         Vec<ChatMessage>,
     ) -> futures_util::future::BoxFuture<'static, Option<String>>,
@@ -677,6 +684,7 @@ pub async fn compact_if_needed_llm(
                 summary,
                 calib,
                 transcript_dir,
+                workspace,
             ))
         }
     }
@@ -731,20 +739,38 @@ fn extractive_body(middle: &[ChatMessage]) -> String {
     summary
 }
 
-fn save_compacted_transcript(dir: &std::path::Path, middle: &[ChatMessage]) -> Option<String> {
-    std::fs::create_dir_all(dir).ok()?;
+static COMPACT_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Absolute path plus the workspace-relative path `read_file` can open.
+fn plan_transcript_path(
+    dir: &std::path::Path,
+    workspace: Option<&std::path::Path>,
+) -> (std::path::PathBuf, String) {
+    let seq = COMPACT_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let millis = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let path = dir.join(format!("compact-{millis}.jsonl"));
-    let mut file = std::fs::File::create(&path).ok()?;
+    let name = format!("compact-{millis}-{seq}.jsonl");
+    let abs = dir.join(&name);
+    let shown = workspace
+        .and_then(|ws| abs.strip_prefix(ws).ok())
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| format!(".raven/compact/{name}"));
+    (abs, shown)
+}
+
+fn save_compacted_transcript(path: &std::path::Path, middle: &[ChatMessage]) -> Option<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).ok()?;
+    }
+    let mut file = std::fs::File::create(path).ok()?;
     use std::io::Write;
     for msg in middle {
         let line = serde_json::to_string(msg).ok()?;
         writeln!(file, "{line}").ok()?;
     }
-    Some(path.display().to_string())
+    Some(())
 }
 
 fn truncate(s: &str, max_chars: usize) -> String {
@@ -929,9 +955,15 @@ mod tests {
         context_window: usize,
         threshold: f32,
     ) -> Option<(usize, usize)> {
-        compact_if_needed_llm(msgs, context_window, threshold, None, None, |_middle| {
-            Box::pin(async { None })
-        })
+        compact_if_needed_llm(
+            msgs,
+            context_window,
+            threshold,
+            None,
+            None,
+            None,
+            |_middle| Box::pin(async { None }),
+        )
         .await
         .map(|r| (r.before_tokens, r.after_tokens))
     }
@@ -1208,13 +1240,80 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn compaction_transcript_is_workspace_relative_and_skipped_when_not_kept() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join(".raven").join("compact");
+        let mut msgs = vec![msg("system", "sys")];
+        for i in 0..80 {
+            msgs.push(msg(
+                "user",
+                &format!("Add unit tests for the payment handler and cover the edge case where balance is {i}."),
+            ));
+            msgs.push(msg(
+                "assistant",
+                &format!("Wrote tests for the payment handler covering the zero-balance edge case for account {i}."),
+            ));
+        }
+        let report = compact_if_needed_llm(
+            &mut msgs,
+            8192,
+            0.1,
+            None,
+            Some(&dir),
+            Some(tmp.path()),
+            |_middle| Box::pin(async { Some("kept the goal and the files".to_string()) }),
+        )
+        .await
+        .unwrap();
+        assert!(report.after_tokens < report.before_tokens);
+        let summary = msgs
+            .iter()
+            .filter_map(|m| m.content.as_deref())
+            .find(|c| c.contains("Full transcript"))
+            .unwrap_or("");
+        assert!(
+            summary.contains(".raven/compact/compact-"),
+            "pointer should be workspace-relative, got {summary}"
+        );
+        assert!(!summary.contains(tmp.path().to_str().unwrap_or("")));
+        let written: Vec<_> = std::fs::read_dir(&dir).unwrap().collect();
+        assert_eq!(written.len(), 1);
+
+        // A summary larger than the middle must not leave a transcript behind.
+        let skip_dir = tmp.path().join("skip");
+        let mut bloated = vec![msg("system", "s")];
+        for i in 0..40 {
+            bloated.push(msg("user", &format!("u{i}")));
+            bloated.push(msg("assistant", &format!("a{i}")));
+        }
+        let huge = "x".repeat(50_000);
+        let _ = compact_if_needed_llm(
+            &mut bloated,
+            2000,
+            0.1,
+            None,
+            Some(&skip_dir),
+            Some(tmp.path()),
+            move |_middle| {
+                let huge = huge.clone();
+                Box::pin(async move { Some(huge) })
+            },
+        )
+        .await;
+        assert!(
+            !skip_dir.exists(),
+            "skipped compaction must not write a transcript"
+        );
+    }
+
+    #[tokio::test]
     async fn llm_compaction_uses_provided_summary_and_reduces_tokens() {
         let mut msgs = vec![msg("system", "sys")];
         for i in 0..200 {
             msgs.push(msg("user", &format!("message number {i}")));
             msgs.push(msg("assistant", &format!("response to message {i}")));
         }
-        let report = compact_if_needed_llm(&mut msgs, 8192, 0.1, None, None, |_middle| {
+        let report = compact_if_needed_llm(&mut msgs, 8192, 0.1, None, None, None, |_middle| {
             Box::pin(async { Some("LLM distilled: 200 turns of task work.".to_string()) })
         })
         .await
@@ -1248,7 +1347,7 @@ mod tests {
                 &format!("Added scoped permissions for user {i} in the auth middleware. Updated the route guards to enforce them."),
             ));
         }
-        let report = compact_if_needed_llm(&mut msgs, 8192, 0.1, None, None, |_middle| {
+        let report = compact_if_needed_llm(&mut msgs, 8192, 0.1, None, None, None, |_middle| {
             Box::pin(async { None }) // summarizer failed → extractive fallback
         })
         .await
@@ -1380,7 +1479,7 @@ mod tests {
                 "--- run_tests (cargo) exit=0 ---\nok",
             ));
         }
-        let report = compact_if_needed_llm(&mut msgs, 8192, 0.1, None, None, |_middle| {
+        let report = compact_if_needed_llm(&mut msgs, 8192, 0.1, None, None, None, |_middle| {
             Box::pin(async { None })
         })
         .await

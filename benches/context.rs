@@ -68,9 +68,15 @@ fn bench(c: &mut Criterion) {
         b.iter_batched(
             || msgs.clone(),
             |mut m| {
-                rt.block_on(compact_if_needed_llm(&mut m, 8192, 0.1, None, None, |_| {
-                    Box::pin(async { None })
-                }))
+                rt.block_on(compact_if_needed_llm(
+                    &mut m,
+                    8192,
+                    0.1,
+                    None,
+                    None,
+                    None,
+                    |_| Box::pin(async { None }),
+                ))
             },
             criterion::BatchSize::SmallInput,
         );
@@ -81,9 +87,15 @@ fn bench(c: &mut Criterion) {
         b.iter_batched(
             || msgs.clone(),
             |mut m| {
-                rt.block_on(compact_if_needed_llm(&mut m, 8192, 0.1, None, None, |_| {
-                    Box::pin(async { None })
-                }))
+                rt.block_on(compact_if_needed_llm(
+                    &mut m,
+                    8192,
+                    0.1,
+                    None,
+                    None,
+                    None,
+                    |_| Box::pin(async { None }),
+                ))
             },
             criterion::BatchSize::SmallInput,
         );
@@ -98,6 +110,7 @@ fn bench(c: &mut Criterion) {
                     &mut m,
                     128_000,
                     0.75,
+                    None,
                     None,
                     None,
                     |_| Box::pin(async { None }),

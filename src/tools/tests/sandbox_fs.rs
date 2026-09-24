@@ -473,6 +473,27 @@ fn present_output_spills_large_body_and_keeps_a_tail() {
 }
 
 #[test]
+fn present_output_keeps_exit_status_and_signal_note() {
+    let tmp = tempfile::tempdir().unwrap();
+    let sb = Sandbox::new(tmp.path().to_path_buf());
+    let mut body = "exit=0\n".to_string();
+    body.push_str(&"ok\n".repeat(4000));
+    let out = sb.present_output("shell", body);
+    assert!(out.starts_with("exit=0\n"), "{out}");
+
+    let mut killed = "Error: command killed by signal 31\n".to_string();
+    killed.push_str(
+        "This sandbox blocks network access (seccomp): the first outbound TCP \
+         connection is killed with SIGSYS (shell code 159). The command will \
+         keep failing this way — do not retry or re-diagnose.\n",
+    );
+    killed.push_str(&"noise\n".repeat(4000));
+    let out = sb.present_output("shell", killed);
+    assert!(out.contains("killed by signal 31"), "{out}");
+    assert!(out.contains("do not retry"), "{out}");
+}
+
+#[test]
 fn sparse_line_numbers_keep_the_first_and_every_tenth() {
     let tmp = tempfile::tempdir().unwrap();
     let mut sb = Sandbox::new(tmp.path().to_path_buf());

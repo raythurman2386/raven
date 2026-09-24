@@ -247,7 +247,7 @@ impl Sandbox {
                 if out.is_empty() {
                     out = format!("exit={}", status.code().unwrap_or(-1));
                 }
-                Ok(self.present_output("git", out))
+                Ok(out)
             }
             None => Ok("Error: git command timed out".into()),
         }
