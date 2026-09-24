@@ -262,18 +262,60 @@ def _usage_int(obj: dict[str, Any], *keys: str) -> int:
     return 0
 
 
-def harvest_usage(work: Path) -> tuple[int, int, int]:
+def _mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _session_activity_mtime(session_dir: Path) -> float:
+    times = [_mtime(session_dir)]
+    for name in ("usage.jsonl", "messages.jsonl"):
+        p = session_dir / name
+        if p.is_file():
+            times.append(_mtime(p))
+    return max(times)
+
+
+def case_session_dirs(sessions: Path, since: float | None) -> list[Path]:
+    """Session dirs that belong to this case run.
+
+    When `since` (epoch seconds) is set, keep sessions touched at/after that
+    time (2s skew). If none match — e.g. planted leftovers in a multi-session
+    workdir — fall back to the single newest session instead of summing all.
+    """
+    if not sessions.is_dir():
+        return []
+    dirs = [p for p in sessions.iterdir() if p.is_dir()]
+    if not dirs:
+        return []
+    dirs.sort(key=_session_activity_mtime, reverse=True)
+    if since is None:
+        return dirs
+    cutoff = since - 2.0
+    matched = [d for d in dirs if _session_activity_mtime(d) >= cutoff]
+    if matched:
+        return matched
+    return dirs[:1]
+
+
+def harvest_usage(work: Path, since: float | None = None) -> tuple[int, int, int]:
     """Sum provider usage for the case.
 
     Prefer `{session}/usage.jsonl` (one line per request, with cache fields).
     Fall back to usage objects on assistant messages for binaries that only
     persist the meter on the transcript.
+
+    Only sessions belonging to this case run are counted (see
+    [`case_session_dirs`]) so multi-session workdirs do not over-report.
     """
     sessions = work / ".raven" / "sessions"
-    if not sessions.is_dir():
+    session_dirs = case_session_dirs(sessions, since)
+    if not session_dirs:
         return 0, 0, 0
     prompt = completion = cached = 0
-    ledgers = list(sessions.glob("*/usage.jsonl"))
+    ledgers = [d / "usage.jsonl" for d in session_dirs if (d / "usage.jsonl").is_file()]
     if ledgers:
         for path in ledgers:
             for line in path.read_text(encoding="utf-8").splitlines():
@@ -288,7 +330,10 @@ def harvest_usage(work: Path) -> tuple[int, int, int]:
                 completion += _usage_int(row, "completionTokens", "completion_tokens")
                 cached += _usage_int(row, "cachedTokens", "cached_tokens")
         return prompt, completion, cached
-    for path in sessions.glob("*/messages.jsonl"):
+    for session_dir in session_dirs:
+        path = session_dir / "messages.jsonl"
+        if not path.is_file():
+            continue
         for line in path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if not line:
@@ -357,6 +402,7 @@ def run_case(
 
     task = task_path.read_text(encoding="utf-8").strip()
     started = time.monotonic()
+    case_started = time.time()
 
     with tempfile.TemporaryDirectory(prefix=f"raven-eval-{meta.id}-") as tmp:
         work = Path(tmp) / "workspace"
@@ -444,7 +490,7 @@ def run_case(
             stderr_path.write_text(err, encoding="utf-8")
             # Capture partial progress so timeouts are diagnosable (tools/iters).
             tool_calls, iterations = parse_metrics(out, err)
-            prompt_tokens, completion_tokens, cached_tokens = harvest_usage(work)
+            prompt_tokens, completion_tokens, cached_tokens = harvest_usage(work, since=case_started)
             return CaseResult(
                 id=meta.id,
                 status="timeout",
@@ -463,7 +509,7 @@ def run_case(
         stdout = stdout_path.read_text(encoding="utf-8")
         stderr = stderr_path.read_text(encoding="utf-8")
         tool_calls, iterations = parse_metrics(stdout, stderr)
-        prompt_tokens, completion_tokens, cached_tokens = harvest_usage(work)
+        prompt_tokens, completion_tokens, cached_tokens = harvest_usage(work, since=case_started)
         dirty = is_dirty(work)
 
         if raven_exit != 0 and not meta.expect_raven_fail:
@@ -736,5 +782,44 @@ def main() -> int:
     return 1 if summary["hard_fails"] else 0
 
 
+def _selftest_harvest_usage() -> None:
+    """Guard against summing leftover sessions in a multi-session workdir."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        sessions = work / ".raven" / "sessions"
+        old = sessions / "old-session"
+        new = sessions / "new-session"
+        old.mkdir(parents=True)
+        new.mkdir(parents=True)
+        (old / "usage.jsonl").write_text(
+            '{"promptTokens": 1000, "completionTokens": 10, "cachedTokens": 0}\n',
+            encoding="utf-8",
+        )
+        # Make the old ledger look stale.
+        import os
+        os.utime(old / "usage.jsonl", (1_700_000_000, 1_700_000_000))
+        os.utime(old, (1_700_000_000, 1_700_000_000))
+        (new / "usage.jsonl").write_text(
+            '{"promptTokens": 42, "completionTokens": 7, "cachedTokens": 3}\n',
+            encoding="utf-8",
+        )
+        since = time.time() - 1.0
+        prompt, completion, cached = harvest_usage(work, since=since)
+        assert (prompt, completion, cached) == (42, 7, 3), (
+            prompt,
+            completion,
+            cached,
+        )
+        # Blind sum of all sessions would be 1042 — must not happen.
+        dirs = case_session_dirs(sessions, since)
+        assert [d.name for d in dirs] == ["new-session"], dirs
+
+
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--selftest":
+        _selftest_harvest_usage()
+        print("harvest_usage selftest OK")
+        sys.exit(0)
     sys.exit(main())
