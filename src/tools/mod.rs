@@ -18,7 +18,10 @@ mod validate;
 use std::path::Path;
 
 pub use crate::state::TodoItem;
-pub use definitions::{chat_tool_definitions, plan_tool_definitions, tool_definitions};
+pub use definitions::{
+    chat_tool_definitions, offloaded_tool_catalog, offloaded_tool_definitions,
+    plan_tool_definitions, tool_definitions, tool_schema_text,
+};
 pub use dispatch::dispatch;
 pub use sandbox::{safe_command_re, system_command_autonomous, system_safe_command_re, Sandbox};
 pub use validate::{validate_tool_call, MAX_ARGUMENTS_BYTES};

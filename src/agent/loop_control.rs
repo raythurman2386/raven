@@ -203,6 +203,7 @@ impl Agent {
             content: Some(text),
             tool_calls: None,
             tool_call_id: None,
+            reasoning_content: None,
             usage,
         });
         let _ = tx.send(AgentEvent::Done).await;
@@ -282,31 +283,47 @@ pub(crate) fn compute_reminders(
 /// Used by LLM-structured compaction. Makes a single non-streaming chat
 /// request asking the model to distill the middle turns. Returns `None` if
 /// the request fails, so the caller falls back to the extractive summarizer.
+/// Options for the compaction summarizer request.
+pub(crate) struct SummarizeOptions {
+    pub reasoning_effort: Option<String>,
+    pub short_prompt: bool,
+}
+
 pub(crate) async fn summarize_request(
     client: reqwest::Client,
     base_url: String,
     model: String,
     api_key: Option<String>,
     request_headers: Vec<(String, String)>,
-    reasoning_effort: Option<String>,
+    options: SummarizeOptions,
     middle: Vec<ChatMessage>,
 ) -> Option<String> {
-    let prompt = format!(
-        "Distill the following conversation segment into a compact summary \
-         (max ~150 words). Use this layout when the information exists:\n\
-         Goal: <current goal>\n\
-         Open todos: <pending items>\n\
-         Key paths: <files touched>\n\
-         Last verification: <run_tests/run_lint result>\n\
-         Then a short factual recap of user requests, decisions, and actions. \
-         This will replace the original messages in a long-running agent session.\n\n\
-         {}\n\nSummary:",
-        middle
-            .iter()
-            .map(|m| format!("{}: {}", m.role, m.content.clone().unwrap_or_default()))
-            .collect::<Vec<_>>()
-            .join("\n")
-    );
+    let short_prompt = options.short_prompt;
+    let reasoning_effort = options.reasoning_effort;
+    let transcript = middle
+        .iter()
+        .map(|m| format!("{}: {}", m.role, m.content.clone().unwrap_or_default()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let prompt = if short_prompt {
+        format!(
+            "Summarize this coding-agent transcript. Keep the goal, open tasks, \
+             files touched, and the last verification result. Be compact.\n\n\
+             {transcript}\n\nSummary:"
+        )
+    } else {
+        format!(
+            "Distill the following conversation segment into a compact summary \
+             (max ~150 words). Use this layout when the information exists:\n\
+             Goal: <current goal>\n\
+             Open todos: <pending items>\n\
+             Key paths: <files touched>\n\
+             Last verification: <run_tests/run_lint result>\n\
+             Then a short factual recap of user requests, decisions, and actions. \
+             This will replace the original messages in a long-running agent session.\n\n\
+             {transcript}\n\nSummary:"
+        )
+    };
 
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let body = serde_json::json!({

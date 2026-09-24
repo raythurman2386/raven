@@ -23,6 +23,7 @@ fn history_sample() -> Vec<ChatMessage> {
         content: Some("You are a coding agent.".into()),
         tool_calls: None,
         tool_call_id: None,
+        reasoning_content: None,
         usage: None,
     });
     for i in 0..200 {
@@ -31,6 +32,7 @@ fn history_sample() -> Vec<ChatMessage> {
             content: Some(format!("Please fix the bug in module {i} and add tests.")),
             tool_calls: None,
             tool_call_id: None,
+            reasoning_content: None,
             usage: None,
         });
         msgs.push(ChatMessage {
@@ -38,6 +40,7 @@ fn history_sample() -> Vec<ChatMessage> {
             content: Some(format!("I found the issue in module {i} and fixed it.")),
             tool_calls: None,
             tool_call_id: None,
+            reasoning_content: None,
             usage: None,
         });
     }

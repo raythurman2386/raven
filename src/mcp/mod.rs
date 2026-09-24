@@ -269,8 +269,18 @@ pub fn merge_tool_defs(base: Value, mcp: &McpHandle, read_only_session: bool) ->
         return base;
     }
     let mut arr = base.as_array().cloned().unwrap_or_default();
+    let mut extra = extra;
+    extra.sort_by_key(tool_fn_name);
     arr.extend(extra);
     Value::Array(arr)
+}
+
+fn tool_fn_name(tool: &Value) -> String {
+    tool.get("function")
+        .and_then(|f| f.get("name"))
+        .and_then(|n| n.as_str())
+        .unwrap_or_default()
+        .to_string()
 }
 
 #[cfg(test)]

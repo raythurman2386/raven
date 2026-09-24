@@ -9,7 +9,7 @@ CLI (main.rs)
   └─ Settings (config/mod.rs) ── named providers, context-window inference,
   │                              scope (repo | system) via resolve_scope
   └─ Agent (agent/)
-       ├─ system prompt (SYSTEM_BASE or SYSTEM_SCOPE_BASE + AGENTS.md + repo map + --rules)
+       ├─ system prompt (stable instructions + mode) and a following setup message (workspace, repo map, AGENTS.md, memory, goal, rules). Git status is request-only, after the conversation.
        ├─ streaming loop ── POST /v1/chat/completions (Ollama / OpenRouter / …)
        ├─ compaction (context.rs) ── estimate tokens, summarize middle
        ├─ tool dispatch (tools/) ── mutators serial; others spawn_blocking
@@ -35,7 +35,7 @@ opt-in (denylist + network block still apply).
 ### Step-by-step
 
 1. **CLI** (`main.rs`) parses flags with `clap`, builds a [`Settings`](../src/config/mod.rs) struct (resolving env vars, loading config files, and querying the model's actual context window via Ollama's `/api/show` endpoint).
-2. **Agent construction** (`Agent::new`): validates the workspace, builds the system prompt (`SYSTEM_BASE` + workspace root + `AGENTS.md` + `--rules`), and seeds `messages[0]` as the system message.
+2. **Agent construction** (`Agent::new`): validates the workspace, builds a stable system message (instructions + mode) and a following setup message (workspace, repo map, `AGENTS.md`, memory, goal, todos, `--rules`). Git status is not stored; it is appended for the request only.
 3. **Agent loop** (`Agent::run`): appends the user message, then loops up to `max_iterations`:
    - **Compaction check**: estimate history tokens; if over the soft limit, summarize the middle (see [Compaction](#compaction)).
    - **Clamp `max_tokens`**: so `prompt_tokens + max_tokens + 64 ≤ context_window`.
@@ -130,7 +130,7 @@ only resuming that session restores it:
 - `todos.json` — the structured task list written by `todo_write`.
 - `goal.json` — the current goal written by `goal_set`.
 
-Both are injected into the system prompt each turn (`build_system_message`),
+Both are injected into the setup message each turn (`install_pinned_prompt`),
 and `compute_reminders` re-anchors the model on the goal + next pending task
 at iteration 4 and then every 8th iteration (12, 20, …). Writes are atomic
 (unique temp name + rename).

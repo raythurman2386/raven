@@ -615,6 +615,7 @@ mod tests {
             sandbox_extra_rw: Vec::new(),
             allow_delegate: true,
             session_state_dir: None,
+            efficiency: crate::config::EfficiencyFlags::default(),
         }
     }
 
@@ -747,6 +748,7 @@ mod tests {
             content: Some("hello".into()),
             tool_calls: None,
             tool_call_id: None,
+            reasoning_content: None,
             usage: None,
         };
         let msg2 = ChatMessage {
@@ -754,6 +756,7 @@ mod tests {
             content: Some("hi".into()),
             tool_calls: None,
             tool_call_id: None,
+            reasoning_content: None,
             usage: None,
         };
 
@@ -796,6 +799,7 @@ mod tests {
                     content: Some("old".into()),
                     tool_calls: None,
                     tool_call_id: None,
+                    reasoning_content: None,
                     usage: None,
                 },
             )
@@ -805,6 +809,7 @@ mod tests {
             content: Some("new".into()),
             tool_calls: None,
             tool_call_id: None,
+            reasoning_content: None,
             usage: None,
         }];
         store.save_all_messages(&session, &replacement).unwrap();
@@ -887,6 +892,7 @@ mod tests {
                     content: Some("please fix it".into()),
                     tool_calls: None,
                     tool_call_id: None,
+                    reasoning_content: None,
                     usage: None,
                 },
             )

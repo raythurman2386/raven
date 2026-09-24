@@ -47,7 +47,7 @@ pub struct SubAgentReport {
 /// Tool events are consumed silently; only `TextDelta` output is accumulated.
 pub async fn delegate_task(
     mut settings: Settings,
-    task: String,
+    mut task: String,
     parent_tx: mpsc::Sender<AgentEvent>,
 ) -> Result<String> {
     #[cfg(test)]
@@ -57,6 +57,14 @@ pub async fn delegate_task(
     }
     settings.allow_delegate = false;
     settings.max_iterations = settings.max_iterations.min(8);
+    let handoff = settings.efficiency.subagent_handoff;
+    if handoff {
+        task = format!(
+            "Finish the task, then return a short handoff with four parts: \
+             what you did, what you found, concerns, and any deviation from the task. \
+             Do not paste file contents.\n\n{task}"
+        );
+    }
     // Sub-agents never touch the parent session's goal/todo state.
     settings.session_state_dir = None;
     let mut agent = Agent::new(settings)?;

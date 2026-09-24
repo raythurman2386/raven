@@ -35,7 +35,18 @@ fn settings_for(workspace: &std::path::Path) -> Settings {
         // Eval agents model a persisted session: goal/todo state goes to
         // this dir, so a fresh dir means fresh state (issue #185).
         session_state_dir: Some(workspace.join(".raven/sessions/eval-default/state")),
+        efficiency: crate::config::EfficiencyFlags::default(),
     }
+}
+
+fn pinned_prompt(agent: &Agent) -> String {
+    agent
+        .messages
+        .iter()
+        .take(2)
+        .filter_map(|m| m.content.clone())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn scripted(bodies: Vec<String>) -> CompletionSource {
@@ -397,10 +408,10 @@ async fn eval_suite_memory_injected_in_system_prompt() {
     .unwrap();
 
     let agent = Agent::new(settings_for(tmp.path())).unwrap();
-    let sys = agent.messages[0].content.clone().unwrap_or_default();
+    let prompt = pinned_prompt(&agent);
     assert!(
-        sys.contains("cargo test --workspace"),
-        "system prompt should include memory: {sys}"
+        prompt.contains("cargo test --workspace"),
+        "setup prompt should include memory: {prompt}"
     );
 }
 
@@ -471,20 +482,20 @@ async fn eval_suite_goal_set_persists_and_injects() {
         "goal_set must not write the legacy workspace-global file"
     );
 
-    let sys = agent.messages[0].content.clone().unwrap_or_default();
+    let prompt = pinned_prompt(&agent);
     assert!(
-        sys.contains("Ship the feature"),
-        "same-turn system prompt should include the goal: {sys}"
+        prompt.contains("Ship the feature"),
+        "same-turn setup prompt should include the goal: {prompt}"
     );
 
     // A fresh session (new state dir) starts with no goal.
     let mut fresh_settings = settings_for(tmp.path());
     fresh_settings.session_state_dir = Some(tmp.path().join(".raven/sessions/other/state"));
     let agent2 = Agent::new(fresh_settings).unwrap();
-    let sys = agent2.messages[0].content.clone().unwrap_or_default();
+    let prompt = pinned_prompt(&agent2);
     assert!(
-        !sys.contains("Ship the feature"),
-        "a fresh session must not inherit the previous session's goal: {sys}"
+        !prompt.contains("Ship the feature"),
+        "a fresh session must not inherit the previous session's goal: {prompt}"
     );
 }
 
@@ -519,10 +530,10 @@ async fn eval_suite_todo_write_persists_and_injects() {
     let mut fresh_settings = settings_for(tmp.path());
     fresh_settings.session_state_dir = Some(tmp.path().join(".raven/sessions/other/state"));
     let agent2 = Agent::new(fresh_settings).unwrap();
-    let sys = agent2.messages[0].content.clone().unwrap_or_default();
+    let prompt = pinned_prompt(&agent2);
     assert!(
-        !(sys.contains("Do A") || sys.contains("Do B")),
-        "a fresh session must not inherit the previous session's todos: {sys}"
+        !(prompt.contains("Do A") || prompt.contains("Do B")),
+        "a fresh session must not inherit the previous session's todos: {prompt}"
     );
 }
 
@@ -551,25 +562,21 @@ async fn eval_suite_goal_state_is_isolated_between_sessions() {
     let _ = drain(&mut rx).await;
 
     // Agent B (concurrent session) sees no goal and cannot observe A's.
-    let sys_b = Agent::new(settings_b).unwrap().messages[0]
-        .content
-        .clone()
-        .unwrap_or_default();
+    let agent_b = Agent::new(settings_b).unwrap();
+    let prompt_b = pinned_prompt(&agent_b);
     assert!(
-        !sys_b.contains("Session A goal"),
-        "session B must not see session A's goal: {sys_b}"
+        !prompt_b.contains("Session A goal"),
+        "session B must not see session A's goal: {prompt_b}"
     );
 
     // Resuming session A restores its goal.
     let mut resumed = settings_for(tmp.path());
     resumed.session_state_dir = Some(dir_a);
-    let sys_a = Agent::new(resumed).unwrap().messages[0]
-        .content
-        .clone()
-        .unwrap_or_default();
+    let agent_a = Agent::new(resumed).unwrap();
+    let prompt_a = pinned_prompt(&agent_a);
     assert!(
-        sys_a.contains("Session A goal"),
-        "resumed session A must restore its goal: {sys_a}"
+        prompt_a.contains("Session A goal"),
+        "resumed session A must restore its goal: {prompt_a}"
     );
 }
 

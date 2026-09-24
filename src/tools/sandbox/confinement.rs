@@ -587,7 +587,7 @@ pub(crate) fn run_confined(
                     }
                     out.push_str(&String::from_utf8_lossy(&stdout));
                     out.push_str(&String::from_utf8_lossy(&stderr));
-                    return Ok(super::cap_output(out));
+                    return Ok(out);
                 }
             }
             let mut out = format!("exit={}\n", status.code().unwrap_or(-1));
@@ -614,7 +614,7 @@ pub(crate) fn run_confined(
                 );
             }
             out.push_str(&combined);
-            Ok(super::cap_output(out))
+            Ok(out)
         }
         None => Ok("Error: command timed out".into()),
     }

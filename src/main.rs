@@ -45,8 +45,8 @@ use raven::agent::{run_parallel, Agent, ChatMessage};
 use raven::config::{
     default_max_iter, env_compact_threshold, env_context_window, env_searxng_engines,
     env_searxng_url, load_config_file, load_dotenv_from, load_global_dotenv, needs_onboarding,
-    parse_reasoning_effort, resolve_mode, resolve_provider, resolve_scope, run_onboarding, Mode,
-    Settings,
+    parse_reasoning_effort, resolve_mode, resolve_provider, resolve_scope, run_onboarding,
+    EfficiencyFlags, Mode, Settings,
 };
 use raven::context::{fetch_context_window, infer_context_window};
 use raven::runner;
@@ -340,6 +340,7 @@ async fn main() -> Result<()> {
     // configured providers for the model picker (same reason — `cfg` fields
     // are moved out below).
     let cfg_for_acp = cfg.clone();
+    let efficiency = EfficiencyFlags::from_config(&cfg);
 
     // Resolve the active provider: CLI --provider > RAVEN_PROVIDER env >
     // config `provider` > builtin `ollama`. Endpoint + auth come from the
@@ -444,6 +445,7 @@ async fn main() -> Result<()> {
         // Set per-run below once the active session id is known; system
         // scope keeps no goal/todo state.
         session_state_dir: None,
+        efficiency,
     };
 
     if cli.acp {

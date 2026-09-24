@@ -113,7 +113,7 @@ The `include` glob supports `*` and `?` against the file name only (not the full
 }
 ```
 
-Runs the command with `cwd` forced to the workspace. Allowlisted commands with no shell metacharacters run via **direct exec** (`Command::new(bin).args(...)`); everything else runs via `sh -c <command>`. Output format: `exit=<code>\n<stdout><stderr>`. Output capped at 12 000 chars (truncated with `...[truncated]`). Confined subprocesses additionally run under OS-level sandboxing (Landlock, seccomp, rlimits — see [security.md](security.md)). Commands matching the verification-gate predicate (`cargo test`, `cargo clippy`, `cargo fmt --check`, `npm test`, `pytest`, `tsc`, `eslint`, …) skip both the seccomp network block and rlimits, since sanctioned test/lint/format commands legitimately need network sockets and large linker outputs.
+Runs the command with `cwd` forced to the workspace. Allowlisted commands with no shell metacharacters run via **direct exec** (`Command::new(bin).args(...)`); everything else runs via `sh -c <command>`. Output format: `exit=<code>\n<stdout><stderr>`. Output at or under 12 000 characters is returned inline. Larger output is written to `.raven/tool-output/` and the tool result is the path, size, and a short tail. Confined subprocesses additionally run under OS-level sandboxing (Landlock, seccomp, rlimits — see [security.md](security.md)). Commands matching the verification-gate predicate (`cargo test`, `cargo clippy`, `cargo fmt --check`, `npm test`, `pytest`, `tsc`, `eslint`, …) skip both the seccomp network block and rlimits, since sanctioned test/lint/format commands legitimately need network sockets and large linker outputs.
 
 ### `search_code`
 

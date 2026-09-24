@@ -59,6 +59,10 @@ pub fn dispatch(
                 .unwrap_or(400) as usize;
             sandbox.read_file(path, start, max)
         }
+        "tool_schema" => {
+            let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            Ok(super::tool_schema_text(name))
+        }
         "search_replace" => {
             let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
             let old = args

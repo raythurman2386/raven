@@ -249,8 +249,9 @@ impl Agent {
                     super::parallel::delegate_task(sub_settings, description, tx.clone()).await;
                 let result = match result {
                     Ok(out) => {
-                        let capped: String = out.chars().take(2000).collect();
-                        format!("Sub-agent result:\n{capped}")
+                        let sandbox = crate::tools::Sandbox::new(self.settings.workspace.clone());
+                        let presented = sandbox.present_output("subagent", out);
+                        format!("Sub-agent result:\n{presented}")
                     }
                     Err(e) => format!("Sub-agent error: {e}"),
                 };
@@ -468,7 +469,7 @@ impl Agent {
             .await;
         }
         if refresh_state {
-            self.replace_system_message(super::core::rebuild_system_message(&self.settings));
+            self.install_pinned_prompt();
         }
 
         // Plan progress: mark the current step Completed and advance to
@@ -530,6 +531,10 @@ impl Agent {
     ) {
         let result = match dispatch_result {
             Ok(s) => {
+                let class = tool_error_class(&s);
+                if class != "ok" {
+                    tracing::info!(tool = %name, class, "tool_result");
+                }
                 if s.starts_with("Error:") || s.starts_with("Tool error:") {
                     let failure_key = (name.clone(), cache_key.clone());
                     if self.consecutive_failure_key.as_ref() == Some(&failure_key) {
@@ -553,6 +558,12 @@ impl Agent {
                 s
             }
             Err(e) => {
+                let class = if e.is_transient() {
+                    "timeout"
+                } else {
+                    "unexpected"
+                };
+                tracing::info!(tool = %name, class, error = %e, "tool_result");
                 // Deterministic failures already reach the model/transcript;
                 // keep them at debug under default RUST_LOG=warn.
                 if e.is_transient() {
@@ -626,6 +637,32 @@ impl Agent {
 /// kill, linker/compile failure, timeout, or test-failure markers. A
 /// SIGSYS-killed, timed-out, linker-crashed, or non-zero-exit "verification"
 /// does NOT count as verified.
+/// Coarse class for a tool result the model will see. `ok` is not an error.
+/// Unexpected classes are harness bugs until a transcript shows otherwise.
+fn tool_error_class(text: &str) -> &'static str {
+    if !(text.starts_with("Error:") || text.starts_with("Tool error:")) {
+        return "ok";
+    }
+    let lower = text.to_ascii_lowercase();
+    if lower.contains("timed out") || lower.contains("timeout") {
+        "timeout"
+    } else if lower.contains("declined") || lower.contains("not run") {
+        "user_abort"
+    } else if lower.contains("invalid") || lower.contains("required") || lower.contains("missing") {
+        "invalid_arguments"
+    } else if lower.contains("sigsys")
+        || lower.contains("does not exist")
+        || lower.contains("not a file")
+        || lower.contains("sandbox")
+    {
+        "environment"
+    } else if lower.contains("http") || lower.contains("status") {
+        "provider"
+    } else {
+        "unexpected"
+    }
+}
+
 fn verification_passed(output: &str) -> bool {
     if output.contains("Error: command killed by signal")
         || output.contains("killed by signal")

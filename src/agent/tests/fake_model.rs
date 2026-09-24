@@ -50,6 +50,7 @@ fn settings_for(workspace: &std::path::Path) -> Settings {
         sandbox_extra_rw: Vec::new(),
         allow_delegate: true,
         session_state_dir: None,
+        efficiency: crate::config::EfficiencyFlags::default(),
     }
 }
 
@@ -866,6 +867,43 @@ fn tool_names(tools: &Value) -> Vec<String> {
                 .to_string()
         })
         .collect()
+}
+
+#[test]
+fn prompt_section_estimates_for_this_repo() {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut settings = settings_for(&root);
+    settings.model = "grok-4.7".into();
+    let agent = Agent::new(settings.clone()).unwrap();
+    let system = crate::tokenizer::count_tokens(agent.messages[0].content.as_deref().unwrap_or(""));
+    let setup = crate::tokenizer::count_tokens(agent.messages[1].content.as_deref().unwrap_or(""));
+    let tools = crate::tokenizer::count_tokens(&agent.tools_value().to_string());
+    settings.efficiency.lean_prompt = true;
+    settings.efficiency.tool_offload = true;
+    settings.efficiency.sparse_line_numbers = true;
+    let lean = Agent::new(settings).unwrap();
+    let lean_system =
+        crate::tokenizer::count_tokens(lean.messages[0].content.as_deref().unwrap_or(""));
+    let lean_tools = crate::tokenizer::count_tokens(&lean.tools_value().to_string());
+    eprintln!(
+        "SECTION_EST system={system} setup={setup} tools={tools} lean_system={lean_system} offload_tools={lean_tools}"
+    );
+    assert!(system > 100 && tools > 100);
+    assert!(lean_system < system);
+    assert!(lean_tools < tools);
+}
+
+#[test]
+fn system_message_stays_free_of_workspace_and_git_status() {
+    let tmp = tempfile::tempdir().unwrap();
+    let agent = Agent::new(settings_for(tmp.path())).unwrap();
+    let sys = agent.messages[0].content.as_deref().unwrap_or_default();
+    assert!(!sys.contains("Workspace root"), "{sys}");
+    assert!(!sys.contains("Working tree"), "{sys}");
+    assert!(sys.contains("--- Mode ---"), "{sys}");
+    let setup = agent.messages[1].content.as_deref().unwrap_or_default();
+    assert!(setup.starts_with("<raven_setup>"), "{setup}");
+    assert!(setup.contains("Workspace root"), "{setup}");
 }
 
 #[test]

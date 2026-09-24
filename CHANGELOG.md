@@ -4,6 +4,22 @@ All notable changes to Raven are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Per-request token ledger (`{session}/usage.jsonl`) with cached input, uncached input, completion, and reasoning tokens, plus a public-API-equivalent USD estimate for Grok models.
+- `x-grok-conv-id` on Grok requests, taken from the session id, so prefix caching stays on one server.
+- Opt-in efficiency flags (`lean_prompt`, `tool_offload`, `sparse_line_numbers`, `short_compact`, `subagent_handoff`), off unless set in config or `RAVEN_*` environment variables.
+
+### Changed
+
+- The cached prefix is the tool list plus the stable system instructions. Workspace, repo map, project instructions, memory, goal, and todos sit in a setup message. Git status is appended after the conversation for that request only.
+- Tool output longer than 12 000 characters is written to `.raven/tool-output/` and the model receives the path, size, and a tail.
+- Provider `reasoning_content` is stored and sent back on later turns. A warning is logged when a later turn drops it.
+- Compaction writes the dropped transcript to `.raven/compact/*.jsonl` and points the summary at that file.
+- MCP tool schemas are appended in name order.
+
 ## [0.6.5] - 2026-09-10
 
 ### Fixed

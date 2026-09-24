@@ -6,10 +6,7 @@
 use anyhow::{Context, Result};
 use std::process::Command;
 
-use super::sandbox::{
-    cap_output, setup_shell_env, spawn_confined, truncate_output, wait_for_child, Sandbox,
-    MAX_TOOL_OUTPUT,
-};
+use super::sandbox::{setup_shell_env, spawn_confined, wait_for_child, Sandbox};
 
 impl Sandbox {
     /// `git status --porcelain=v1` — structured, compact output.
@@ -30,7 +27,7 @@ impl Sandbox {
             &["diff"][..]
         };
         let out = self.run_git(args)?;
-        Ok(truncate_output(&out, MAX_TOOL_OUTPUT))
+        Ok(self.present_output("git-diff", out))
     }
 
     /// `git log --oneline -n 10` — recent commit history.
@@ -250,7 +247,7 @@ impl Sandbox {
                 if out.is_empty() {
                     out = format!("exit={}", status.code().unwrap_or(-1));
                 }
-                Ok(cap_output(out))
+                Ok(self.present_output("git", out))
             }
             None => Ok("Error: git command timed out".into()),
         }

@@ -29,6 +29,8 @@ pub(crate) struct ParsedCompletion {
     pub finish_reason: Option<String>,
     /// Provider-level error message extracted from the body (if any).
     pub error: Option<String>,
+    /// Provider reasoning text (`reasoning_content`), replayed on later turns.
+    pub reasoning: String,
     /// Real token usage reported by the provider, when the response carries a
     /// `usage` object (non-streaming responses, or the final streaming chunk
     /// when `stream_options.include_usage` was requested). `None` when the
@@ -161,6 +163,7 @@ pub(crate) struct StreamAccumulator {
     finish_reason: Option<String>,
     error: Option<String>,
     usage: Option<TokenUsage>,
+    reasoning: String,
 }
 
 impl StreamAccumulator {
@@ -200,6 +203,9 @@ impl StreamAccumulator {
             }
         }
         let delta = choice.get("delta").cloned().unwrap_or(json!({}));
+        if let Some(r) = reasoning_text(delta.get("reasoning_content")) {
+            self.reasoning.push_str(&r);
+        }
         if let Some(c) = delta.get("content").and_then(|c| c.as_str()) {
             self.content_buf.push_str(c);
             let _ = tx.send(AgentEvent::TextDelta(c.to_string())).await;
@@ -243,6 +249,7 @@ impl StreamAccumulator {
             finish_reason: self.finish_reason,
             error: self.error,
             usage: self.usage,
+            reasoning: self.reasoning,
         }
     }
 }
@@ -306,6 +313,8 @@ pub(crate) async fn process_non_stream_json(
     // Non-streaming uses "message" instead of "delta"
     let msg = choice.get("message").cloned().unwrap_or(json!({}));
 
+    let reasoning = reasoning_text(msg.get("reasoning_content")).unwrap_or_default();
+
     if let Some(c) = msg.get("content").and_then(|c| c.as_str()) {
         content_buf.push_str(c);
         let _ = tx.send(AgentEvent::TextDelta(c.to_string())).await;
@@ -344,6 +353,23 @@ pub(crate) async fn process_non_stream_json(
         finish_reason,
         error,
         usage,
+        reasoning,
+    }
+}
+
+/// String form of a `reasoning_content` field. Objects are kept as JSON so
+/// they can be replayed; a non-string object is logged by the caller only
+/// when replay later fails.
+fn reasoning_text(v: Option<&Value>) -> Option<String> {
+    match v? {
+        Value::String(s) if !s.is_empty() => Some(s.clone()),
+        Value::Object(_) | Value::Array(_) => {
+            tracing::warn!(
+                "provider returned a non-string reasoning_content; replaying it as JSON text"
+            );
+            Some(v?.to_string())
+        }
+        _ => None,
     }
 }
 

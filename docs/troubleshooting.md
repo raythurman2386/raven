@@ -30,13 +30,13 @@ reset, provider hiccup, proxy timeout) surfaces as:
 
 ---
 
-## Sandbox denies a command / "command blocked by sandbox filter"
+## Sandbox denies a command / dangerous-command denylist
 
 Raven confines subprocesses with several layers. A denial usually shows one of:
 
-- **`Error: command blocked by sandbox filter`** — the command matched the
-  destructive-command denylist (`rm -rf /`, `mkfs`, `curl | sh`, fork bombs,
-  etc.). This is a hard block; rephrase the command.
+- **`Error: command blocked by the dangerous-command denylist`** — the command
+  matched the destructive-command denylist (`rm -rf /`, `mkfs`, `curl | sh`,
+  fork bombs, etc.). This is a hard block; rephrase the command.
 - **`Error: command killed by signal`** — the child was killed by the seccomp
   network block (SIGSYS) or a resource limit. Test runners and normal
   toolchain commands (`cargo build`, `git fetch`, `npm install`, `curl` that

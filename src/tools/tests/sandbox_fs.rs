@@ -459,6 +459,34 @@ fn truncate_output_is_char_safe() {
 }
 
 #[test]
+fn present_output_spills_large_body_and_keeps_a_tail() {
+    let tmp = tempfile::tempdir().unwrap();
+    let sb = Sandbox::new(tmp.path().to_path_buf());
+    let body = "line\n".repeat(4000);
+    let out = sb.present_output("shell", body.clone());
+    assert!(out.contains("Full output saved to"));
+    assert!(out.contains("Tail:"));
+    assert!(out.contains("line"));
+    let saved = std::fs::read_dir(tmp.path().join(".raven/tool-output")).unwrap();
+    assert_eq!(saved.count(), 1);
+    assert!(!out.contains(&body), "the full body must not be inlined");
+}
+
+#[test]
+fn sparse_line_numbers_keep_the_first_and_every_tenth() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut sb = Sandbox::new(tmp.path().to_path_buf());
+    let text: String = (1..=12).map(|n| format!("L{n}\n")).collect();
+    std::fs::write(tmp.path().join("n.txt"), text).unwrap();
+    sb.sparse_lines = true;
+    let out = sb.read_file("n.txt", 1, 12).unwrap();
+    assert!(out.contains("    1| L1\n"), "{out}");
+    assert!(out.contains("     | L2\n"), "{out}");
+    assert!(out.contains("   10| L10\n"), "{out}");
+    assert!(!out.contains("    2|"), "{out}");
+}
+
+#[test]
 fn truncate_output_short_unmodified() {
     let s = "short";
     assert_eq!(truncate_output(s, 100), s);

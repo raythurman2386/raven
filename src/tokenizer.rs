@@ -142,6 +142,9 @@ pub fn message_tokens(msg: &crate::agent::ChatMessage) -> usize {
     if let Some(content) = &msg.content {
         total += count_tokens(content);
     }
+    if let Some(reasoning) = &msg.reasoning_content {
+        total += count_tokens(reasoning);
+    }
 
     if let Some(tool_calls) = &msg.tool_calls {
         for tc in tool_calls {
@@ -184,6 +187,18 @@ pub struct TokenUsage {
     pub completion_tokens: u64,
     #[serde(alias = "total_tokens")]
     pub total_tokens: u64,
+    /// Prompt tokens served from the provider's prefix cache.
+    ///
+    /// Read from `usage.prompt_tokens_details.cached_tokens` (xAI / OpenAI).
+    /// Older payloads omit it; those deserialize as 0.
+    #[serde(default, alias = "cached_tokens")]
+    pub cached_tokens: u64,
+    /// Reasoning tokens included in `completion_tokens` (billed as output).
+    ///
+    /// Read from `usage.completion_tokens_details.reasoning_tokens`. Not added
+    /// on top of `completion_tokens` when estimating cost.
+    #[serde(default, alias = "reasoning_tokens")]
+    pub reasoning_tokens: u64,
 }
 
 impl TokenUsage {
@@ -200,6 +215,19 @@ impl TokenUsage {
         if prompt_tokens == 0 {
             return None;
         }
+        let cached_tokens = u
+            .get("prompt_tokens_details")
+            .and_then(|d| d.get("cached_tokens"))
+            .and_then(|n| n.as_u64())
+            .or_else(|| u.get("cached_tokens").and_then(|n| n.as_u64()))
+            .unwrap_or(0)
+            .min(prompt_tokens);
+        let reasoning_tokens = u
+            .get("completion_tokens_details")
+            .and_then(|d| d.get("reasoning_tokens"))
+            .and_then(|n| n.as_u64())
+            .or_else(|| u.get("reasoning_tokens").and_then(|n| n.as_u64()))
+            .unwrap_or(0);
         Some(Self {
             prompt_tokens,
             completion_tokens: u
@@ -210,7 +238,90 @@ impl TokenUsage {
                 .get("total_tokens")
                 .and_then(|t| t.as_u64())
                 .unwrap_or(prompt_tokens),
+            cached_tokens,
+            reasoning_tokens,
         })
+    }
+
+    /// Prompt tokens billed at the uncached input rate.
+    pub fn uncached_input(self) -> u64 {
+        self.prompt_tokens.saturating_sub(self.cached_tokens)
+    }
+}
+
+/// Public API list price for one request, in USD.
+///
+/// Prices are the xAI text rates (per million tokens) for Grok models Raven
+/// can name. Cached input is `cached_tokens`; the rest of `prompt_tokens` is
+/// uncached input. `completion_tokens` already includes reasoning tokens, so
+/// `reasoning_tokens` is not added again. Returns `None` for models without
+/// a listed rate. The CLI chat proxy bills a subscription seat; this figure
+/// is the equivalent public-API cost of the same token mix.
+pub fn api_equivalent_usd(model: &str, usage: &TokenUsage) -> Option<f64> {
+    let (input, cached, output) = grok_rates_per_million(model, usage.prompt_tokens)?;
+    let million = 1_000_000.0;
+    Some(
+        (usage.uncached_input() as f64) * input / million
+            + (usage.cached_tokens as f64) * cached / million
+            + (usage.completion_tokens as f64) * output / million,
+    )
+}
+
+/// `(uncached input, cached input, output)` USD per million tokens.
+fn grok_rates_per_million(model: &str, prompt_tokens: u64) -> Option<(f64, f64, f64)> {
+    let m = model.to_ascii_lowercase();
+    let long = prompt_tokens >= 200_000;
+    if m.contains("grok-4.7") || m.contains("grok-4.6") {
+        Some(if long {
+            (4.0, 1.0, 12.0)
+        } else {
+            (2.0, 0.5, 6.0)
+        })
+    } else if m.contains("grok-4.5") {
+        Some(if long {
+            (4.0, 0.6, 12.0)
+        } else {
+            (2.0, 0.3, 6.0)
+        })
+    } else if m.contains("grok-build") {
+        Some(if long {
+            (2.0, 0.4, 4.0)
+        } else {
+            (1.0, 0.2, 2.0)
+        })
+    } else {
+        None
+    }
+}
+
+/// Append one billing record as a JSON line under the session directory.
+///
+/// `state_dir` is `{session}/state`. The ledger is `{session}/usage.jsonl`.
+/// Failures are ignored: accounting must not break the turn.
+pub fn append_usage_jsonl(state_dir: &std::path::Path, model: &str, usage: &TokenUsage) {
+    let Some(session_dir) = state_dir.parent() else {
+        return;
+    };
+    let path = session_dir.join("usage.jsonl");
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let line = serde_json::json!({
+        "model": model,
+        "promptTokens": usage.prompt_tokens,
+        "cachedTokens": usage.cached_tokens,
+        "uncachedTokens": usage.uncached_input(),
+        "completionTokens": usage.completion_tokens,
+        "reasoningTokens": usage.reasoning_tokens,
+        "apiEquivalentUsd": api_equivalent_usd(model, usage),
+    });
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        use std::io::Write;
+        let _ = writeln!(file, "{line}");
     }
 }
 
@@ -713,12 +824,72 @@ fn do_thing(x: i32) -> i32 {
     #[test]
     fn token_usage_from_json_parses_all_fields() {
         let v = serde_json::json!({
-            "usage": {"prompt_tokens": 1234, "completion_tokens": 56, "total_tokens": 1290}
+            "usage": {
+                "prompt_tokens": 1234,
+                "completion_tokens": 56,
+                "total_tokens": 1290,
+                "prompt_tokens_details": {"cached_tokens": 1000},
+                "completion_tokens_details": {"reasoning_tokens": 40}
+            }
         });
         let u = TokenUsage::from_json(&v).expect("usage should parse");
         assert_eq!(u.prompt_tokens, 1234);
         assert_eq!(u.completion_tokens, 56);
         assert_eq!(u.total_tokens, 1290);
+        assert_eq!(u.cached_tokens, 1000);
+        assert_eq!(u.uncached_input(), 234);
+        assert_eq!(u.reasoning_tokens, 40);
+    }
+
+    #[test]
+    fn token_usage_cached_cannot_exceed_prompt() {
+        let v = serde_json::json!({
+            "usage": {"prompt_tokens": 10, "cached_tokens": 50, "completion_tokens": 1}
+        });
+        let u = TokenUsage::from_json(&v).unwrap();
+        assert_eq!(u.cached_tokens, 10);
+    }
+
+    #[test]
+    fn grok_47_cost_weights_cached_input_separately() {
+        let u = TokenUsage {
+            prompt_tokens: 1_000,
+            completion_tokens: 1_000,
+            total_tokens: 2_000,
+            cached_tokens: 750,
+            reasoning_tokens: 100,
+        };
+        // Below the 200k long-context tier: 250 uncached * $2 + 750 cached * $0.50
+        // + 1000 output * $6, per million tokens. Reasoning is already inside
+        // completion_tokens.
+        let usd = super::api_equivalent_usd("grok-4.7", &u).unwrap();
+        let expected = (250.0 * 2.0 + 750.0 * 0.5 + 1000.0 * 6.0) / 1_000_000.0;
+        assert!(
+            (usd - expected).abs() < 1e-12,
+            "usd={usd} expected={expected}"
+        );
+        assert!(super::api_equivalent_usd("llama3", &u).is_none());
+    }
+
+    #[test]
+    fn usage_jsonl_appends_billing_fields() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join("state");
+        std::fs::create_dir_all(&state).unwrap();
+        let u = TokenUsage {
+            prompt_tokens: 100,
+            completion_tokens: 10,
+            total_tokens: 110,
+            cached_tokens: 80,
+            reasoning_tokens: 4,
+        };
+        super::append_usage_jsonl(&state, "grok-4.7", &u);
+        let line = std::fs::read_to_string(tmp.path().join("usage.jsonl")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(v["cachedTokens"], 80);
+        assert_eq!(v["uncachedTokens"], 20);
+        assert_eq!(v["reasoningTokens"], 4);
+        assert!(v["apiEquivalentUsd"].as_f64().unwrap() > 0.0);
     }
 
     #[test]
