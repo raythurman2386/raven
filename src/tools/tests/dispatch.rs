@@ -24,7 +24,9 @@ fn dispatch_rejects_empty_shell_command() {
         None,
         "run_shell",
         &serde_json::json!({"command": ""}),
-        false, false)
+        false,
+        false,
+    )
     .unwrap();
     assert!(
         result.contains("command"),
@@ -35,7 +37,15 @@ fn dispatch_rejects_empty_shell_command() {
 #[test]
 fn dispatch_unknown_tool_returns_error() {
     let sb = sandbox();
-    let result = dispatch(&sb, None, "nonexistent_tool", &serde_json::json!({}), false, false).unwrap();
+    let result = dispatch(
+        &sb,
+        None,
+        "nonexistent_tool",
+        &serde_json::json!({}),
+        false,
+        false,
+    )
+    .unwrap();
     assert!(result.contains("Unknown tool"));
 }
 
@@ -49,7 +59,9 @@ fn dispatch_read_file() {
         None,
         "read_file",
         &serde_json::json!({"path": "test.txt"}),
-        false, false)
+        false,
+        false,
+    )
     .unwrap();
     assert!(result.contains("content"));
 }
@@ -63,7 +75,9 @@ fn dispatch_write_file() {
         None,
         "write_file",
         &serde_json::json!({"path": "out.txt", "content": "data"}),
-        false, false)
+        false,
+        false,
+    )
     .unwrap();
     assert!(result.contains("Wrote"));
     assert_eq!(
@@ -225,7 +239,9 @@ fn dispatch_read_only_rejects_write_file() {
         None,
         "write_file",
         &serde_json::json!({"path": "out.txt", "content": "data"}),
-        true, false)
+        true,
+        false,
+    )
     .unwrap();
     assert!(
         result.contains("not available in read-only mode"),
@@ -246,7 +262,9 @@ fn dispatch_read_only_rejects_run_shell() {
         None,
         "run_shell",
         &serde_json::json!({"command": "echo hi"}),
-        true, false)
+        true,
+        false,
+    )
     .unwrap();
     assert!(
         result.contains("not available in read-only mode"),
@@ -264,7 +282,9 @@ fn dispatch_read_only_allows_read_file() {
         None,
         "read_file",
         &serde_json::json!({"path": "test.txt"}),
-        true, false)
+        true,
+        false,
+    )
     .unwrap();
     assert!(
         result.contains("content"),
@@ -304,7 +324,9 @@ fn git_commit_is_not_a_tool() {
         None,
         "git_commit",
         &serde_json::json!({"message": "nope"}),
-        false, false)
+        false,
+        false,
+    )
     .unwrap();
     assert!(
         result.contains("Unknown tool"),
@@ -400,7 +422,6 @@ fn sandbox_raven_dir_system_falls_back_without_home() {
     }
     assert_eq!(dir, std::path::PathBuf::from("/.raven"));
 }
-
 
 #[test]
 fn dispatch_tool_schema_requires_offload() {

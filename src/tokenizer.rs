@@ -286,11 +286,19 @@ fn grok_rates_per_million(model: &str, prompt_tokens: u64) -> Option<(f64, f64, 
     let m = model.to_ascii_lowercase();
     let long = prompt_tokens >= GROK_LONG_CONTEXT_TOKENS;
     if m.contains("grok-4.7") || m.contains("grok-4.6") {
-        Some(if long { GROK_47_46_LONG } else { GROK_47_46_SHORT })
+        Some(if long {
+            GROK_47_46_LONG
+        } else {
+            GROK_47_46_SHORT
+        })
     } else if m.contains("grok-4.5") {
         Some(if long { GROK_45_LONG } else { GROK_45_SHORT })
     } else if m.contains("grok-build") {
-        Some(if long { GROK_BUILD_LONG } else { GROK_BUILD_SHORT })
+        Some(if long {
+            GROK_BUILD_LONG
+        } else {
+            GROK_BUILD_SHORT
+        })
     } else {
         None
     }

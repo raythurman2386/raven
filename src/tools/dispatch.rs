@@ -48,7 +48,7 @@ pub fn dispatch(
     }
     if name == "tool_schema" && !tool_offload {
         return Ok(
-            "Error: tool_schema is only available when efficiency.tool_offload              is enabled. All tool schemas are already in the static tool list."
+            "Error: tool_schema is only available when efficiency.tool_offload is enabled. All tool schemas are already in the static tool list."
                 .into(),
         );
     }
