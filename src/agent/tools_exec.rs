@@ -882,8 +882,17 @@ pub(crate) fn identical_success_streak(
             continue;
         };
         let content = m.content.as_deref().unwrap_or("");
+        if content.starts_with("Error: HARD STOP") {
+            // A hard-stop refusal is sticky for the same call, so the model
+            // cannot immediately resume the blocked identical-call loop.
+            if n == name && args.as_str() == want_args {
+                streak += 1;
+                continue;
+            }
+            break;
+        }
         if content.starts_with("Error:") || content.starts_with("Tool error:") {
-            // Failures break the identical-success streak.
+            // Other failures break the identical-success streak.
             break;
         }
         if n == name && args.as_str() == want_args {
@@ -897,7 +906,7 @@ pub(crate) fn identical_success_streak(
 
 pub(crate) fn hard_stop_refuse_message(name: &str, n: usize) -> String {
     format!(
-        "Error: HARD STOP — `{name}` already succeeded {n} times with the same arguments.          Further identical calls are refused. Use the result you have, call ask_user          if you need a decision, or finalize your answer now."
+        "Error: HARD STOP — `{name}` already succeeded {n} times with the same arguments. Further identical calls are refused. Use the result you have, call ask_user if you need a decision, or finalize your answer now."
     )
 }
 
@@ -1081,7 +1090,7 @@ mod tests {
         if should_invalidate_tool_cache("run_shell", None) {
             cache.clear();
         }
-        assert!(cache.get(&key).is_none());
+        assert!(!cache.contains_key(&key));
     }
 
     #[test]
@@ -1118,6 +1127,62 @@ mod tests {
         let refuse = hard_stop_refuse_message("git_status", 3);
         assert!(refuse.starts_with("Error: HARD STOP"));
         assert!(refuse.contains("refused"));
+    }
+
+    #[test]
+    fn hard_stop_refusal_stays_sticky_for_same_call() {
+        use super::super::types::{FunctionCall, ToolCall};
+
+        let mut msgs = Vec::new();
+        for i in 0..3 {
+            let id = format!("success_{i}");
+            msgs.push(ChatMessage {
+                role: "assistant".into(),
+                content: None,
+                tool_calls: Some(vec![ToolCall {
+                    id: id.clone(),
+                    type_: "function".into(),
+                    function: FunctionCall {
+                        name: "git_status".into(),
+                        arguments: "{}".into(),
+                    },
+                }]),
+                tool_call_id: None,
+                reasoning_content: None,
+                usage: None,
+            });
+            let mut result = ChatMessage::plain("tool", Some("clean".into()));
+            result.tool_call_id = Some(id);
+            msgs.push(result);
+        }
+
+        let id = "refused";
+        msgs.push(ChatMessage {
+            role: "assistant".into(),
+            content: None,
+            tool_calls: Some(vec![ToolCall {
+                id: id.into(),
+                type_: "function".into(),
+                function: FunctionCall {
+                    name: "git_status".into(),
+                    arguments: "{}".into(),
+                },
+            }]),
+            tool_call_id: None,
+            reasoning_content: None,
+            usage: None,
+        });
+        let mut refusal = ChatMessage::plain(
+            "tool",
+            Some(hard_stop_refuse_message(
+                "git_status",
+                IDENTICAL_SUCCESS_LOOP_N,
+            )),
+        );
+        refusal.tool_call_id = Some(id.into());
+        msgs.push(refusal);
+
+        assert_eq!(identical_success_streak(&msgs, "git_status", "{}"), 4);
     }
 
     #[test]

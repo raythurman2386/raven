@@ -249,8 +249,8 @@ pub fn append_user_constraint_section(body: &mut String, state_dir: &Path) {
 /// - explicit cues: `"residue"` or `"non-blocking"`, OR
 /// - memory-plan housekeeping: `"memory-plan"` / `"memory plan"`, OR
 /// - dated memory notes: both `"dated"` and `"memory"` present.
-/// Lone `"dated"`, or `"memory"` + `"write"`/`"update"`, do **not** match
-/// (avoids false positives like "Write memory allocator" / "Update dated changelog").
+///   Lone `"dated"`, or `"memory"` + `"write"`/`"update"`, do **not** match
+///   (avoids false positives like "Write memory allocator" / "Update dated changelog").
 pub fn looks_like_residue_todo(content: &str) -> bool {
     let lower = content.to_ascii_lowercase();
     if lower.contains("residue") || lower.contains("non-blocking") {
