@@ -8,17 +8,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Per-request token ledger (`{session}/usage.jsonl`) with cached input, uncached input, completion, and reasoning tokens, plus a public-API-equivalent USD estimate for Grok models.
-- `x-grok-conv-id` on Grok requests, taken from the session id, so prefix caching stays on one server.
-- Opt-in efficiency flags (`lean_prompt`, `tool_offload`, `sparse_line_numbers`, `short_compact`, `subagent_handoff`), off unless set in config or `RAVEN_*` environment variables.
+### Changed
+
+## [0.6.8] - 2026-09-24
+
+### Added
+
+- Per-request token ledger (`{session}/usage.jsonl`) with cached input, uncached input, completion, and reasoning tokens, plus a public-API-equivalent USD estimate for Grok models. (#193)
+- `x-grok-conv-id` on Grok requests, taken from the session id, so prefix caching stays on one server. (#193)
+- Opt-in efficiency flags (`lean_prompt`, `tool_offload`, `sparse_line_numbers`, `short_compact`, `subagent_handoff`), off unless set in config or `RAVEN_*` environment variables. (#193)
+- Named Grok list-price rates for USD estimates on the usage ledger. (#193)
 
 ### Changed
 
-- The cached prefix is the tool list plus the stable system instructions. Workspace, repo map, project instructions, memory, goal, and todos sit in a setup message. Git status is appended after the conversation for that request only.
-- Tool output longer than 12 000 characters is written to `.raven/tool-output/` and the model receives the path, size, and a tail.
-- Provider `reasoning_content` is stored and sent back on later turns. A warning is logged when a later turn drops it.
-- Compaction writes the dropped transcript to `.raven/compact/*.jsonl` and points the summary at that file.
-- MCP tool schemas are appended in name order.
+- The cached prefix is the tool list plus the stable system instructions. Workspace, repo map, project instructions, memory, goal, and todos sit in a setup message. Git status is appended after the conversation for that request only. (#193)
+- Tool output longer than 12 000 characters is written to `.raven/tool-output/` and the model receives the path, size, and a tail. (#193)
+- Provider `reasoning_content` is stored and sent back on later turns. A warning is logged when a later turn drops it. (#193)
+- Compaction writes the dropped transcript to `.raven/compact/*.jsonl` and points the summary at that file. (#193)
+- MCP tool schemas are appended in name order. (#193)
+- `present_output` on `git status` / `git log` so those tool results stay short in context. (#193)
+- `tool_schema` is gated on `tool_offload` so schema spill only applies when offload is enabled. (#193)
+- Docs note spill retention for `.raven/tool-output/` and compact archives. (#193)
+
+### Fixed
+
+- Usage harvest is scoped so concurrent/eval runs do not cross-collect meters. (#193)
+- Eval case 13 session select picks the correct session state for long-horizon checks. (#193)
+
+### Dependencies
+
+- `clap` 4.6.6 → 4.6.7 (#190).
+- `toml` 1.1.5 → 1.1.6 (#189).
 
 ## [0.6.5] - 2026-09-10
 
