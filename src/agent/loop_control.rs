@@ -11,6 +11,7 @@ use tokio::sync::mpsc;
 use crate::context::history_tokens;
 
 use super::core::Agent;
+use super::tools_exec::IDENTICAL_SUCCESS_LOOP_N;
 use super::types::{AgentEvent, ChatMessage};
 use crate::tokenizer::TokenUsage;
 
@@ -221,6 +222,9 @@ impl Agent {
 ///   "stuck in a loop" reminder. The threshold is deliberately high so normal
 ///   context-gathering (goal → list → grep → read) is never interrupted; only
 ///   a genuine tool-calling loop triggers it.
+/// - After 3 identical successful `(name, args)` tool results in recent turns
+///   (with or without assistant text), push a HARD STOP reminder; dispatch
+///   also refuses further identical calls (see `tools_exec`).
 pub(crate) fn compute_reminders(
     messages: &[ChatMessage],
     iter: usize,
@@ -245,6 +249,16 @@ pub(crate) fn compute_reminders(
                     .into(),
             );
         }
+    }
+
+    // Identical successful (name, args) loop: N repeats → hard stop reminder.
+    // Fires with or without assistant narration (unlike the tool-only streak).
+    if let Some((name, n)) = identical_success_loop(messages, IDENTICAL_SUCCESS_LOOP_N) {
+        reminders.push(format!(
+            "HARD STOP: `{name}` already succeeded {n} times with the same arguments. \
+             Further identical calls will be refused. Use the result you have, call ask_user \
+             if you need a decision, or finalize your answer now."
+        ));
     }
 
     // Goal-aware reflection: after a long stretch of tool-only iterations,
@@ -276,6 +290,71 @@ pub(crate) fn compute_reminders(
     }
 
     reminders
+}
+
+/// If the N most recent *successful* tool results share the same
+/// `(name, normalized args)`, return that name and N.
+fn identical_success_loop(messages: &[ChatMessage], n: usize) -> Option<(String, usize)> {
+    if n == 0 {
+        return None;
+    }
+    let recent = recent_successful_tool_keys(messages);
+    if recent.len() < n {
+        return None;
+    }
+    let first = &recent[0];
+    if recent.iter().take(n).all(|k| k == first) {
+        Some((first.0.clone(), n))
+    } else {
+        None
+    }
+}
+
+/// Newest-first list of successful `(tool_name, normalized_args)` from history.
+fn recent_successful_tool_keys(messages: &[ChatMessage]) -> Vec<(String, String)> {
+    use super::tools_exec::normalize_tool_args;
+    use std::collections::HashMap;
+
+    let mut call_meta: HashMap<&str, (String, String)> = HashMap::new();
+    for m in messages {
+        if m.role != "assistant" {
+            continue;
+        }
+        let Some(tcs) = m.tool_calls.as_ref() else {
+            continue;
+        };
+        for tc in tcs {
+            call_meta.insert(
+                tc.id.as_str(),
+                (
+                    tc.function.name.clone(),
+                    normalize_tool_args(&tc.function.arguments),
+                ),
+            );
+        }
+    }
+
+    let mut out = Vec::new();
+    for m in messages.iter().rev() {
+        if m.role != "tool" {
+            continue;
+        }
+        let Some(id) = m.tool_call_id.as_deref() else {
+            continue;
+        };
+        let Some((name, args)) = call_meta.get(id) else {
+            continue;
+        };
+        let content = m.content.as_deref().unwrap_or("");
+        if content.starts_with("Error:") || content.starts_with("Tool error:") {
+            continue;
+        }
+        out.push((name.clone(), args.clone()));
+        if out.len() >= 16 {
+            break;
+        }
+    }
+    out
 }
 
 /// Summarize a slice of conversation history into a compact paragraph.

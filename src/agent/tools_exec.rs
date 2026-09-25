@@ -5,7 +5,7 @@
 //! **serially in call order** so two edits to the same file apply in order
 //! instead of racing. All other tools may run in parallel via `spawn_blocking`.
 //! Results are recorded through [`Agent::record_tool_result`], which shares
-//! identical bookkeeping (consecutive-failure tracking, read-only caching,
+//! identical bookkeeping (consecutive-failure tracking, read-only/MCP caching,
 //! `ToolEnd` event, `tool` message push) across both paths.
 
 use anyhow::Result;
@@ -320,8 +320,21 @@ impl Agent {
             let state_dir = self.state_dir.clone();
             let name = tc.function.name.clone();
             let id = tc.id.clone();
-            let cache_key = format!("{}:{}", name, tc.function.arguments);
+            let cache_key = tool_cache_key(&name, &tc.function.arguments);
             let read_only = self.plan_only;
+
+            // HARD STOP enforcement: after N identical successes, refuse further
+            // identical calls (reminder-only was underselling the name).
+            let streak = identical_success_streak(&self.messages, &name, &tc.function.arguments);
+            if streak >= IDENTICAL_SUCCESS_LOOP_N {
+                slots[idx] = Some(PendingToolResult::ready(
+                    id,
+                    name.clone(),
+                    cache_key,
+                    Ok(hard_stop_refuse_message(&name, streak)),
+                ));
+                continue;
+            }
 
             if let Some(mcp) = self.mcp.clone() {
                 if mcp.has_tool(&name) {
@@ -335,6 +348,19 @@ impl Agent {
                                 .into()),
                         ));
                         continue;
+                    }
+                    // Short-circuit identical successful MCP read/verify calls
+                    // (e.g. ripwire__doc_drift) until a mutating tool clears the cache.
+                    if is_cacheable_tool(&name, Some(&mcp)) {
+                        if let Some(cached) = self.tool_cache.get(&cache_key) {
+                            slots[idx] = Some(PendingToolResult::ready(
+                                id,
+                                name,
+                                cache_key,
+                                Ok(cached.clone()),
+                            ));
+                            continue;
+                        }
                     }
                     handles.push((
                         idx,
@@ -359,21 +385,8 @@ impl Agent {
                         .map(Sandbox::is_verification_command)
                         .unwrap_or(false));
 
-            // Check cache for read-only tools
-            let is_read_only = matches!(
-                name.as_str(),
-                "list_dir"
-                    | "read_file"
-                    | "grep"
-                    | "search_code"
-                    | "git_status"
-                    | "git_diff"
-                    | "git_log"
-                    | "skill_search"
-                    | "skill_load"
-                    | "memory_search"
-            );
-            if is_read_only {
+            // Check cache for read-only / verify-style tools (builtin + MCP).
+            if is_cacheable_tool(&name, self.mcp.as_ref()) {
                 if let Some(cached) = self.tool_cache.get(&cache_key) {
                     slots[idx] = Some(PendingToolResult::ready(
                         id,
@@ -609,21 +622,15 @@ impl Agent {
             self.verified = verification_passed(&result);
         }
 
-        // Cache read-only results
-        let is_read_only = matches!(
-            name.as_str(),
-            "list_dir"
-                | "read_file"
-                | "grep"
-                | "search_code"
-                | "git_status"
-                | "git_diff"
-                | "git_log"
-                | "skill_search"
-                | "skill_load"
-                | "memory_search"
-        );
-        if is_read_only && !cache_key.is_empty() && !is_tool_error_text(&result) {
+        // Mutating tools (file edits, run_shell, memory_update, MCP mutates)
+        // invalidate the read/verify cache so later hits are not stale.
+        if !is_tool_error_text(&result) && should_invalidate_tool_cache(&name, self.mcp.as_ref()) {
+            self.tool_cache.clear();
+        } else if is_cacheable_tool(&name, self.mcp.as_ref())
+            && !cache_key.is_empty()
+            && !is_tool_error_text(&result)
+        {
+            // Cache successful read-only / verify-style results (builtin + MCP).
             self.tool_cache.insert(cache_key, result.clone());
         }
         let preview: String = result.chars().take(600).collect();
@@ -726,6 +733,181 @@ fn parse_exit_code(output: &str) -> Option<i32> {
         i += 1;
     }
     None
+}
+
+/// Canonicalize tool argument JSON so equivalent objects share a cache key
+/// (`{"b":1,"a":2}` and `{"a":2,"b":1}` hit the same entry).
+pub(crate) fn normalize_tool_args(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    match serde_json::from_str::<Value>(trimmed) {
+        Ok(v) => serde_json::to_string(&sort_json_keys(&v)).unwrap_or_else(|_| trimmed.to_string()),
+        Err(_) => trimmed.to_string(),
+    }
+}
+
+fn sort_json_keys(v: &Value) -> Value {
+    match v {
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            let mut out = serde_json::Map::new();
+            for k in keys {
+                out.insert(k.clone(), sort_json_keys(&map[k]));
+            }
+            Value::Object(out)
+        }
+        Value::Array(arr) => Value::Array(arr.iter().map(sort_json_keys).collect()),
+        other => other.clone(),
+    }
+}
+
+/// Cache key: `name` + normalized argument JSON.
+pub(crate) fn tool_cache_key(name: &str, raw_args: &str) -> String {
+    format!("{}:{}", name, normalize_tool_args(raw_args))
+}
+
+/// Built-in tools whose successful results are safe to reuse until a mutate.
+pub(crate) fn is_builtin_read_only(name: &str) -> bool {
+    matches!(
+        name,
+        "list_dir"
+            | "read_file"
+            | "grep"
+            | "search_code"
+            | "git_status"
+            | "git_diff"
+            | "git_log"
+            | "skill_search"
+            | "skill_load"
+            | "memory_search"
+            | "tool_schema"
+            | "think"
+    )
+}
+
+/// Verify-style MCP names we cache even when `readOnlyHint` is missing
+/// (motivating case: `ripwire__doc_drift`).
+///
+/// Prefer exact advertised names / `__doc_drift` suffix over a substring match
+/// so names like `update_doc_drift_notes` are not falsely treated as cacheable.
+/// Prefer `readOnlyHint` via [`is_cacheable_tool`] when the MCP server sets it.
+pub(crate) fn is_mcp_verify_cacheable(name: &str) -> bool {
+    name == "doc_drift" || name.ends_with("__doc_drift")
+}
+
+/// Whether a successful `(name, args)` result may be short-circuited from cache.
+///
+/// Includes built-in read-only tools, MCP tools annotated `readOnlyHint: true`,
+/// and exact doc_drift verifies. Mutating tools are never cacheable; a
+/// successful mutate clears the cache via [`should_invalidate_tool_cache`].
+pub(crate) fn is_cacheable_tool(name: &str, mcp: Option<&crate::mcp::McpHandle>) -> bool {
+    if is_builtin_read_only(name) {
+        return true;
+    }
+    if is_mcp_verify_cacheable(name) {
+        return true;
+    }
+    if let Some(mcp) = mcp {
+        if mcp.has_tool(name) && mcp.is_read_only(name) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Tools whose successful results invalidate the read/verify tool cache.
+///
+/// Broader than the serial file-edit path: `run_shell`, `memory_update`, and
+/// non-read-only MCP tools also clear so verify-cache hits cannot go stale.
+pub(crate) fn should_invalidate_tool_cache(
+    name: &str,
+    mcp: Option<&crate::mcp::McpHandle>,
+) -> bool {
+    if matches!(
+        name,
+        "write_file" | "search_replace" | "apply_patch" | "run_shell" | "memory_update"
+    ) {
+        return true;
+    }
+    if let Some(mcp) = mcp {
+        // Non-cacheable MCP tools are treated as mutators.
+        if mcp.has_tool(name) && !is_cacheable_tool(name, Some(mcp)) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Same threshold as the HARD STOP reminder in `compute_reminders`.
+pub(crate) const IDENTICAL_SUCCESS_LOOP_N: usize = 3;
+
+/// How many trailing successful tool results match `(name, normalized args)`.
+pub(crate) fn identical_success_streak(
+    messages: &[ChatMessage],
+    name: &str,
+    raw_args: &str,
+) -> usize {
+    let want_args = normalize_tool_args(raw_args);
+    let mut call_meta: std::collections::HashMap<&str, (String, String)> =
+        std::collections::HashMap::new();
+    for m in messages {
+        if m.role != "assistant" {
+            continue;
+        }
+        let Some(tcs) = m.tool_calls.as_ref() else {
+            continue;
+        };
+        for tc in tcs {
+            call_meta.insert(
+                tc.id.as_str(),
+                (
+                    tc.function.name.clone(),
+                    normalize_tool_args(&tc.function.arguments),
+                ),
+            );
+        }
+    }
+    let mut streak = 0usize;
+    for m in messages.iter().rev() {
+        if m.role != "tool" {
+            continue;
+        }
+        let Some(id) = m.tool_call_id.as_deref() else {
+            continue;
+        };
+        let Some((n, args)) = call_meta.get(id) else {
+            continue;
+        };
+        let content = m.content.as_deref().unwrap_or("");
+        if content.starts_with("Error: HARD STOP") {
+            // A hard-stop refusal is sticky for the same call, so the model
+            // cannot immediately resume the blocked identical-call loop.
+            if n == name && args.as_str() == want_args {
+                streak += 1;
+                continue;
+            }
+            break;
+        }
+        if content.starts_with("Error:") || content.starts_with("Tool error:") {
+            // Other failures break the identical-success streak.
+            break;
+        }
+        if n == name && args.as_str() == want_args {
+            streak += 1;
+        } else {
+            break;
+        }
+    }
+    streak
+}
+
+pub(crate) fn hard_stop_refuse_message(name: &str, n: usize) -> String {
+    format!(
+        "Error: HARD STOP — `{name}` already succeeded {n} times with the same arguments. Further identical calls are refused. Use the result you have, call ask_user if you need a decision, or finalize your answer now."
+    )
 }
 
 fn is_tool_error_text(s: &str) -> bool {
@@ -853,5 +1035,178 @@ mod tests {
             "Error: path escapes workspace".into()
         )));
         assert!(mutating_tool_succeeded(&Ok("wrote a.rs".into())));
+    }
+
+    #[test]
+    fn normalize_tool_args_sorts_object_keys() {
+        let a = normalize_tool_args(r#"{"b":1,"a":2}"#);
+        let b = normalize_tool_args(r#"{"a":2,"b":1}"#);
+        assert_eq!(a, b);
+        assert_eq!(a, r#"{"a":2,"b":1}"#);
+    }
+
+    #[test]
+    fn tool_cache_key_matches_for_equivalent_args() {
+        let k1 = tool_cache_key("read_file", r#"{"path":"a.rs","max_lines":10}"#);
+        let k2 = tool_cache_key("read_file", r#"{"max_lines":10,"path":"a.rs"}"#);
+        assert_eq!(k1, k2);
+        assert!(k1.starts_with("read_file:"));
+    }
+
+    #[test]
+    fn builtin_and_mcp_shaped_tools_are_cacheable() {
+        assert!(is_builtin_read_only("git_status"));
+        assert!(is_builtin_read_only("read_file"));
+        assert!(!is_builtin_read_only("write_file"));
+        assert!(is_mcp_verify_cacheable("ripwire__doc_drift"));
+        assert!(is_mcp_verify_cacheable("doc_drift"));
+        assert!(!is_mcp_verify_cacheable("ripwire__apply_patch"));
+        // Substring must not false-positive non-verify tools.
+        assert!(!is_mcp_verify_cacheable("update_doc_drift_notes"));
+        assert!(!is_mcp_verify_cacheable("doc_drift_writer"));
+        // Without an MCP handle, verify-style names still cache; plain MCP names do not.
+        assert!(is_cacheable_tool("ripwire__doc_drift", None));
+        assert!(!is_cacheable_tool("ripwire__mutate", None));
+        assert!(is_cacheable_tool("list_dir", None));
+    }
+
+    #[test]
+    fn should_invalidate_clears_on_shell_and_file_mutates() {
+        assert!(should_invalidate_tool_cache("run_shell", None));
+        assert!(should_invalidate_tool_cache("write_file", None));
+        assert!(should_invalidate_tool_cache("memory_update", None));
+        assert!(!should_invalidate_tool_cache("read_file", None));
+        assert!(!should_invalidate_tool_cache("git_status", None));
+        assert!(!should_invalidate_tool_cache("ripwire__doc_drift", None));
+    }
+
+    #[test]
+    fn stale_cache_clears_after_mutating_tool_result() {
+        use std::collections::HashMap;
+        let mut cache: HashMap<String, String> = HashMap::new();
+        let key = tool_cache_key("git_status", "{}");
+        cache.insert(key.clone(), "clean".into());
+        // Simulate record_tool_result invalidate path for run_shell.
+        if should_invalidate_tool_cache("run_shell", None) {
+            cache.clear();
+        }
+        assert!(!cache.contains_key(&key));
+    }
+
+    #[test]
+    fn identical_success_streak_counts_trailing_matches() {
+        use super::super::types::{FunctionCall, ToolCall};
+        let mut msgs = Vec::new();
+        for i in 0..3 {
+            let id = format!("c{i}");
+            msgs.push(ChatMessage {
+                role: "assistant".into(),
+                content: Some("ok".into()),
+                tool_calls: Some(vec![ToolCall {
+                    id: id.clone(),
+                    type_: "function".into(),
+                    function: FunctionCall {
+                        name: "git_status".into(),
+                        arguments: "{}".into(),
+                    },
+                }]),
+                tool_call_id: None,
+                reasoning_content: None,
+                usage: None,
+            });
+            let mut m = ChatMessage::plain("tool", Some("clean".into()));
+            m.tool_call_id = Some(id);
+            msgs.push(m);
+        }
+        assert_eq!(identical_success_streak(&msgs, "git_status", "{}"), 3);
+        assert_eq!(
+            identical_success_streak(&msgs, "git_status", r#"{"x":1}"#),
+            0
+        );
+        assert!(identical_success_streak(&msgs, "git_status", "{}") >= IDENTICAL_SUCCESS_LOOP_N);
+        let refuse = hard_stop_refuse_message("git_status", 3);
+        assert!(refuse.starts_with("Error: HARD STOP"));
+        assert!(refuse.contains("refused"));
+    }
+
+    #[test]
+    fn hard_stop_refusal_stays_sticky_for_same_call() {
+        use super::super::types::{FunctionCall, ToolCall};
+
+        let mut msgs = Vec::new();
+        for i in 0..3 {
+            let id = format!("success_{i}");
+            msgs.push(ChatMessage {
+                role: "assistant".into(),
+                content: None,
+                tool_calls: Some(vec![ToolCall {
+                    id: id.clone(),
+                    type_: "function".into(),
+                    function: FunctionCall {
+                        name: "git_status".into(),
+                        arguments: "{}".into(),
+                    },
+                }]),
+                tool_call_id: None,
+                reasoning_content: None,
+                usage: None,
+            });
+            let mut result = ChatMessage::plain("tool", Some("clean".into()));
+            result.tool_call_id = Some(id);
+            msgs.push(result);
+        }
+
+        let id = "refused";
+        msgs.push(ChatMessage {
+            role: "assistant".into(),
+            content: None,
+            tool_calls: Some(vec![ToolCall {
+                id: id.into(),
+                type_: "function".into(),
+                function: FunctionCall {
+                    name: "git_status".into(),
+                    arguments: "{}".into(),
+                },
+            }]),
+            tool_call_id: None,
+            reasoning_content: None,
+            usage: None,
+        });
+        let mut refusal = ChatMessage::plain(
+            "tool",
+            Some(hard_stop_refuse_message(
+                "git_status",
+                IDENTICAL_SUCCESS_LOOP_N,
+            )),
+        );
+        refusal.tool_call_id = Some(id.into());
+        msgs.push(refusal);
+
+        assert_eq!(identical_success_streak(&msgs, "git_status", "{}"), 4);
+    }
+
+    #[test]
+    fn tool_cache_hit_returns_prior_builtin_result() {
+        use std::collections::HashMap;
+        let mut cache: HashMap<String, String> = HashMap::new();
+        let key = tool_cache_key("git_status", "{}");
+        assert!(is_cacheable_tool("git_status", None));
+        cache.insert(key.clone(), "clean".into());
+        assert_eq!(cache.get(&key).map(String::as_str), Some("clean"));
+        // Equivalent empty-object args still hit.
+        let key2 = tool_cache_key("git_status", " {} ");
+        assert_eq!(cache.get(&key2).map(String::as_str), Some("clean"));
+    }
+
+    #[test]
+    fn tool_cache_hit_for_mcp_doc_drift_shape() {
+        use std::collections::HashMap;
+        let mut cache: HashMap<String, String> = HashMap::new();
+        let name = "ripwire__doc_drift";
+        let key = tool_cache_key(name, r#"{"path":"docs"}"#);
+        assert!(is_cacheable_tool(name, None));
+        cache.insert(key.clone(), "live drift=0".into());
+        let again = tool_cache_key(name, r#"{"path":"docs"}"#);
+        assert_eq!(cache.get(&again).map(String::as_str), Some("live drift=0"));
     }
 }

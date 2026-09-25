@@ -295,6 +295,106 @@ fn loop_breaker_ignores_recent_text_output() {
     );
 }
 
+fn successful_tool_turn(name: &str, args: &str, call_id: &str, result: &str) -> Vec<ChatMessage> {
+    use super::types::{FunctionCall, ToolCall};
+    vec![
+        ChatMessage {
+            role: "assistant".into(),
+            content: Some("checking…".into()),
+            tool_calls: Some(vec![ToolCall {
+                id: call_id.into(),
+                type_: "function".into(),
+                function: FunctionCall {
+                    name: name.into(),
+                    arguments: args.into(),
+                },
+            }]),
+            tool_call_id: None,
+            reasoning_content: None,
+            usage: None,
+        },
+        {
+            let mut m = ChatMessage::plain("tool", Some(result.into()));
+            m.tool_call_id = Some(call_id.into());
+            m
+        },
+    ]
+}
+
+#[test]
+fn identical_success_loop_fires_at_three() {
+    let mut msgs = vec![plain("system"), plain("user")];
+    for i in 0..3 {
+        msgs.extend(successful_tool_turn(
+            "ripwire__doc_drift",
+            r#"{"path":"docs"}"#,
+            &format!("call_{i}"),
+            "live drift=0",
+        ));
+    }
+    let r = compute_reminders(&msgs, 3, None, &[]);
+    assert!(
+        r.iter().any(|t| {
+            t.contains("HARD STOP") && t.contains("ripwire__doc_drift") && t.contains("refused")
+        }),
+        "success-loop reminder should fire, got {r:?}"
+    );
+}
+
+#[test]
+fn identical_success_loop_does_not_fire_at_two() {
+    let mut msgs = vec![plain("system"), plain("user")];
+    for i in 0..2 {
+        msgs.extend(successful_tool_turn(
+            "git_status",
+            "{}",
+            &format!("call_{i}"),
+            "clean",
+        ));
+    }
+    let r = compute_reminders(&msgs, 2, None, &[]);
+    assert!(
+        !r.iter().any(|t| t.contains("HARD STOP")),
+        "should not fire at 2 identical successes, got {r:?}"
+    );
+}
+
+#[test]
+fn hard_stop_refuse_message_is_an_error_result() {
+    use super::tools_exec::{hard_stop_refuse_message, IDENTICAL_SUCCESS_LOOP_N};
+    let msg = hard_stop_refuse_message("git_status", IDENTICAL_SUCCESS_LOOP_N);
+    assert!(msg.starts_with("Error: HARD STOP"), "{msg}");
+    assert!(msg.contains("refused"), "{msg}");
+}
+
+#[test]
+fn identical_success_loop_ignores_failures_and_different_args() {
+    let mut msgs = vec![plain("system"), plain("user")];
+    msgs.extend(successful_tool_turn(
+        "read_file",
+        r#"{"path":"a.rs"}"#,
+        "c1",
+        "fn main() {}",
+    ));
+    msgs.extend(successful_tool_turn(
+        "read_file",
+        r#"{"path":"b.rs"}"#,
+        "c2",
+        "fn other() {}",
+    ));
+    msgs.extend(successful_tool_turn(
+        "read_file",
+        r#"{"path":"a.rs"}"#,
+        "c3",
+        "Error: missing",
+    ));
+    let r = compute_reminders(&msgs, 3, None, &[]);
+    assert!(
+        !r.iter().any(|t| t.contains("HARD STOP")),
+        "mixed args/failures must not trip the loop, got {r:?}"
+    );
+}
+
 #[test]
 fn iteration_5_nudge_removed() {
     let msgs = vec![plain("system")];

@@ -72,8 +72,20 @@ pub fn todo_write(state_dir: Option<&Path>, todos: Vec<TodoItem>) -> anyhow::Res
                 .into(),
         );
     };
+    let goal = crate::state::load_goal_from_dir(state_dir);
+    let (todos, auto_completed) = crate::state::gate_residue_todos(goal.as_ref(), todos);
     crate::state::save_todos(state_dir, &todos)?;
-    Ok(crate::state::format_todos(&todos))
+    let mut out = crate::state::format_todos(&todos);
+    if !auto_completed.is_empty() {
+        out.push_str(
+            "\n\n[residue auto-completed: primary work already met; \
+             ask the user before reopening]\n",
+        );
+        for content in &auto_completed {
+            out.push_str(&format!("- {content}\n"));
+        }
+    }
+    Ok(out.trim_end().to_string())
 }
 
 #[cfg(test)]
