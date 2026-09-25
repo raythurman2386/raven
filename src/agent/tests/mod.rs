@@ -7,7 +7,11 @@ mod eval_suite;
 mod fake_model;
 
 use super::core::Agent;
-use super::loop_control::compute_reminders;
+use super::loop_control::{
+    compute_reminders, detect_narration_contradiction, narration_contradiction_reminder,
+    verify_plateau_should_stop, verify_plateau_wrap_up_prompt, NarrationContradiction,
+    VERIFY_PLATEAU_K,
+};
 use super::stream::args_to_string;
 use super::types::{AgentEvent, ChatMessage, FunctionCall, ToolCall};
 use crate::config::{Mode, Scope};
@@ -474,6 +478,250 @@ fn goal_aware_reminder_skips_completed_goal() {
         !r.iter().any(|t| t.contains("Done goal")),
         "completed goal should not be anchored, got {r:?}"
     );
+}
+
+#[test]
+fn verify_plateau_stops_when_primary_met_and_verify_repeats() {
+    let mut msgs = vec![plain("system"), plain("user")];
+    for i in 0..VERIFY_PLATEAU_K {
+        msgs.extend(successful_tool_turn(
+            "ripwire__doc_drift",
+            r#"{"path":"docs"}"#,
+            &format!("call_{i}"),
+            "live drift=0",
+        ));
+    }
+    let goal = crate::state::Goal {
+        description: "Fix live doc_drift".into(),
+        status: "completed".into(),
+        updated_at: "2026-09-25".into(),
+    };
+    let todos = vec![
+        crate::state::TodoItem {
+            content: "Live verify".into(),
+            status: "completed".into(),
+            priority: "high".into(),
+        },
+        crate::state::TodoItem {
+            content: "Chase dated memory-plan residue".into(),
+            status: "pending".into(),
+            priority: "low".into(),
+        },
+    ];
+    let hit = verify_plateau_should_stop(&msgs, Some(&goal), &todos);
+    assert!(
+        hit.as_ref()
+            .is_some_and(|(n, k)| n == "ripwire__doc_drift" && *k == VERIFY_PLATEAU_K),
+        "expected plateau stop, got {hit:?}"
+    );
+    // Live loop surfaces the reminder once via finish_with_verify_plateau
+    // (returns before compute_reminders), so compute_reminders stays quiet.
+    let r = compute_reminders(&msgs, 3, Some(&goal), &todos);
+    assert!(
+        !r.iter().any(|t| t.contains("VERIFY PLATEAU")),
+        "plateau must not double-fire via compute_reminders, got {r:?}"
+    );
+    let wrap = verify_plateau_wrap_up_prompt("ripwire__doc_drift", VERIFY_PLATEAU_K);
+    assert!(
+        wrap.contains("VERIFY PLATEAU") && wrap.contains("ripwire__doc_drift"),
+        "wrap-up prompt is the live reminder surface, got {wrap}"
+    );
+    assert!(
+        !wrap.contains("  "),
+        "wrap-up must not retain multi-space padding, got {wrap:?}"
+    );
+}
+
+#[test]
+fn verify_plateau_does_not_stop_with_live_work_open() {
+    let mut msgs = vec![plain("system"), plain("user")];
+    for i in 0..VERIFY_PLATEAU_K {
+        msgs.extend(successful_tool_turn(
+            "ripwire__doc_drift",
+            r#"{"path":"docs"}"#,
+            &format!("call_{i}"),
+            "live drift=0",
+        ));
+    }
+    let todos = vec![crate::state::TodoItem {
+        content: "Fix live doc_drift verify".into(),
+        status: "pending".into(),
+        priority: "high".into(),
+    }];
+    assert!(
+        verify_plateau_should_stop(&msgs, None, &todos).is_none(),
+        "must not stop while live work is open"
+    );
+}
+
+#[test]
+fn verify_plateau_does_not_stop_before_k() {
+    let mut msgs = vec![plain("system"), plain("user")];
+    msgs.extend(successful_tool_turn(
+        "ripwire__doc_drift",
+        r#"{"path":"docs"}"#,
+        "call_0",
+        "live drift=0",
+    ));
+    let goal = crate::state::Goal {
+        description: "done".into(),
+        status: "completed".into(),
+        updated_at: "".into(),
+    };
+    assert!(
+        verify_plateau_should_stop(&msgs, Some(&goal), &[]).is_none(),
+        "single success is not a plateau"
+    );
+}
+
+#[test]
+fn verify_plateau_hard_stop_error_does_not_count_as_hit() {
+    let mut msgs = vec![plain("system"), plain("user")];
+    msgs.extend(successful_tool_turn(
+        "ripwire__doc_drift",
+        r#"{"path":"docs"}"#,
+        "call_0",
+        "live drift=0",
+    ));
+    // HARD STOP refusal is an Error: result — must not count toward plateau K.
+    msgs.extend(successful_tool_turn(
+        "ripwire__doc_drift",
+        r#"{"path":"docs"}"#,
+        "call_1",
+        "Error: HARD STOP — `ripwire__doc_drift` already succeeded 3 times with the same arguments. Further identical calls are refused.",
+    ));
+    let goal = crate::state::Goal {
+        description: "done".into(),
+        status: "completed".into(),
+        updated_at: "".into(),
+    };
+    assert!(
+        verify_plateau_should_stop(&msgs, Some(&goal), &[]).is_none(),
+        "HARD STOP Error: must not count as a verify success hit"
+    );
+}
+
+#[test]
+fn verify_plateau_different_args_same_body_still_stops() {
+    let mut msgs = vec![plain("system"), plain("user")];
+    msgs.extend(successful_tool_turn(
+        "ripwire__doc_drift",
+        r#"{"path":"docs"}"#,
+        "call_0",
+        "live drift=0",
+    ));
+    msgs.extend(successful_tool_turn(
+        "ripwire__doc_drift",
+        r#"{"path":"docs/","verbose":true}"#,
+        "call_1",
+        "live drift=0",
+    ));
+    let goal = crate::state::Goal {
+        description: "Fix live doc_drift".into(),
+        status: "completed".into(),
+        updated_at: "2026-09-25".into(),
+    };
+    let hit = verify_plateau_should_stop(&msgs, Some(&goal), &[]);
+    assert!(
+        hit.as_ref()
+            .is_some_and(|(n, k)| n == "ripwire__doc_drift" && *k == VERIFY_PLATEAU_K),
+        "same body with different args should still plateau, got {hit:?}"
+    );
+}
+
+#[test]
+fn narration_contradiction_ignores_bare_tree_is_clean() {
+    let mut msgs = vec![plain("system"), plain("user")];
+    msgs.extend(successful_tool_turn(
+        "git_status",
+        "{}",
+        "call_gs",
+        " M src/agent/core.rs
+",
+    ));
+    msgs.push(ChatMessage {
+        role: "assistant".into(),
+        content: Some("The dependency tree is clean after the upgrade.".into()),
+        tool_calls: None,
+        tool_call_id: None,
+        reasoning_content: None,
+        usage: None,
+    });
+    assert!(
+        detect_narration_contradiction(&msgs).is_none(),
+        "bare 'tree is clean' metaphor must not false-positive"
+    );
+}
+
+#[test]
+fn narration_contradiction_clean_vs_dirty_git_status() {
+    let mut msgs = vec![plain("system"), plain("user")];
+    msgs.extend(successful_tool_turn(
+        "git_status",
+        "{}",
+        "call_gs",
+        " M src/agent/core.rs\n?? scratch.txt\n",
+    ));
+    // Assistant narrates clean after seeing dirty status (motivating session).
+    msgs.push(ChatMessage {
+        role: "assistant".into(),
+        content: Some("The working tree is clean — ready to ship.".into()),
+        tool_calls: None,
+        tool_call_id: None,
+        reasoning_content: None,
+        usage: None,
+    });
+    assert_eq!(
+        detect_narration_contradiction(&msgs),
+        Some(NarrationContradiction::CleanVsDirtyGitStatus)
+    );
+    let nudge = narration_contradiction_reminder(&msgs).expect("nudge");
+    assert!(nudge.contains("Trust the tool"), "{nudge}");
+    let r = compute_reminders(&msgs, 1, None, &[]);
+    assert!(
+        r.iter().any(|t| t.contains("Trust the tool")),
+        "reminder should include narration nudge, got {r:?}"
+    );
+}
+
+#[test]
+fn narration_contradiction_ignores_truly_clean_status() {
+    let mut msgs = vec![plain("system"), plain("user")];
+    msgs.extend(successful_tool_turn(
+        "git_status",
+        "{}",
+        "call_gs",
+        "No changes (working tree clean)",
+    ));
+    msgs.push(ChatMessage {
+        role: "assistant".into(),
+        content: Some("The working tree is clean.".into()),
+        tool_calls: None,
+        tool_call_id: None,
+        reasoning_content: None,
+        usage: None,
+    });
+    assert!(detect_narration_contradiction(&msgs).is_none());
+}
+
+#[test]
+fn narration_contradiction_ignores_unrelated_claims() {
+    let mut msgs = vec![plain("system"), plain("user")];
+    msgs.extend(successful_tool_turn(
+        "git_status",
+        "{}",
+        "call_gs",
+        " M src/foo.rs\n",
+    ));
+    msgs.push(ChatMessage {
+        role: "assistant".into(),
+        content: Some("Still editing files; not done yet.".into()),
+        tool_calls: None,
+        tool_call_id: None,
+        reasoning_content: None,
+        usage: None,
+    });
+    assert!(detect_narration_contradiction(&msgs).is_none());
 }
 
 #[tokio::test]

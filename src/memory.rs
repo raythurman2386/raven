@@ -1,14 +1,78 @@
 //! Project memory — cross-session Markdown memory files.
 //!
-//! Workspace memory at `.raven/MEMORY.md` is injected into the system
-//! prompt (first 25KB / 200 lines) after AGENTS.md. The agent can update
-//! memory via the `memory_update` tool.
+//! Workspace memory at `.raven/MEMORY.md` is injected into the setup
+//! prompt after AGENTS.md (default ~8KB / 100 lines; leaner under
+//! `lean_prompt` or docs-oriented tasks). The agent can update memory via
+//! the `memory_update` tool.
 
 use anyhow::{Context, Result};
 use std::path::Path;
 
-const MAX_MEMORY_CHARS: usize = 25_000;
-const MAX_MEMORY_LINES: usize = 200;
+/// Default MEMORY injection budget (reduced from 25k — dumping the full
+/// file on every task burned ~25k of setup before any real work).
+pub const MAX_MEMORY_CHARS: usize = 8_000;
+pub const MAX_MEMORY_LINES: usize = 100;
+
+/// Leaner budget when `lean_prompt` is on or the task is docs/verify-oriented.
+pub const LEAN_MEMORY_CHARS: usize = 3_500;
+pub const LEAN_MEMORY_LINES: usize = 50;
+
+/// Char/line caps for MEMORY injection into the setup prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MemoryBudget {
+    pub max_chars: usize,
+    pub max_lines: usize,
+}
+
+impl MemoryBudget {
+    pub fn standard() -> Self {
+        Self {
+            max_chars: MAX_MEMORY_CHARS,
+            max_lines: MAX_MEMORY_LINES,
+        }
+    }
+
+    pub fn lean() -> Self {
+        Self {
+            max_chars: LEAN_MEMORY_CHARS,
+            max_lines: LEAN_MEMORY_LINES,
+        }
+    }
+}
+
+/// Whether a pinned constraint / goal text looks docs- or verify-oriented
+/// (prefer the lean MEMORY budget for those tasks).
+pub fn looks_docs_oriented(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    const NEEDLES: &[&str] = &[
+        "doc_drift",
+        "doc drift",
+        "docs-drift",
+        "documentation",
+        "docs only",
+        "docs-oriented",
+        "fix docs",
+        "readme",
+        "verify drift",
+        "live drift",
+    ];
+    NEEDLES.iter().any(|n| lower.contains(n))
+}
+
+/// Relevance query for MEMORY injection.
+///
+/// Only under `lean_prompt` or a docs/verify-oriented pinned constraint.
+/// Ordinary sessions keep full budgeted MEMORY with no token filter — a
+/// non-docs pinned constraint must not trigger relevance slicing.
+pub fn memory_relevance_for(lean_prompt: bool, constraint: Option<&str>) -> Option<&str> {
+    let trimmed = constraint.map(str::trim).filter(|s| !s.is_empty());
+    let docs = trimmed.is_some_and(looks_docs_oriented);
+    if lean_prompt || docs {
+        trimmed
+    } else {
+        None
+    }
+}
 
 const MEMORY_TEMPLATE: &str = r#"# Project Memory
 
@@ -22,14 +86,26 @@ const MEMORY_TEMPLATE: &str = r#"# Project Memory
 <!-- Project structure, constraints, environment notes -->
 "#;
 
-/// Load workspace memory from `.raven/MEMORY.md`.
+/// Load workspace memory from `.raven/MEMORY.md` with the standard budget.
 ///
 /// Returns an empty string if the file doesn't exist.
-/// Truncates to MAX_MEMORY_CHARS or MAX_MEMORY_LINES (whichever hits first).
 pub fn load_memory(workspace: &Path) -> String {
+    load_memory_budgeted(workspace, MemoryBudget::standard(), None)
+}
+
+/// Load workspace memory with an explicit budget and optional relevance query.
+///
+/// When `relevance` is set, prefer lines that match its tokens (preserving
+/// file order) before falling back to a plain head truncate, so a smaller
+/// budget still keeps task-related lessons.
+pub fn load_memory_budgeted(
+    workspace: &Path,
+    budget: MemoryBudget,
+    relevance: Option<&str>,
+) -> String {
     let path = workspace.join(".raven").join("MEMORY.md");
     match std::fs::read_to_string(&path) {
-        Ok(content) => truncate_memory(&content),
+        Ok(content) => select_and_truncate_memory(&content, budget, relevance),
         Err(_) => String::new(),
     }
 }
@@ -48,7 +124,7 @@ fn load_system_memory_from(home: &Path) -> String {
         Err(_) => std::fs::read_to_string(home.join(".raven").join("MEMORY.md")).ok(),
     };
     match content {
-        Some(c) => truncate_memory(&c),
+        Some(c) => select_and_truncate_memory(&c, MemoryBudget::standard(), None),
         None => String::new(),
     }
 }
@@ -64,10 +140,57 @@ pub fn load_system_memory() -> String {
     }
 }
 
+/// Select (optional relevance) then truncate memory to the given budget.
+fn select_and_truncate_memory(
+    content: &str,
+    budget: MemoryBudget,
+    relevance: Option<&str>,
+) -> String {
+    let selected = match relevance.map(str::trim).filter(|q| !q.is_empty()) {
+        Some(query) => relevance_slice(content, query),
+        None => content.to_string(),
+    };
+    truncate_memory(&selected, budget)
+}
+
+/// Keep lines that match any relevance token, preserving file order.
+///
+/// Always retains Markdown headings so section structure survives. When no
+/// line matches, returns the original content (caller still truncates).
+fn relevance_slice(content: &str, query: &str) -> String {
+    let tokens: Vec<String> = query
+        .split_whitespace()
+        .map(|t| t.to_ascii_lowercase())
+        .filter(|t| t.len() >= 3)
+        .collect();
+    if tokens.is_empty() {
+        return content.to_string();
+    }
+
+    let mut kept: Vec<&str> = Vec::new();
+    let mut any_match = false;
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('#') {
+            kept.push(line);
+            continue;
+        }
+        let lower = line.to_ascii_lowercase();
+        if tokens.iter().any(|t| lower.contains(t)) {
+            kept.push(line);
+            any_match = true;
+        }
+    }
+    if !any_match {
+        return content.to_string();
+    }
+    kept.join("\n")
+}
+
 /// Truncate memory to fit within both char and line limits.
-fn truncate_memory(content: &str) -> String {
-    let truncated: String = content.chars().take(MAX_MEMORY_CHARS).collect();
-    let lines: Vec<&str> = truncated.lines().take(MAX_MEMORY_LINES).collect();
+fn truncate_memory(content: &str, budget: MemoryBudget) -> String {
+    let truncated: String = content.chars().take(budget.max_chars).collect();
+    let lines: Vec<&str> = truncated.lines().take(budget.max_lines).collect();
     if lines.len() < content.lines().count() || truncated.chars().count() < content.chars().count()
     {
         format!("{}\n...[memory truncated]", lines.join("\n"))
@@ -339,5 +462,127 @@ mod tests {
         let out =
             update_system_memory_from(home.path(), "Conventions", "Prefer omarchy CLI").unwrap();
         assert!(out.contains("already contains"), "got: {out}");
+    }
+
+    #[test]
+    fn standard_budget_truncates_large_memory_with_marker() {
+        let mut body = String::from("# Project Memory\n\n## Context\n");
+        for i in 0..400 {
+            body.push_str(&format!(
+                "- engine-review lesson {i}: avoid dumping full MEMORY on every task\n"
+            ));
+        }
+        let ws = workspace_with_memory(&body);
+        let out = load_memory(&ws);
+        assert!(
+            out.contains("...[memory truncated]"),
+            "expected truncation marker, got len={}",
+            out.len()
+        );
+        assert!(
+            out.chars().count() <= MAX_MEMORY_CHARS + 32,
+            "standard budget overrun: {}",
+            out.chars().count()
+        );
+        assert!(
+            out.lines().count() <= MAX_MEMORY_LINES + 1,
+            "too many lines: {}",
+            out.lines().count()
+        );
+        assert!(out.contains("engine-review lesson 0"));
+    }
+
+    #[test]
+    fn lean_budget_is_stricter_than_standard() {
+        let mut body = String::from("# Project Memory\n\n## Context\n");
+        for i in 0..400 {
+            body.push_str(&format!(
+                "- padding line {i} with enough characters to fill\n"
+            ));
+        }
+        let ws = workspace_with_memory(&body);
+        let standard = load_memory_budgeted(&ws, MemoryBudget::standard(), None);
+        let lean = load_memory_budgeted(&ws, MemoryBudget::lean(), None);
+        assert!(
+            lean.len() < standard.len(),
+            "lean={} standard={}",
+            lean.len(),
+            standard.len()
+        );
+        assert!(lean.contains("...[memory truncated]"));
+        assert!(lean.chars().count() <= LEAN_MEMORY_CHARS + 32);
+    }
+
+    #[test]
+    fn relevance_slice_prefers_matching_lessons() {
+        let body = concat!(
+            "# Project Memory\n",
+            "## Decisions\n",
+            "- Use Rust for services\n",
+            "- Deploy via Docker\n",
+            "## Context\n",
+            "- doc_drift verify must stay at drift=0 before ship\n",
+            "- unrelated database sharding note\n",
+            "- circling: do not re-run identical doc_drift after success\n",
+        );
+        let ws = workspace_with_memory(body);
+        let out =
+            load_memory_budgeted(&ws, MemoryBudget::lean(), Some("Fix live doc_drift verify"));
+        assert!(out.contains("doc_drift verify must stay"), "got: {out}");
+        assert!(out.contains("identical doc_drift"), "got: {out}");
+        assert!(
+            !out.contains("database sharding"),
+            "irrelevant line should be dropped, got: {out}"
+        );
+        assert!(out.contains("## Context"), "headings retained");
+    }
+
+    #[test]
+    fn looks_docs_oriented_matches_doc_drift_asks() {
+        assert!(looks_docs_oriented("Fix live doc_drift"));
+        assert!(looks_docs_oriented("Update README only"));
+        assert!(!looks_docs_oriented("Implement memory allocator"));
+        assert!(!looks_docs_oriented("Ship circling guards"));
+    }
+
+    #[test]
+    fn relevance_is_noop_for_non_docs_pinned_constraint() {
+        // Ordinary session: non-docs constraint must not become a relevance query.
+        assert_eq!(
+            memory_relevance_for(false, Some("Ship circling guards")),
+            None
+        );
+        assert_eq!(
+            memory_relevance_for(false, Some("Implement memory allocator")),
+            None
+        );
+        // Docs-oriented / lean_prompt still enable relevance.
+        assert_eq!(
+            memory_relevance_for(false, Some("Fix live doc_drift")),
+            Some("Fix live doc_drift")
+        );
+        assert_eq!(
+            memory_relevance_for(true, Some("Ship circling guards")),
+            Some("Ship circling guards")
+        );
+        assert_eq!(memory_relevance_for(false, None), None);
+        assert_eq!(memory_relevance_for(false, Some("   ")), None);
+
+        // With relevance=None, load keeps the full (budgeted) file — including
+        // lines a docs slice would drop.
+        let body = concat!(
+            "# Project Memory\n",
+            "## Decisions\n",
+            "- Use Rust for services\n",
+            "- Deploy via Docker\n",
+            "## Context\n",
+            "- doc_drift verify must stay at drift=0 before ship\n",
+            "- unrelated database sharding note\n",
+        );
+        let ws = workspace_with_memory(body);
+        let out = load_memory_budgeted(&ws, MemoryBudget::standard(), None);
+        assert!(out.contains("Use Rust for services"), "got: {out}");
+        assert!(out.contains("database sharding"), "got: {out}");
+        assert!(out.contains("doc_drift verify"), "got: {out}");
     }
 }

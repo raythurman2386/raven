@@ -22,7 +22,7 @@ use crate::plan::Plan;
 use crate::tokenizer::{append_usage_jsonl, count_tokens, UsageCalibration, MSG_OVERHEAD};
 use crate::tools::{tool_definitions, Sandbox};
 
-use super::loop_control::{compute_reminders, summarize_request};
+use super::loop_control::{compute_reminders, summarize_request, verify_plateau_should_stop};
 use super::stream::ParsedCompletion;
 #[cfg(test)]
 use super::stream::{process_non_stream_json, process_stream_text};
@@ -342,7 +342,28 @@ fn setup_body(settings: &Settings) -> String {
             body.push_str(&agents);
             body.push('\n');
         }
-        let mem = memory::load_memory(&settings.workspace);
+        // MEMORY budget: lean under lean_prompt or docs/verify-oriented asks;
+        // relevance slice only in those same cases so ordinary sessions keep
+        // full budgeted MEMORY (circling item #4 soft-nit).
+        let constraint_text = settings
+            .session_state_dir
+            .as_deref()
+            .and_then(crate::state::load_user_constraint_from_dir)
+            .map(|c| c.text);
+        let lean = settings.efficiency.lean_prompt
+            || constraint_text
+                .as_deref()
+                .is_some_and(memory::looks_docs_oriented);
+        let budget = if lean {
+            memory::MemoryBudget::lean()
+        } else {
+            memory::MemoryBudget::standard()
+        };
+        let relevance = memory::memory_relevance_for(
+            settings.efficiency.lean_prompt,
+            constraint_text.as_deref(),
+        );
+        let mem = memory::load_memory_budgeted(&settings.workspace, budget, relevance);
         if !mem.is_empty() {
             body.push_str("\n--- Project memory ---\n");
             body.push_str(&mem);
@@ -958,6 +979,14 @@ impl Agent {
             .as_deref()
             .map(load_todos_dir)
             .unwrap_or_default();
+        // Circling #5: identical verify success plateau with only residue left
+        // → force wrap-up instead of burning remaining max_iterations.
+        if let Some((name, n)) = verify_plateau_should_stop(&self.messages, goal.as_ref(), &todos) {
+            tracing::info!(tool = %name, streak = n, "verify plateau force-finalize");
+            self.finish_with_verify_plateau(tx, &name, n).await?;
+            return Ok(IterationOutcome::Finished);
+        }
+
         let mut reminders = compute_reminders(&self.messages, iter, goal.as_ref(), &todos);
         // Mid-turn steering: pull anything queued since the last boundary and
         // append it as persisted user messages, so the next request sees the

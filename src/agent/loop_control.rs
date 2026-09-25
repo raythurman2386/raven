@@ -107,9 +107,36 @@ impl Agent {
         &mut self,
         tx: &mpsc::Sender<AgentEvent>,
     ) -> Result<()> {
-        let summary_prompt = "You've reached the maximum number of tool-calling iterations \
-            allowed for this turn. Provide a final response summarizing what you've found and \
-            accomplished so far, without calling any more tools.";
+        self.finish_with_wrap_up(
+            tx,
+            "You've reached the maximum number of tool-calling iterations allowed for this turn. \
+             Provide a final response summarizing what you've found and accomplished so far, \
+             without calling any more tools.",
+        )
+        .await
+    }
+
+    /// Force-finalize after a verify-style success plateau (circling item #5).
+    ///
+    /// The VERIFY PLATEAU text is the live-loop surface for the reminder (we
+    /// return before `compute_reminders`, so that branch is intentionally not
+    /// used for plateau — see [`verify_plateau_wrap_up_prompt`]).
+    pub(crate) async fn finish_with_verify_plateau(
+        &mut self,
+        tx: &mpsc::Sender<AgentEvent>,
+        tool_name: &str,
+        streak: usize,
+    ) -> Result<()> {
+        let prompt = verify_plateau_wrap_up_prompt(tool_name, streak);
+        self.finish_with_wrap_up(tx, &prompt).await
+    }
+
+    /// Shared toolless wrap-up used by max-iteration and verify-plateau stops.
+    pub(crate) async fn finish_with_wrap_up(
+        &mut self,
+        tx: &mpsc::Sender<AgentEvent>,
+        summary_prompt: &str,
+    ) -> Result<()> {
         self.messages
             .push(ChatMessage::plain("user", Some(summary_prompt.to_string())));
 
@@ -225,6 +252,12 @@ impl Agent {
 /// - After 3 identical successful `(name, args)` tool results in recent turns
 ///   (with or without assistant text), push a HARD STOP reminder; dispatch
 ///   also refuses further identical calls (see `tools_exec`).
+/// - Verify-style success plateau is **not** injected here: the live loop
+///   force-finalizes via [`Agent::finish_with_verify_plateau`] (which surfaces
+///   [`verify_plateau_wrap_up_prompt`] once) before this function runs.
+/// - When the latest assistant narration contradicts the latest tool payload
+///   (narrow heuristic: clean working tree vs dirty `git_status`), push a
+///   trust-the-tool reminder.
 pub(crate) fn compute_reminders(
     messages: &[ChatMessage],
     iter: usize,
@@ -287,6 +320,13 @@ pub(crate) fn compute_reminders(
                 "Re-anchor on your objective before continuing:\n{anchor}"
             ));
         }
+    }
+
+    // Plateau reminder: live loop surfaces once via finish_with_verify_plateau
+    // (returns before compute_reminders). Keep this path free of a dead branch.
+
+    if let Some(nudge) = narration_contradiction_reminder(messages) {
+        reminders.push(nudge);
     }
 
     reminders
@@ -355,6 +395,272 @@ fn recent_successful_tool_keys(messages: &[ChatMessage]) -> Vec<(String, String)
         }
     }
     out
+}
+
+/// Wrap-up user prompt when force-finalizing on a verify plateau.
+///
+/// This is the live-loop reminder surface: `run_single_iteration` returns via
+/// [`Agent::finish_with_verify_plateau`] before [`compute_reminders`] runs.
+pub(crate) fn verify_plateau_wrap_up_prompt(tool_name: &str, streak: usize) -> String {
+    format!(
+        "VERIFY PLATEAU: `{tool_name}` returned the same successful result {streak} times and \
+         primary work is already met (only non-blocking residue remains). Provide a final \
+         response summarizing what you accomplished. Do not call any more tools."
+    )
+}
+
+/// How many consecutive identical verify-style successes trigger a plateau stop.
+pub(crate) const VERIFY_PLATEAU_K: usize = 2;
+
+/// Whether open work is only non-blocking residue (or primary work is already met).
+fn only_residue_or_primary_met(
+    goal: Option<&crate::state::Goal>,
+    todos: &[crate::state::TodoItem],
+) -> bool {
+    if crate::state::primary_work_satisfied(goal, todos) {
+        return true;
+    }
+    if todos.is_empty() {
+        return false;
+    }
+    // Every incomplete todo is residue-style; any live todo is already completed.
+    todos.iter().all(|t| {
+        crate::state::looks_like_residue_todo(&t.content)
+            || crate::state::normalize_status(&t.status) == "completed"
+    }) && todos
+        .iter()
+        .any(|t| crate::state::looks_like_residue_todo(&t.content))
+}
+
+/// Detect a verify-style success plateau that should end the turn.
+///
+/// Returns `(tool_name, streak)` when the same verify tool key **or** the same
+/// verify result body succeeded [`VERIFY_PLATEAU_K`] times and only non-blocking
+/// residue remains (circling item #5). Extends the #195 identical-success
+/// refuse: after the primary metric is met, stop burning iterations.
+pub(crate) fn verify_plateau_should_stop(
+    messages: &[ChatMessage],
+    goal: Option<&crate::state::Goal>,
+    todos: &[crate::state::TodoItem],
+) -> Option<(String, usize)> {
+    if !only_residue_or_primary_met(goal, todos) {
+        return None;
+    }
+    verify_success_plateau(messages, VERIFY_PLATEAU_K)
+}
+
+struct VerifyHit {
+    name: String,
+    args: String,
+    content: String,
+}
+
+/// Newest-first verify successes that share a key or an unchanged result body.
+fn verify_success_plateau(messages: &[ChatMessage], k: usize) -> Option<(String, usize)> {
+    if k == 0 {
+        return None;
+    }
+    let recent = recent_successful_verify_hits(messages);
+    if recent.len() < k {
+        return None;
+    }
+    let first = &recent[0];
+    let plateau = recent.iter().take(k).all(|r| {
+        (r.name == first.name && r.args == first.args)
+            || (r.name == first.name && r.content == first.content)
+    });
+    if plateau {
+        Some((first.name.clone(), k))
+    } else {
+        None
+    }
+}
+
+fn recent_successful_verify_hits(messages: &[ChatMessage]) -> Vec<VerifyHit> {
+    use super::tools_exec::{is_mcp_verify_cacheable, normalize_tool_args};
+    use std::collections::HashMap;
+
+    let mut call_meta: HashMap<&str, (String, String)> = HashMap::new();
+    for m in messages {
+        if m.role != "assistant" {
+            continue;
+        }
+        let Some(tcs) = m.tool_calls.as_ref() else {
+            continue;
+        };
+        for tc in tcs {
+            call_meta.insert(
+                tc.id.as_str(),
+                (
+                    tc.function.name.clone(),
+                    normalize_tool_args(&tc.function.arguments),
+                ),
+            );
+        }
+    }
+
+    let mut out = Vec::new();
+    for m in messages.iter().rev() {
+        if m.role != "tool" {
+            continue;
+        }
+        let Some(id) = m.tool_call_id.as_deref() else {
+            continue;
+        };
+        let Some((name, args)) = call_meta.get(id) else {
+            continue;
+        };
+        if !is_mcp_verify_cacheable(name) {
+            continue;
+        }
+        let content = m.content.as_deref().unwrap_or("");
+        // Error: / Tool error: (including HARD STOP refusals) are skipped —
+        // they do not count as verify successes toward the plateau.
+        if content.starts_with("Error:") || content.starts_with("Tool error:") {
+            continue;
+        }
+        out.push(VerifyHit {
+            name: name.clone(),
+            args: args.clone(),
+            content: content.to_string(),
+        });
+        if out.len() >= 16 {
+            break;
+        }
+    }
+    out
+}
+
+/// Narrow narration-vs-tool contradiction nudge (circling item #6).
+///
+/// Currently: assistant claims a clean working tree while the latest
+/// `git_status` result is dirty (porcelain lines / not the clean sentinel).
+pub(crate) fn narration_contradiction_reminder(messages: &[ChatMessage]) -> Option<String> {
+    match detect_narration_contradiction(messages)? {
+        NarrationContradiction::CleanVsDirtyGitStatus => Some(
+            "Your narration claimed the working tree is clean, but the latest git_status \
+             result shows dirty paths. Trust the tool output; correct your summary before continuing."
+                .into(),
+        ),
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum NarrationContradiction {
+    CleanVsDirtyGitStatus,
+}
+
+/// Returns the contradiction kind when detected (unit-tested).
+pub(crate) fn detect_narration_contradiction(
+    messages: &[ChatMessage],
+) -> Option<NarrationContradiction> {
+    let latest_status = latest_tool_result(messages, "git_status")?;
+    if !git_status_looks_dirty(&latest_status) {
+        return None;
+    }
+    let narration = latest_assistant_narration(messages)?;
+    if claims_working_tree_clean(&narration) {
+        Some(NarrationContradiction::CleanVsDirtyGitStatus)
+    } else {
+        None
+    }
+}
+
+fn latest_tool_result(messages: &[ChatMessage], tool_name: &str) -> Option<String> {
+    use std::collections::HashMap;
+    let mut call_meta: HashMap<&str, String> = HashMap::new();
+    for m in messages {
+        if m.role != "assistant" {
+            continue;
+        }
+        let Some(tcs) = m.tool_calls.as_ref() else {
+            continue;
+        };
+        for tc in tcs {
+            call_meta.insert(tc.id.as_str(), tc.function.name.clone());
+        }
+    }
+    for m in messages.iter().rev() {
+        if m.role != "tool" {
+            continue;
+        }
+        let Some(id) = m.tool_call_id.as_deref() else {
+            continue;
+        };
+        let Some(name) = call_meta.get(id) else {
+            continue;
+        };
+        if name != tool_name {
+            continue;
+        }
+        let content = m.content.as_deref().unwrap_or("");
+        if content.starts_with("Error:") || content.starts_with("Tool error:") {
+            return None;
+        }
+        return Some(content.to_string());
+    }
+    None
+}
+
+fn latest_assistant_narration(messages: &[ChatMessage]) -> Option<String> {
+    for m in messages.iter().rev() {
+        if m.role != "assistant" {
+            continue;
+        }
+        if let Some(c) = m.content.as_deref() {
+            let trimmed = c.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn claims_working_tree_clean(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    // Prefer phrases anchored on "working tree" / git's clean sentinel so
+    // unrelated "tree is clean" metaphors don't false-positive.
+    const PHRASES: &[&str] = &[
+        "working tree is clean",
+        "working tree clean",
+        "clean working tree",
+        "nothing to commit",
+        "no changes (working tree clean)",
+    ];
+    PHRASES.iter().any(|p| lower.contains(p))
+}
+
+fn git_status_looks_dirty(status: &str) -> bool {
+    let trimmed = status.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if trimmed.contains("No changes (working tree clean)") {
+        return false;
+    }
+    // Porcelain v1: XY PATH lines (e.g. " M src/a.rs", "?? foo", "M  bar").
+    trimmed.lines().any(|line| {
+        let line = line.trim_end();
+        if line.is_empty() {
+            return false;
+        }
+        let b = line.as_bytes();
+        if b.len() >= 2 {
+            let x = b[0];
+            let y = b[1];
+            let code = |c: u8| {
+                matches!(
+                    c,
+                    b'M' | b'A' | b'D' | b'R' | b'C' | b'U' | b'?' | b'!' | b' '
+                )
+            };
+            if code(x) && code(y) && (x != b' ' || y != b' ') {
+                return true;
+            }
+        }
+        line.starts_with("??") || line.contains("modified:") || line.contains("Untracked")
+    })
 }
 
 /// Summarize a slice of conversation history into a compact paragraph.
