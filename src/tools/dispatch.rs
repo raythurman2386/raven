@@ -172,7 +172,22 @@ pub fn dispatch(
                 status,
                 updated_at: crate::session::now_iso_public(),
             };
-            crate::state::save_goal(state_dir, &goal).map(|_| crate::state::format_goal(&goal))
+            // Gate residue on goal_set too (not only todo_write) so completing
+            // the goal cannot leave open residue as the re-anchor target.
+            crate::state::save_goal(state_dir, &goal).map(|_| {
+                let auto = crate::state::apply_residue_gate_to_dir(state_dir).unwrap_or_default();
+                let mut out = crate::state::format_goal(&goal);
+                if !auto.is_empty() {
+                    out.push_str(
+                        "\n\n[residue auto-completed: primary work already met; \
+                         ask the user before reopening]\n",
+                    );
+                    for content in &auto {
+                        out.push_str(&format!("- {content}\n"));
+                    }
+                }
+                out.trim_end().to_string()
+            })
         }
         "memory_update" => {
             let section = args.get("section").and_then(|v| v.as_str()).unwrap_or("");

@@ -244,18 +244,22 @@ pub fn append_user_constraint_section(body: &mut String, state_dir: &Path) {
 
 /// Non-blocking / dated-residue style todos that should not keep the session
 /// open after primary live work is already satisfied.
+///
+/// Rule (intentionally narrow to avoid auto-completing real work):
+/// - explicit cues: `"residue"` or `"non-blocking"`, OR
+/// - memory-plan housekeeping: `"memory-plan"` / `"memory plan"`, OR
+/// - dated memory notes: both `"dated"` and `"memory"` present.
+/// Lone `"dated"`, or `"memory"` + `"write"`/`"update"`, do **not** match
+/// (avoids false positives like "Write memory allocator" / "Update dated changelog").
 pub fn looks_like_residue_todo(content: &str) -> bool {
     let lower = content.to_ascii_lowercase();
-    lower.contains("dated")
-        || lower.contains("memory-plan")
-        || lower.contains("memory plan")
-        || lower.contains("non-blocking")
-        || lower.contains("residue")
-        || (lower.contains("memory")
-            && (lower.contains("update")
-                || lower.contains("record")
-                || lower.contains("write")
-                || lower.contains("dated")))
+    if lower.contains("residue") || lower.contains("non-blocking") {
+        return true;
+    }
+    if lower.contains("memory-plan") || lower.contains("memory plan") {
+        return true;
+    }
+    lower.contains("dated") && lower.contains("memory")
 }
 
 /// Whether primary live work is already done (goal completed, or every
@@ -296,6 +300,21 @@ pub fn gate_residue_todos(
         }
     }
     (todos, auto)
+}
+
+/// Apply [`gate_residue_todos`] to the todos persisted under `state_dir`.
+///
+/// Used from prompt load (`setup_body`) and `goal_set` (not only `todo_write`)
+/// so open residue cannot re-anchor once primary work is already met.
+/// Persists only when at least one todo was auto-completed.
+pub fn apply_residue_gate_to_dir(state_dir: &Path) -> Result<Vec<String>> {
+    let goal = load_goal_from_dir(state_dir);
+    let todos = load_todos_from_dir(state_dir);
+    let (todos, auto) = gate_residue_todos(goal.as_ref(), todos);
+    if !auto.is_empty() {
+        save_todos(state_dir, &todos)?;
+    }
+    Ok(auto)
 }
 
 #[cfg(test)]
@@ -602,5 +621,55 @@ mod tests {
         let (gated, auto) = gate_residue_todos(None, todos.clone());
         assert!(auto.is_empty());
         assert_eq!(gated[1].status, "pending");
+    }
+
+    #[test]
+    fn looks_like_residue_todo_avoids_real_work_false_positives() {
+        // Must match residue cues.
+        assert!(looks_like_residue_todo("non-blocking follow-up"));
+        assert!(looks_like_residue_todo("Clear residue after ship"));
+        assert!(looks_like_residue_todo("Update the memory-plan"));
+        assert!(looks_like_residue_todo("dated memory note for later"));
+        // Must NOT match ordinary todos.
+        assert!(!looks_like_residue_todo("Write memory allocator"));
+        assert!(!looks_like_residue_todo("Update dated changelog"));
+        assert!(!looks_like_residue_todo("Record test results"));
+        assert!(!looks_like_residue_todo("Fix live doc_drift"));
+    }
+
+    #[test]
+    fn apply_residue_gate_to_dir_persists_when_primary_met() {
+        let tmp = ws();
+        let (sessions, a, _) = store_with_sessions(&tmp);
+        let dir = session_state_dir(&sessions, &a);
+        save_goal(
+            &dir,
+            &Goal {
+                description: "Done".into(),
+                status: "completed".into(),
+                updated_at: "2026-09-25".into(),
+            },
+        )
+        .unwrap();
+        save_todos(
+            &dir,
+            &[
+                TodoItem {
+                    content: "Live fix".into(),
+                    status: "completed".into(),
+                    priority: "high".into(),
+                },
+                TodoItem {
+                    content: "Chase dated memory-plan residue".into(),
+                    status: "pending".into(),
+                    priority: "low".into(),
+                },
+            ],
+        )
+        .unwrap();
+        let auto = apply_residue_gate_to_dir(&dir).unwrap();
+        assert_eq!(auto, vec!["Chase dated memory-plan residue".to_string()]);
+        let loaded = load_todos_from_dir(&dir);
+        assert_eq!(normalize_status(&loaded[1].status), "completed");
     }
 }

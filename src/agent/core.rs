@@ -349,8 +349,14 @@ fn setup_body(settings: &Settings) -> String {
             body.push('\n');
         }
         if let Some(state_dir) = &settings.session_state_dir {
-            // Pinned first-user ask stays above agent-written goal/todos so
-            // re-goal_set cannot erase the original constraint from the prompt.
+            // When primary work is already met, auto-complete open residue
+            // todos on prompt load (not only on todo_write) so they cannot
+            // re-anchor until the next explicit todo_write.
+            if let Err(e) = crate::state::apply_residue_gate_to_dir(state_dir) {
+                tracing::warn!("residue gate on setup_body failed: {e}");
+            }
+            // Order: constraint → goal → todos (pinned ask stays above
+            // agent-written goal/todos so re-goal_set cannot erase it).
             crate::state::append_user_constraint_section(&mut body, state_dir);
             if let Some(goal) = load_goal_dir(state_dir) {
                 body.push_str("\n--- Current goal ---\n");
@@ -1665,6 +1671,103 @@ pub(crate) fn request_messages_json(messages: &[ChatMessage]) -> Value {
             })
             .collect(),
     )
+}
+
+#[cfg(test)]
+mod setup_body_tests {
+    use super::setup_body;
+    use crate::config::{Mode, Scope, Settings};
+    use crate::state::{
+        pin_user_constraint_once, save_goal, save_todos, session_state_dir, Goal, TodoItem,
+    };
+    use std::path::PathBuf;
+
+    fn settings_with_state(workspace: PathBuf, state_dir: PathBuf) -> Settings {
+        let mut provider = crate::config::Provider::builtin("ollama").expect("ollama builtin");
+        provider.base_url = "http://127.0.0.1:9".into();
+        Settings {
+            model: "mock-model".into(),
+            provider,
+            workspace,
+            max_iterations: 5,
+            mode: Mode::Agent,
+            scope: Scope::Repo,
+            yolo: true,
+            temperature: 0.0,
+            reasoning_effort: None,
+            max_tokens: 4096,
+            rules: None,
+            context_window: 128_000,
+            compact_threshold: 0.75,
+            no_stream: false,
+            verify: false,
+            confirm_shell: false,
+            theme: "ravenwood".into(),
+            searxng_url: None,
+            searxng_engines: Vec::new(),
+            sandbox_extra_rw: Vec::new(),
+            allow_delegate: true,
+            session_state_dir: Some(state_dir),
+            efficiency: crate::config::EfficiencyFlags::default(),
+        }
+    }
+
+    #[test]
+    fn setup_body_order_is_constraint_then_goal_then_todos() {
+        let tmp = std::env::temp_dir().join(format!(
+            "raven_setup_body_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let sessions = tmp.join(".raven/sessions");
+        let sid = "20260925T120000Z-1-1";
+        std::fs::create_dir_all(sessions.join(sid)).unwrap();
+        let dir = session_state_dir(&sessions, sid);
+        pin_user_constraint_once(&dir, "Fix live doc_drift").unwrap();
+        save_goal(
+            &dir,
+            &Goal {
+                description: "Harness-only".into(),
+                status: "completed".into(),
+                updated_at: "2026-09-25".into(),
+            },
+        )
+        .unwrap();
+        save_todos(
+            &dir,
+            &[
+                TodoItem {
+                    content: "Live verify".into(),
+                    status: "completed".into(),
+                    priority: "high".into(),
+                },
+                TodoItem {
+                    content: "Chase dated memory-plan residue".into(),
+                    status: "pending".into(),
+                    priority: "low".into(),
+                },
+            ],
+        )
+        .unwrap();
+
+        let body = setup_body(&settings_with_state(tmp.clone(), dir.clone()));
+        let c = body
+            .find("--- User constraint (pinned; do not replace via goal_set) ---")
+            .expect("constraint section");
+        let g = body.find("--- Current goal ---").expect("goal section");
+        let t = body.find("--- Task list ---").expect("todos section");
+        assert!(
+            c < g && g < t,
+            "expected constraint → goal → todos, got offsets {c}/{g}/{t}"
+        );
+        // Residue gate on load should have completed the residue todo.
+        assert!(body.contains("[completed]"));
+        assert!(body.contains("Chase dated memory-plan residue"));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }
 
 #[cfg(test)]

@@ -334,8 +334,9 @@ fn identical_success_loop_fires_at_three() {
     }
     let r = compute_reminders(&msgs, 3, None, &[]);
     assert!(
-        r.iter()
-            .any(|t| t.contains("HARD STOP") && t.contains("ripwire__doc_drift")),
+        r.iter().any(|t| {
+            t.contains("HARD STOP") && t.contains("ripwire__doc_drift") && t.contains("refused")
+        }),
         "success-loop reminder should fire, got {r:?}"
     );
 }

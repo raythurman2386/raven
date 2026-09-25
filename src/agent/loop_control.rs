@@ -11,6 +11,7 @@ use tokio::sync::mpsc;
 use crate::context::history_tokens;
 
 use super::core::Agent;
+use super::tools_exec::IDENTICAL_SUCCESS_LOOP_N;
 use super::types::{AgentEvent, ChatMessage};
 use crate::tokenizer::TokenUsage;
 
@@ -222,8 +223,8 @@ impl Agent {
 ///   context-gathering (goal → list → grep → read) is never interrupted; only
 ///   a genuine tool-calling loop triggers it.
 /// - After 3 identical successful `(name, args)` tool results in recent turns
-///   (with or without assistant text), push a HARD STOP reminder to stop /
-///   ask_user / finalize — mirrors SYSTEM_BASE "don't call same tool twice".
+///   (with or without assistant text), push a HARD STOP reminder; dispatch
+///   also refuses further identical calls (see `tools_exec`).
 pub(crate) fn compute_reminders(
     messages: &[ChatMessage],
     iter: usize,
@@ -255,7 +256,7 @@ pub(crate) fn compute_reminders(
     if let Some((name, n)) = identical_success_loop(messages, IDENTICAL_SUCCESS_LOOP_N) {
         reminders.push(format!(
             "HARD STOP: `{name}` already succeeded {n} times with the same arguments. \
-             Do NOT call it again with those args. Use the result you have, call ask_user \
+             Further identical calls will be refused. Use the result you have, call ask_user \
              if you need a decision, or finalize your answer now."
         ));
     }
@@ -290,9 +291,6 @@ pub(crate) fn compute_reminders(
 
     reminders
 }
-
-/// Matches SYSTEM_BASE: do not call the same tool with the same args twice.
-const IDENTICAL_SUCCESS_LOOP_N: usize = 3;
 
 /// If the N most recent *successful* tool results share the same
 /// `(name, normalized args)`, return that name and N.
