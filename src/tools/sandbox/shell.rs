@@ -13,7 +13,8 @@ impl Sandbox {
     /// `cwd` is forced to the workspace; the environment is cleared and only
     /// explicitly allowed vars (`PATH`, `HOME`, `PWD`, `LANG`) are passed
     /// through. The best-effort denylist (`dangerous_re`) blocks obviously
-    /// destructive patterns. Output is capped at 12 000 chars.
+    /// destructive patterns. Output at or under 12 000 characters is inline;
+    /// larger output is written to `.raven/tool-output`.
     ///
     /// The denylist is **not a security boundary** — it can always be
     /// bypassed. The `confirm_shell` setting (off with `--yolo`) provides
@@ -21,7 +22,9 @@ impl Sandbox {
     /// Commands matching the [`safe_command_re`] allowlist skip the prompt.
     pub fn run_shell(&self, command: &str, timeout_secs: u64) -> Result<String> {
         if dangerous_re().is_match(command) {
-            return Ok("Error: command blocked by sandbox filter".into());
+            return Ok("Error: command blocked by the dangerous-command denylist. \
+                 Do not retry this command; pick a narrower one that stays in the workspace."
+                .into());
         }
 
         // Direct-exec path: if the command is a known-safe single binary with
@@ -70,6 +73,7 @@ impl Sandbox {
             skip_network_block,
             skip_rlimits,
         )
+        .map(|out| self.present_output("shell", out))
     }
 }
 

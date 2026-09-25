@@ -254,6 +254,50 @@ pub struct Settings {
     /// prompt injects no goal/todos. Fresh sessions yield an empty dir, so
     /// state starts empty; only `--resume` restores it (issue #185).
     pub session_state_dir: Option<PathBuf>,
+    /// Opt-in token-efficiency experiments. Defaults are the current behavior.
+    pub efficiency: EfficiencyFlags,
+}
+
+/// Flagged prompt and tool experiments. Each default is off.
+///
+/// Turn them on from config (`lean_prompt = true`) or the environment
+/// (`RAVEN_LEAN_PROMPT=1`). They are not the production default until a
+/// before/after run shows task success holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct EfficiencyFlags {
+    /// Shorter system prompt: descriptions instead of command lists.
+    pub lean_prompt: bool,
+    /// Advertise the core tool set; other schemas load through `tool_schema`.
+    pub tool_offload: bool,
+    /// Number every 10th line of a file read, plus the first line of the range.
+    pub sparse_line_numbers: bool,
+    /// One-line compaction prompt instead of the structured multi-line one.
+    pub short_compact: bool,
+    /// Ask `delegate_task` children for a four-part handoff.
+    pub subagent_handoff: bool,
+}
+
+impl EfficiencyFlags {
+    /// Config values win when set; otherwise each flag reads its env var.
+    pub fn from_config(cfg: &ConfigFile) -> Self {
+        Self {
+            lean_prompt: flag_or_env(cfg.lean_prompt, "RAVEN_LEAN_PROMPT"),
+            tool_offload: flag_or_env(cfg.tool_offload, "RAVEN_TOOL_OFFLOAD"),
+            sparse_line_numbers: flag_or_env(cfg.sparse_line_numbers, "RAVEN_SPARSE_LINES"),
+            short_compact: flag_or_env(cfg.short_compact, "RAVEN_SHORT_COMPACT"),
+            subagent_handoff: flag_or_env(cfg.subagent_handoff, "RAVEN_SUBAGENT_HANDOFF"),
+        }
+    }
+}
+
+fn flag_or_env(config: Option<bool>, env_key: &str) -> bool {
+    if let Some(v) = config {
+        return v;
+    }
+    matches!(
+        std::env::var(env_key).ok().as_deref().map(str::trim),
+        Some("1") | Some("true") | Some("yes")
+    )
 }
 
 impl Settings {
@@ -534,6 +578,16 @@ pub struct ConfigFile {
     /// per server name over the global file.
     #[serde(default)]
     pub mcp: crate::mcp::McpConfig,
+    /// Shorter system prompt. See [`EfficiencyFlags`].
+    pub lean_prompt: Option<bool>,
+    /// Core tools only; other schemas load through `tool_schema`.
+    pub tool_offload: Option<bool>,
+    /// Number every 10th line of `read_file` output.
+    pub sparse_line_numbers: Option<bool>,
+    /// One-line compaction summarizer prompt.
+    pub short_compact: Option<bool>,
+    /// `delegate_task` asks for a short handoff.
+    pub subagent_handoff: Option<bool>,
 }
 
 /// Load config from workspace `.raven/config.toml` then `~/.raven/config.toml`.
@@ -582,6 +636,11 @@ pub fn load_config_file(workspace: &std::path::Path) -> ConfigFile {
         searxng_url: ws.searxng_url.or(global.searxng_url),
         searxng_engines: ws.searxng_engines.or(global.searxng_engines),
         mcp: global.mcp.merge(ws.mcp),
+        lean_prompt: ws.lean_prompt.or(global.lean_prompt),
+        tool_offload: ws.tool_offload.or(global.tool_offload),
+        sparse_line_numbers: ws.sparse_line_numbers.or(global.sparse_line_numbers),
+        short_compact: ws.short_compact.or(global.short_compact),
+        subagent_handoff: ws.subagent_handoff.or(global.subagent_handoff),
     }
 }
 

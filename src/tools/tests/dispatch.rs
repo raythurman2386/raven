@@ -9,7 +9,7 @@ use super::sandbox;
 #[test]
 fn dispatch_rejects_missing_required_field() {
     let sb = sandbox();
-    let result = dispatch(&sb, None, "read_file", &serde_json::json!({}), false).unwrap();
+    let result = dispatch(&sb, None, "read_file", &serde_json::json!({}), false, false).unwrap();
     assert!(
         result.contains("path"),
         "missing path should be rejected: {result}"
@@ -25,6 +25,7 @@ fn dispatch_rejects_empty_shell_command() {
         "run_shell",
         &serde_json::json!({"command": ""}),
         false,
+        false,
     )
     .unwrap();
     assert!(
@@ -36,7 +37,15 @@ fn dispatch_rejects_empty_shell_command() {
 #[test]
 fn dispatch_unknown_tool_returns_error() {
     let sb = sandbox();
-    let result = dispatch(&sb, None, "nonexistent_tool", &serde_json::json!({}), false).unwrap();
+    let result = dispatch(
+        &sb,
+        None,
+        "nonexistent_tool",
+        &serde_json::json!({}),
+        false,
+        false,
+    )
+    .unwrap();
     assert!(result.contains("Unknown tool"));
 }
 
@@ -50,6 +59,7 @@ fn dispatch_read_file() {
         None,
         "read_file",
         &serde_json::json!({"path": "test.txt"}),
+        false,
         false,
     )
     .unwrap();
@@ -65,6 +75,7 @@ fn dispatch_write_file() {
         None,
         "write_file",
         &serde_json::json!({"path": "out.txt", "content": "data"}),
+        false,
         false,
     )
     .unwrap();
@@ -229,6 +240,7 @@ fn dispatch_read_only_rejects_write_file() {
         "write_file",
         &serde_json::json!({"path": "out.txt", "content": "data"}),
         true,
+        false,
     )
     .unwrap();
     assert!(
@@ -251,6 +263,7 @@ fn dispatch_read_only_rejects_run_shell() {
         "run_shell",
         &serde_json::json!({"command": "echo hi"}),
         true,
+        false,
     )
     .unwrap();
     assert!(
@@ -270,6 +283,7 @@ fn dispatch_read_only_allows_read_file() {
         "read_file",
         &serde_json::json!({"path": "test.txt"}),
         true,
+        false,
     )
     .unwrap();
     assert!(
@@ -310,6 +324,7 @@ fn git_commit_is_not_a_tool() {
         None,
         "git_commit",
         &serde_json::json!({"message": "nope"}),
+        false,
         false,
     )
     .unwrap();
@@ -360,7 +375,7 @@ fn dispatch_run_lint_on_cargo_project() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("Cargo.toml"), "[package]\n\n[workspace]\n").unwrap();
     let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
-    let out = dispatch(&sb, None, "run_lint", &serde_json::json!({}), false)
+    let out = dispatch(&sb, None, "run_lint", &serde_json::json!({}), false, false)
         .unwrap_or_else(|e| format!("Tool error: {e}"));
     assert!(out.contains("--- run_lint (cargo)"), "{out}");
 }
@@ -406,4 +421,35 @@ fn sandbox_raven_dir_system_falls_back_without_home() {
         None => std::env::remove_var("HOME"),
     }
     assert_eq!(dir, std::path::PathBuf::from("/.raven"));
+}
+
+#[test]
+fn dispatch_tool_schema_requires_offload() {
+    let sb = sandbox();
+    let refused = dispatch(
+        &sb,
+        None,
+        "tool_schema",
+        &serde_json::json!({"name": "run_lint"}),
+        false,
+        false,
+    )
+    .unwrap();
+    assert!(
+        refused.contains("tool_offload"),
+        "offload-off should refuse tool_schema: {refused}"
+    );
+    let ok = dispatch(
+        &sb,
+        None,
+        "tool_schema",
+        &serde_json::json!({"name": "run_lint"}),
+        false,
+        true,
+    )
+    .unwrap();
+    assert!(
+        ok.contains("run_lint") || ok.contains("parameters"),
+        "offload-on should return a schema: {ok}"
+    );
 }

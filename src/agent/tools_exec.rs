@@ -249,8 +249,9 @@ impl Agent {
                     super::parallel::delegate_task(sub_settings, description, tx.clone()).await;
                 let result = match result {
                     Ok(out) => {
-                        let capped: String = out.chars().take(2000).collect();
-                        format!("Sub-agent result:\n{capped}")
+                        let sandbox = crate::tools::Sandbox::new(self.settings.workspace.clone());
+                        let presented = sandbox.present_output("subagent", out);
+                        format!("Sub-agent result:\n{presented}")
                     }
                     Err(e) => format!("Sub-agent error: {e}"),
                 };
@@ -392,6 +393,7 @@ impl Agent {
                 // two edits to the same file apply in call order instead of
                 // racing (issue #111). Recording still goes through slots.
                 let dispatch_name = name.clone();
+                let tool_offload = self.settings.efficiency.tool_offload;
                 let dispatch_result: Result<String, ToolError> =
                     tokio::task::spawn_blocking(move || {
                         dispatch(
@@ -400,6 +402,7 @@ impl Agent {
                             &dispatch_name,
                             &args,
                             read_only,
+                            tool_offload,
                         )
                     })
                     .await
@@ -417,11 +420,18 @@ impl Agent {
                         .with_verification(is_verification),
                 );
             } else {
+                let tool_offload = self.settings.efficiency.tool_offload;
                 handles.push((
                     idx,
                     tokio::task::spawn_blocking(move || {
-                        let result =
-                            dispatch(&sandbox, state_dir.as_deref(), &name, &args, read_only);
+                        let result = dispatch(
+                            &sandbox,
+                            state_dir.as_deref(),
+                            &name,
+                            &args,
+                            read_only,
+                            tool_offload,
+                        );
                         (id, name, result, cache_key, is_verification)
                     }),
                 ));
@@ -468,7 +478,7 @@ impl Agent {
             .await;
         }
         if refresh_state {
-            self.replace_system_message(super::core::rebuild_system_message(&self.settings));
+            self.install_pinned_prompt();
         }
 
         // Plan progress: mark the current step Completed and advance to
@@ -530,6 +540,10 @@ impl Agent {
     ) {
         let result = match dispatch_result {
             Ok(s) => {
+                let class = tool_error_class(&s);
+                if class != "ok" {
+                    tracing::info!(tool = %name, class, "tool_result");
+                }
                 if s.starts_with("Error:") || s.starts_with("Tool error:") {
                     let failure_key = (name.clone(), cache_key.clone());
                     if self.consecutive_failure_key.as_ref() == Some(&failure_key) {
@@ -553,6 +567,12 @@ impl Agent {
                 s
             }
             Err(e) => {
+                let class = if e.is_transient() {
+                    "timeout"
+                } else {
+                    "unexpected"
+                };
+                tracing::info!(tool = %name, class, error = %e, "tool_result");
                 // Deterministic failures already reach the model/transcript;
                 // keep them at debug under default RUST_LOG=warn.
                 if e.is_transient() {
@@ -619,13 +639,39 @@ impl Agent {
     }
 }
 
+/// Coarse class for a tool result the model will see. `ok` is not an error.
+fn tool_error_class(text: &str) -> &'static str {
+    if !(text.starts_with("Error:") || text.starts_with("Tool error:")) {
+        return "ok";
+    }
+    let lower = text.to_ascii_lowercase();
+    if lower.contains("timed out") || lower.contains("timeout") {
+        "timeout"
+    } else if lower.contains("declined") || lower.contains("not run") {
+        "user_abort"
+    } else if lower.contains("invalid") || lower.contains("required") || lower.contains("missing") {
+        "invalid_arguments"
+    } else if lower.contains("dangerous-command denylist")
+        || lower.contains("sigsys")
+        || lower.contains("does not exist")
+        || lower.contains("not a file")
+        || lower.contains("sandbox")
+    {
+        "environment"
+    } else if lower.contains("http") {
+        "provider"
+    } else {
+        "unexpected"
+    }
+}
+
 /// Inspect a verification tool result to determine whether it represents a
 /// genuinely successful run (fail-closed, issue #136).
 ///
 /// Returns `true` only when the output shows `exit=0` and contains no signal
 /// kill, linker/compile failure, timeout, or test-failure markers. A
 /// SIGSYS-killed, timed-out, linker-crashed, or non-zero-exit "verification"
-/// does NOT count as verified.
+/// does not count as verified.
 fn verification_passed(output: &str) -> bool {
     if output.contains("Error: command killed by signal")
         || output.contains("killed by signal")
@@ -737,6 +783,12 @@ mod tests {
     fn verification_passed_no_exit_line() {
         let output = "No test runner detected\n";
         assert!(!verification_passed(output));
+    }
+
+    #[test]
+    fn verification_passed_spilled_shell_keeps_exit_zero() {
+        let output = "exit=0\nFull output saved to .raven/tool-output/shell-1.log (20000 bytes, 400 lines).\nTail:\nok\n";
+        assert!(verification_passed(output));
     }
 
     #[test]

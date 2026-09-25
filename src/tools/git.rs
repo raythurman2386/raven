@@ -6,20 +6,21 @@
 use anyhow::{Context, Result};
 use std::process::Command;
 
-use super::sandbox::{
-    cap_output, setup_shell_env, spawn_confined, truncate_output, wait_for_child, Sandbox,
-    MAX_TOOL_OUTPUT,
-};
+use super::sandbox::{setup_shell_env, spawn_confined, wait_for_child, Sandbox};
 
 impl Sandbox {
     /// `git status --porcelain=v1` — structured, compact output.
+    ///
+    /// Routed through [`Sandbox::present_output`] like diffs: status is usually
+    /// tiny, but a huge dirty tree still spills instead of blowing the prompt.
     pub fn git_status(&self) -> Result<String> {
         let out = self.run_git(&["status", "--porcelain=v1"])?;
-        Ok(if git_out_empty(&out) {
+        let body = if git_out_empty(&out) {
             "No changes (working tree clean)".into()
         } else {
             out
-        })
+        };
+        Ok(self.present_output("git-status", body))
     }
 
     /// `git diff` — unstaged or staged changes.
@@ -30,14 +31,17 @@ impl Sandbox {
             &["diff"][..]
         };
         let out = self.run_git(args)?;
-        Ok(truncate_output(&out, MAX_TOOL_OUTPUT))
+        Ok(self.present_output("git-diff", out))
     }
 
     /// `git log --oneline -n 10` — recent commit history.
+    ///
+    /// Same spill path as [`Self::git_diff`]: `-n` keeps typical output small,
+    /// but an oversized log still goes through present_output.
     pub fn git_log(&self, n: usize) -> Result<String> {
         let n_str = n.to_string();
         let out = self.run_git(&["log", "--oneline", "-n", &n_str])?;
-        Ok(out)
+        Ok(self.present_output("git-log", out))
     }
 
     /// Resolve `HEAD` to a SHA. Used as the base revision when capturing a
@@ -250,7 +254,7 @@ impl Sandbox {
                 if out.is_empty() {
                     out = format!("exit={}", status.code().unwrap_or(-1));
                 }
-                Ok(cap_output(out))
+                Ok(out)
             }
             None => Ok("Error: git command timed out".into()),
         }

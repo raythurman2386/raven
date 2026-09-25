@@ -16,6 +16,33 @@ use crate::agent::ChatMessage;
 pub use crate::tokenizer::{history_tokens, message_tokens};
 use crate::tokenizer::{TokenUsage, UsageCalibration};
 
+/// Prefix of the user-role setup message that sits after the stable system
+/// prompt and before the conversation. Compaction keeps it with the system
+/// message so a summary cannot drop the repo map, rules, or goal.
+pub const SETUP_PREFIX: &str = "<raven_setup>\n";
+
+/// Whether `msg` is the pinned setup message.
+pub fn is_setup_message(msg: &ChatMessage) -> bool {
+    msg.role == "user"
+        && msg
+            .content
+            .as_deref()
+            .is_some_and(|c| c.starts_with(SETUP_PREFIX))
+}
+
+/// How many leading messages compaction must keep: the system message, plus
+/// the setup message when it is next.
+pub fn pinned_prefix_len(messages: &[ChatMessage]) -> usize {
+    let mut n = 0;
+    if messages.first().is_some_and(|m| m.role == "system") {
+        n = 1;
+    }
+    if messages.get(n).is_some_and(is_setup_message) {
+        n += 1;
+    }
+    n
+}
+
 /// History token estimate with optional usage calibration applied.
 ///
 /// Compaction compares its before/after counts against the same soft limit the
@@ -36,6 +63,8 @@ pub fn fold_usage(messages: &[ChatMessage]) -> Option<TokenUsage> {
     let mut prompt = 0u64;
     let mut completion = 0u64;
     let mut total = 0u64;
+    let mut cached = 0u64;
+    let mut reasoning = 0u64;
     let mut found = false;
     for msg in messages {
         if let Some(u) = &msg.usage {
@@ -43,12 +72,16 @@ pub fn fold_usage(messages: &[ChatMessage]) -> Option<TokenUsage> {
             prompt += u.prompt_tokens;
             completion += u.completion_tokens;
             total += u.total_tokens;
+            cached += u.cached_tokens;
+            reasoning += u.reasoning_tokens;
         }
     }
     found.then_some(TokenUsage {
         prompt_tokens: prompt,
         completion_tokens: completion,
         total_tokens: total,
+        cached_tokens: cached,
+        reasoning_tokens: reasoning,
     })
 }
 
@@ -210,21 +243,20 @@ fn find_safe_tail_start(messages: &[ChatMessage], desired_start: usize) -> usize
         return 0;
     }
 
-    let mut start = desired_start.max(1); // never cut into system at index 0
+    let floor = pinned_prefix_len(messages);
+    let mut start = desired_start.max(floor);
 
     // Walk backward: if the message at `start` is a tool result, we need to
     // include the assistant message that issued the call. Keep walking back
-    // until we land on a non-tool message.
+    // until we land on a non-tool message. Never walk into the pinned prefix.
     while start < messages.len() {
         let role = messages[start].role.as_str();
         if role == "tool" {
-            // Need to step back to find the assistant message with tool_calls
-            if start > 1 {
+            if start > floor {
                 start -= 1;
                 continue;
             } else {
-                // Can't go further back; just start at 1 (after system)
-                return 1;
+                return floor;
             }
         }
         // If this is an assistant message with tool_calls, we must include
@@ -315,7 +347,8 @@ fn prepare_compaction(
     let mut tail_cost = 0usize;
     let mut tail_start = messages.len();
 
-    for i in (1..messages.len()).rev() {
+    let floor = pinned_prefix_len(messages);
+    for i in (floor..messages.len()).rev() {
         let cost = message_tokens(&messages[i]);
         if tail_cost + cost > trailing_budget && tail_start < messages.len() {
             break;
@@ -327,9 +360,9 @@ fn prepare_compaction(
     // Adjust so we don't split a tool-call/tool-result pair
     tail_start = find_safe_tail_start(messages, tail_start);
 
-    let tail_start = tail_start.clamp(1, messages.len());
+    let tail_start = tail_start.clamp(floor, messages.len());
     CompactionOutcome::NeedsSummary(CompactionPlan {
-        middle: messages.get(1..tail_start).unwrap_or(&[]).to_vec(),
+        middle: messages.get(floor..tail_start).unwrap_or(&[]).to_vec(),
         tail_start,
         before,
     })
@@ -393,18 +426,21 @@ fn first_exit_token(output: &str) -> Option<&str> {
     output.split_whitespace().find(|t| t.starts_with("exit="))
 }
 
-fn extract_facts(system: Option<&ChatMessage>, middle: &[ChatMessage]) -> CompactFacts {
+fn extract_facts(pinned: &[ChatMessage], middle: &[ChatMessage]) -> CompactFacts {
     let mut facts = CompactFacts {
         middle_len: middle.len(),
         ..CompactFacts::default()
     };
 
-    if let Some(sys) = system.and_then(|m| m.content.as_deref()) {
+    for msg in pinned {
+        let Some(sys) = msg.content.as_deref() else {
+            continue;
+        };
         if let Some(g) = section_after(sys, "--- Current goal ---") {
             facts.goal = Some(g.lines().next().unwrap_or(g).to_string());
         }
         if let Some(block) = section_after(sys, "--- Task list ---") {
-            facts.open_todos = block
+            let todos: Vec<String> = block
                 .lines()
                 .filter(|l| l.starts_with("[pending]") || l.starts_with("[in_progress]"))
                 .map(|l| {
@@ -415,6 +451,9 @@ fn extract_facts(system: Option<&ChatMessage>, middle: &[ChatMessage]) -> Compac
                 })
                 .filter(|s| !s.is_empty())
                 .collect();
+            if !todos.is_empty() {
+                facts.open_todos = todos;
+            }
         }
     }
 
@@ -516,8 +555,11 @@ fn assemble_compaction(
     plan: CompactionPlan,
     llm_summary: Option<String>,
     calib: Option<&UsageCalibration>,
+    transcript_dir: Option<&std::path::Path>,
+    workspace: Option<&std::path::Path>,
 ) -> CompactionReport {
-    let facts = extract_facts(messages.first(), &plan.middle);
+    let floor = pinned_prefix_len(messages);
+    let facts = extract_facts(&messages[..floor.min(messages.len())], &plan.middle);
     let facts_block = format_facts(&facts);
     let body = match llm_summary {
         Some(text) => text,
@@ -529,11 +571,22 @@ fn assemble_compaction(
         content.push('\n');
     }
     content.push_str(&body);
-    // Hard cap the assembled summary (facts + body).
+    // Hard cap the assembled summary (facts + body). The transcript path is
+    // appended after the cap so compaction cannot drop the only pointer to
+    // the saved history.
     const MAX_SUMMARY_CHARS: usize = 4000;
     if content.chars().count() > MAX_SUMMARY_CHARS {
         content = content.chars().take(MAX_SUMMARY_CHARS).collect();
         content.push_str("...[summary truncated]");
+    }
+    // Path is reserved here so the summary size includes it, but the file is
+    // written only after we know compaction will be kept.
+    let planned_transcript = transcript_dir.map(|dir| plan_transcript_path(dir, workspace));
+    if let Some((_, shown)) = &planned_transcript {
+        content.push_str(&format!(
+            "\nFull transcript of the dropped messages: {shown}\n\
+             Search that file for details this summary left out.\n"
+        ));
     }
     let summary_user = ChatMessage::plain("user", Some(content));
     let summary_assistant = ChatMessage::plain(
@@ -553,17 +606,18 @@ fn assemble_compaction(
     summary_assistant.usage = dropped_usage;
 
     // Assemble new history
-    let Some(system) = messages.first().cloned() else {
+    if messages.is_empty() {
         return CompactionReport {
             before_tokens: plan.before,
             after_tokens: plan.before,
             note: "compaction skipped (empty history)".into(),
         };
-    };
+    }
+    let pinned: Vec<ChatMessage> = messages[..floor].to_vec();
     let tail: Vec<ChatMessage> = messages.get(plan.tail_start..).unwrap_or(&[]).to_vec();
 
-    let mut compacted = Vec::with_capacity(tail.len() + 3);
-    compacted.push(system);
+    let mut compacted = Vec::with_capacity(tail.len() + pinned.len() + 2);
+    compacted.extend(pinned);
     compacted.push(summary_user);
     compacted.push(summary_assistant);
     compacted.extend(tail);
@@ -580,6 +634,10 @@ fn assemble_compaction(
             after_tokens: plan.before,
             note: "compaction skipped (would not shrink)".into(),
         };
+    }
+
+    if let Some((abs, _)) = planned_transcript {
+        let _ = save_compacted_transcript(&abs, &plan.middle);
     }
 
     *messages = compacted;
@@ -602,6 +660,8 @@ pub async fn compact_if_needed_llm(
     context_window: usize,
     compact_threshold: f32,
     calib: Option<&UsageCalibration>,
+    transcript_dir: Option<&std::path::Path>,
+    workspace: Option<&std::path::Path>,
     summarizer: impl FnOnce(
         Vec<ChatMessage>,
     ) -> futures_util::future::BoxFuture<'static, Option<String>>,
@@ -618,7 +678,14 @@ pub async fn compact_if_needed_llm(
             // Clone the middle so the extractive fallback still has it if the
             // LLM summarizer returns `None`.
             let summary = summarizer(plan.middle.clone()).await;
-            Some(assemble_compaction(messages, plan, summary, calib))
+            Some(assemble_compaction(
+                messages,
+                plan,
+                summary,
+                calib,
+                transcript_dir,
+                workspace,
+            ))
         }
     }
 }
@@ -670,6 +737,40 @@ fn extractive_body(middle: &[ChatMessage]) -> String {
         }
     }
     summary
+}
+
+static COMPACT_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Absolute path plus the workspace-relative path `read_file` can open.
+fn plan_transcript_path(
+    dir: &std::path::Path,
+    workspace: Option<&std::path::Path>,
+) -> (std::path::PathBuf, String) {
+    let seq = COMPACT_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let name = format!("compact-{millis}-{seq}.jsonl");
+    let abs = dir.join(&name);
+    let shown = workspace
+        .and_then(|ws| abs.strip_prefix(ws).ok())
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| format!(".raven/compact/{name}"));
+    (abs, shown)
+}
+
+fn save_compacted_transcript(path: &std::path::Path, middle: &[ChatMessage]) -> Option<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).ok()?;
+    }
+    let mut file = std::fs::File::create(path).ok()?;
+    use std::io::Write;
+    for msg in middle {
+        let line = serde_json::to_string(msg).ok()?;
+        writeln!(file, "{line}").ok()?;
+    }
+    Some(())
 }
 
 fn truncate(s: &str, max_chars: usize) -> String {
@@ -748,6 +849,7 @@ mod tests {
             content: Some(content.into()),
             tool_calls: None,
             tool_call_id: None,
+            reasoning_content: None,
             usage: None,
         }
     }
@@ -761,6 +863,7 @@ mod tests {
             },
             tool_calls: Some(tool_calls),
             tool_call_id: None,
+            reasoning_content: None,
             usage: None,
         }
     }
@@ -771,6 +874,7 @@ mod tests {
             content: Some(content.into()),
             tool_calls: None,
             tool_call_id: Some(id.into()),
+            reasoning_content: None,
             usage: None,
         }
     }
@@ -851,9 +955,15 @@ mod tests {
         context_window: usize,
         threshold: f32,
     ) -> Option<(usize, usize)> {
-        compact_if_needed_llm(msgs, context_window, threshold, None, |_middle| {
-            Box::pin(async { None })
-        })
+        compact_if_needed_llm(
+            msgs,
+            context_window,
+            threshold,
+            None,
+            None,
+            None,
+            |_middle| Box::pin(async { None }),
+        )
         .await
         .map(|r| (r.before_tokens, r.after_tokens))
     }
@@ -1005,6 +1115,8 @@ mod tests {
                 prompt_tokens: 1_000,
                 completion_tokens: 50,
                 total_tokens: 1_050,
+                cached_tokens: 0,
+                reasoning_tokens: 0,
             });
             msgs.push(a);
         }
@@ -1128,13 +1240,80 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn compaction_transcript_is_workspace_relative_and_skipped_when_not_kept() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join(".raven").join("compact");
+        let mut msgs = vec![msg("system", "sys")];
+        for i in 0..80 {
+            msgs.push(msg(
+                "user",
+                &format!("Add unit tests for the payment handler and cover the edge case where balance is {i}."),
+            ));
+            msgs.push(msg(
+                "assistant",
+                &format!("Wrote tests for the payment handler covering the zero-balance edge case for account {i}."),
+            ));
+        }
+        let report = compact_if_needed_llm(
+            &mut msgs,
+            8192,
+            0.1,
+            None,
+            Some(&dir),
+            Some(tmp.path()),
+            |_middle| Box::pin(async { Some("kept the goal and the files".to_string()) }),
+        )
+        .await
+        .unwrap();
+        assert!(report.after_tokens < report.before_tokens);
+        let summary = msgs
+            .iter()
+            .filter_map(|m| m.content.as_deref())
+            .find(|c| c.contains("Full transcript"))
+            .unwrap_or("");
+        assert!(
+            summary.contains(".raven/compact/compact-"),
+            "pointer should be workspace-relative, got {summary}"
+        );
+        assert!(!summary.contains(tmp.path().to_str().unwrap_or("")));
+        let written: Vec<_> = std::fs::read_dir(&dir).unwrap().collect();
+        assert_eq!(written.len(), 1);
+
+        // A summary larger than the middle must not leave a transcript behind.
+        let skip_dir = tmp.path().join("skip");
+        let mut bloated = vec![msg("system", "s")];
+        for i in 0..40 {
+            bloated.push(msg("user", &format!("u{i}")));
+            bloated.push(msg("assistant", &format!("a{i}")));
+        }
+        let huge = "x".repeat(50_000);
+        let _ = compact_if_needed_llm(
+            &mut bloated,
+            2000,
+            0.1,
+            None,
+            Some(&skip_dir),
+            Some(tmp.path()),
+            move |_middle| {
+                let huge = huge.clone();
+                Box::pin(async move { Some(huge) })
+            },
+        )
+        .await;
+        assert!(
+            !skip_dir.exists(),
+            "skipped compaction must not write a transcript"
+        );
+    }
+
+    #[tokio::test]
     async fn llm_compaction_uses_provided_summary_and_reduces_tokens() {
         let mut msgs = vec![msg("system", "sys")];
         for i in 0..200 {
             msgs.push(msg("user", &format!("message number {i}")));
             msgs.push(msg("assistant", &format!("response to message {i}")));
         }
-        let report = compact_if_needed_llm(&mut msgs, 8192, 0.1, None, |_middle| {
+        let report = compact_if_needed_llm(&mut msgs, 8192, 0.1, None, None, None, |_middle| {
             Box::pin(async { Some("LLM distilled: 200 turns of task work.".to_string()) })
         })
         .await
@@ -1168,7 +1347,7 @@ mod tests {
                 &format!("Added scoped permissions for user {i} in the auth middleware. Updated the route guards to enforce them."),
             ));
         }
-        let report = compact_if_needed_llm(&mut msgs, 8192, 0.1, None, |_middle| {
+        let report = compact_if_needed_llm(&mut msgs, 8192, 0.1, None, None, None, |_middle| {
             Box::pin(async { None }) // summarizer failed → extractive fallback
         })
         .await
@@ -1198,7 +1377,7 @@ mod tests {
              --- Task list ---\n[pending] 1: write tests\n[in_progress] 2: run clippy\n\
              [completed] 3: read the file\n",
         );
-        let facts = extract_facts(Some(&sys), &[]);
+        let facts = extract_facts(std::slice::from_ref(&sys), &[]);
         assert_eq!(facts.goal.as_deref(), Some("[in_progress] fix the parser"));
         assert_eq!(facts.open_todos.len(), 2);
         assert!(facts.open_todos[0].contains("write tests"));
@@ -1233,7 +1412,7 @@ mod tests {
             tool_msg("w1", "Wrote src/parser.rs"),
             tool_msg("v1", "--- run_tests (cargo) exit=0 ---\nok"),
         ];
-        let facts = extract_facts(None, &middle);
+        let facts = extract_facts(&[], &middle);
         assert_eq!(facts.goal.as_deref(), Some("ship the feature"));
         assert_eq!(facts.open_todos, vec!["edit parser".to_string()]);
         assert_eq!(facts.key_paths, vec!["src/parser.rs".to_string()]);
@@ -1300,7 +1479,7 @@ mod tests {
                 "--- run_tests (cargo) exit=0 ---\nok",
             ));
         }
-        let report = compact_if_needed_llm(&mut msgs, 8192, 0.1, None, |_middle| {
+        let report = compact_if_needed_llm(&mut msgs, 8192, 0.1, None, None, None, |_middle| {
             Box::pin(async { None })
         })
         .await

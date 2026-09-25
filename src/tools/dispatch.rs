@@ -27,12 +27,17 @@ fn anyhow_to_tool_error(e: anyhow::Error, path: &str, operation: &str) -> ToolEr
 /// advertised to the model should already exclude these tools in read-only
 /// modes (Plan, Chat), but if the model emits a write tool call it wasn't
 /// offered, dispatch refuses to execute it.
+///
+/// `tool_offload` must match `efficiency.tool_offload`: when false,
+/// `tool_schema` is refused so dispatch stays consistent with advertisement
+/// (full schemas are already in the static tool list).
 pub fn dispatch(
     sandbox: &Sandbox,
     state_dir: Option<&std::path::Path>,
     name: &str,
     args: &serde_json::Value,
     read_only: bool,
+    tool_offload: bool,
 ) -> Result<String, ToolError> {
     if read_only && is_write_tool(name) {
         return Ok(format!(
@@ -40,6 +45,12 @@ pub fn dispatch(
              Use --mode agent to enable write tools.",
             name
         ));
+    }
+    if name == "tool_schema" && !tool_offload {
+        return Ok(
+            "Error: tool_schema is only available when efficiency.tool_offload is enabled. All tool schemas are already in the static tool list."
+                .into(),
+        );
     }
     let raw = serde_json::to_string(args).unwrap_or_default();
     if let Err(msg) = super::validate::validate_tool_call(name, &raw, args) {
@@ -58,6 +69,10 @@ pub fn dispatch(
                 .and_then(|v| v.as_u64())
                 .unwrap_or(400) as usize;
             sandbox.read_file(path, start, max)
+        }
+        "tool_schema" => {
+            let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            Ok(super::tool_schema_text(name))
         }
         "search_replace" => {
             let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");

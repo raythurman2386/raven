@@ -292,6 +292,9 @@ pub struct Sandbox {
     /// The operational scope. System scope (workspace `/`) redirects
     /// `.raven` scratch/state dirs to `~/.raven` via [`Sandbox::raven_dir`].
     pub scope: crate::config::Scope,
+    /// When true, `read_file` numbers every 10th line (and the first line of
+    /// the range) instead of every line.
+    pub sparse_lines: bool,
 }
 
 impl Sandbox {
@@ -301,6 +304,7 @@ impl Sandbox {
             workspace,
             extra_rw: Vec::new(),
             scope: crate::config::Scope::Repo,
+            sparse_lines: false,
         }
     }
 
@@ -312,6 +316,7 @@ impl Sandbox {
             workspace,
             extra_rw,
             scope: crate::config::Scope::Repo,
+            sparse_lines: false,
         }
     }
 
@@ -336,14 +341,17 @@ impl Sandbox {
             workspace,
             extra_rw: Vec::new(),
             scope,
+            sparse_lines: false,
         }
     }
 }
 
 /// Truncate output to max chars with a clear marker.
 ///
-/// Char-safe: truncates on a character boundary so multi-byte UTF-8 (non-ASCII
-/// text in diffs, test output, etc.) never panics on a byte-slice boundary.
+/// Char-safe: truncates on a character boundary so multi-byte UTF-8 never
+/// panics on a byte-slice boundary. Production tool results use
+/// [`Sandbox::present_output`] instead of dropping the middle of the output.
+#[allow(dead_code)]
 pub(crate) fn truncate_output(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()
@@ -353,12 +361,84 @@ pub(crate) fn truncate_output(s: &str, max: usize) -> String {
     }
 }
 
-/// Cap tool output to [`MAX_TOOL_OUTPUT`] chars (char-safe) with a marker.
-pub(crate) fn cap_output(s: String) -> String {
-    if s.chars().count() <= MAX_TOOL_OUTPUT {
-        s
-    } else {
-        let truncated: String = s.chars().take(MAX_TOOL_OUTPUT).collect();
-        format!("{}\n...[truncated]", truncated)
+impl Sandbox {
+    /// Return `body` inline, or write it under `.raven/tool-output` and return
+    /// the path, size, and a short tail.
+    ///
+    /// Truncating drops data the model may need later and the tail-only form
+    /// stays small in every subsequent request.
+    pub(crate) fn present_output(&self, label: &str, body: String) -> String {
+        if body.chars().count() <= MAX_TOOL_OUTPUT {
+            return body;
+        }
+        let dir = self.raven_dir().join("tool-output");
+        let seq = SPILL_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let millis = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let safe_label: String = label
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .take(24)
+            .collect();
+        let file_name = format!("{safe_label}-{millis}-{seq}.log");
+        let path = dir.join(&file_name);
+        let bytes = body.len();
+        let lines = body.lines().count();
+        let tail = output_tail(&body, 40, 1500);
+        // The status line is what the verify gate and the model use
+        // (`exit=0`, `killed by signal`). It sits at the front, so a tail-only
+        // stub would hide a passing run and the network-block note.
+        let preamble = status_preamble(&body);
+        if std::fs::create_dir_all(&dir).is_ok() && std::fs::write(&path, &body).is_ok() {
+            let shown = path
+                .strip_prefix(&self.workspace)
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|_| path.display().to_string());
+            format!(
+                "{preamble}\
+                 Full output saved to {shown} ({bytes} bytes, {lines} lines).\n\
+                 Use read_file or grep on that path for any part not shown.\n\
+                 Tail:\n{tail}"
+            )
+        } else {
+            let head: String = body.chars().take(1500).collect();
+            format!(
+                "Could not save the full output ({bytes} bytes). Showing the start and the tail.\n\
+                 {head}\n...\n{tail}"
+            )
+        }
     }
 }
+
+/// Leading status lines that must survive a spill: the first line, plus a
+/// following `exit=` / signal header and the sandbox network-block note.
+fn status_preamble(body: &str) -> String {
+    let mut out = String::new();
+    for (i, line) in body.lines().take(6).enumerate() {
+        let keep = i == 0
+            || line.contains("exit=")
+            || line.contains("killed by signal")
+            || line.starts_with("This sandbox blocks network access");
+        if !keep {
+            break;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+fn output_tail(body: &str, max_lines: usize, max_chars: usize) -> String {
+    let lines: Vec<&str> = body.lines().collect();
+    let start = lines.len().saturating_sub(max_lines);
+    let mut tail = lines[start..].join("\n");
+    if tail.chars().count() > max_chars {
+        let skip = tail.chars().count() - max_chars;
+        tail = tail.chars().skip(skip).collect();
+    }
+    tail
+}
+
+static SPILL_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

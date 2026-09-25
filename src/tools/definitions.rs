@@ -424,3 +424,123 @@ pub fn chat_tool_definitions() -> serde_json::Value {
         .collect();
     serde_json::Value::Array(filtered)
 }
+
+/// Tools kept in the static list when `tool_offload` is on.
+const CORE_TOOLS: &[&str] = &[
+    "list_dir",
+    "read_file",
+    "search_replace",
+    "write_file",
+    "grep",
+    "run_shell",
+    "think",
+    "todo_write",
+    "goal_set",
+    "delegate_task",
+    "git_status",
+    "git_diff",
+    "git_log",
+    "run_tests",
+    "ask_user",
+    "apply_patch",
+];
+
+/// Tools whose full schema is loaded through `tool_schema` when offload is on.
+const OFFLOADED_TOOLS: &[&str] = &[
+    "search_code",
+    "web_search",
+    "web_fetch",
+    "skill_search",
+    "skill_load",
+    "memory_search",
+    "memory_update",
+    "run_lint",
+];
+
+fn tool_name_of(tool: &serde_json::Value) -> Option<&str> {
+    tool.get("function")
+        .and_then(|f| f.get("name"))
+        .and_then(|n| n.as_str())
+}
+
+fn tool_schema_definition() -> serde_json::Value {
+    serde_json::json!({
+        "type": "function",
+        "function": {
+            "name": "tool_schema",
+            "description": "Return the argument schema for a tool that is not in the static tool list. Pass an empty name to list those tools.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Tool name, or empty to list offloaded tools" }
+                },
+                "required": ["name"]
+            }
+        }
+    })
+}
+
+/// Static tool list for `efficiency.tool_offload`: core tools plus `tool_schema`.
+pub fn offloaded_tool_definitions(plan_only: bool, mode: crate::config::Mode) -> serde_json::Value {
+    let base = if plan_only {
+        match mode {
+            crate::config::Mode::Chat => chat_tool_definitions(),
+            _ => plan_tool_definitions(),
+        }
+    } else {
+        tool_definitions()
+    };
+    let mut arr: Vec<serde_json::Value> = base
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|tool| tool_name_of(tool).is_some_and(|name| CORE_TOOLS.contains(&name)))
+        .collect();
+    arr.push(tool_schema_definition());
+    serde_json::Value::Array(arr)
+}
+
+/// One line per offloaded tool, for the setup message.
+pub fn offloaded_tool_catalog() -> String {
+    let all = tool_definitions();
+    let Some(arr) = all.as_array() else {
+        return String::new();
+    };
+    let mut lines = Vec::new();
+    for tool in arr {
+        let Some(name) = tool_name_of(tool) else {
+            continue;
+        };
+        if !OFFLOADED_TOOLS.contains(&name) {
+            continue;
+        }
+        let desc = tool
+            .get("function")
+            .and_then(|f| f.get("description"))
+            .and_then(|d| d.as_str())
+            .unwrap_or("");
+        let sentence = desc.split('.').next().unwrap_or(desc);
+        lines.push(format!(
+            "- {name}: {sentence}. Call tool_schema before using it."
+        ));
+    }
+    lines.join("\n")
+}
+
+/// Full schema for one tool, or the offloaded catalog when `name` is empty.
+pub fn tool_schema_text(name: &str) -> String {
+    if name.trim().is_empty() {
+        return offloaded_tool_catalog();
+    }
+    let all = tool_definitions();
+    let Some(arr) = all.as_array() else {
+        return format!("Unknown tool: {name}");
+    };
+    for tool in arr {
+        if tool_name_of(tool) == Some(name) {
+            return tool.to_string();
+        }
+    }
+    format!("Unknown tool: {name}")
+}

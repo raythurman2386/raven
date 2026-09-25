@@ -9,6 +9,7 @@ fn build_history(n: usize, tool_heavy: bool) -> Vec<ChatMessage> {
         content: Some("You are a coding agent.".into()),
         tool_calls: None,
         tool_call_id: None,
+        reasoning_content: None,
         usage: None,
     });
     for i in 0..n {
@@ -17,6 +18,7 @@ fn build_history(n: usize, tool_heavy: bool) -> Vec<ChatMessage> {
             content: Some(format!("Task number {i}: refactor the auth module.")),
             tool_calls: None,
             tool_call_id: None,
+            reasoning_content: None,
             usage: None,
         });
         if tool_heavy {
@@ -32,6 +34,7 @@ fn build_history(n: usize, tool_heavy: bool) -> Vec<ChatMessage> {
                     },
                 }]),
                 tool_call_id: None,
+                reasoning_content: None,
                 usage: None,
             });
             msgs.push(ChatMessage {
@@ -39,6 +42,7 @@ fn build_history(n: usize, tool_heavy: bool) -> Vec<ChatMessage> {
                 content: Some("x".repeat(6000)),
                 tool_calls: None,
                 tool_call_id: Some(format!("call_{i}")),
+                reasoning_content: None,
                 usage: None,
             });
         } else {
@@ -47,6 +51,7 @@ fn build_history(n: usize, tool_heavy: bool) -> Vec<ChatMessage> {
                 content: Some(format!("I refactored module {i}.")),
                 tool_calls: None,
                 tool_call_id: None,
+                reasoning_content: None,
                 usage: None,
             });
         }
@@ -63,9 +68,15 @@ fn bench(c: &mut Criterion) {
         b.iter_batched(
             || msgs.clone(),
             |mut m| {
-                rt.block_on(compact_if_needed_llm(&mut m, 8192, 0.1, None, |_| {
-                    Box::pin(async { None })
-                }))
+                rt.block_on(compact_if_needed_llm(
+                    &mut m,
+                    8192,
+                    0.1,
+                    None,
+                    None,
+                    None,
+                    |_| Box::pin(async { None }),
+                ))
             },
             criterion::BatchSize::SmallInput,
         );
@@ -76,9 +87,15 @@ fn bench(c: &mut Criterion) {
         b.iter_batched(
             || msgs.clone(),
             |mut m| {
-                rt.block_on(compact_if_needed_llm(&mut m, 8192, 0.1, None, |_| {
-                    Box::pin(async { None })
-                }))
+                rt.block_on(compact_if_needed_llm(
+                    &mut m,
+                    8192,
+                    0.1,
+                    None,
+                    None,
+                    None,
+                    |_| Box::pin(async { None }),
+                ))
             },
             criterion::BatchSize::SmallInput,
         );
@@ -89,9 +106,15 @@ fn bench(c: &mut Criterion) {
         b.iter_batched(
             || msgs.clone(),
             |mut m| {
-                rt.block_on(compact_if_needed_llm(&mut m, 128_000, 0.75, None, |_| {
-                    Box::pin(async { None })
-                }))
+                rt.block_on(compact_if_needed_llm(
+                    &mut m,
+                    128_000,
+                    0.75,
+                    None,
+                    None,
+                    None,
+                    |_| Box::pin(async { None }),
+                ))
             },
             criterion::BatchSize::SmallInput,
         );

@@ -680,6 +680,7 @@ fn test_settings(workspace: &std::path::Path) -> Settings {
         sandbox_extra_rw: Vec::new(),
         allow_delegate: true,
         session_state_dir: None,
+        efficiency: crate::config::EfficiencyFlags::default(),
     }
 }
 

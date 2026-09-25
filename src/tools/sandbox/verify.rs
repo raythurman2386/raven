@@ -6,7 +6,7 @@ use regex::Regex;
 use std::process::Command;
 use std::sync::OnceLock;
 
-use super::{cap_output, setup_shell_env, spawn_confined, wait_for_child, Sandbox};
+use super::{setup_shell_env, spawn_confined, wait_for_child, Sandbox};
 
 enum TestRunner {
     Cargo,
@@ -98,7 +98,7 @@ impl Sandbox {
                         if !stderr.is_empty() {
                             out.push_str(&String::from_utf8_lossy(&stderr));
                         }
-                        return Ok(cap_output(out));
+                        return Ok(self.present_output("verify", out));
                     }
                 }
                 let mut out = format!(
@@ -110,7 +110,7 @@ impl Sandbox {
                 if !stderr.is_empty() {
                     out.push_str(&String::from_utf8_lossy(&stderr));
                 }
-                Ok(cap_output(out))
+                Ok(self.present_output("verify", out))
             }
             None => Ok("Error: test runner timed out".into()),
         }
@@ -277,7 +277,7 @@ impl Sandbox {
                         if !stderr.is_empty() {
                             out.push_str(&String::from_utf8_lossy(&stderr));
                         }
-                        return Ok(cap_output(out));
+                        return Ok(self.present_output("verify", out));
                     }
                 }
                 let mut out = format!(
@@ -289,7 +289,7 @@ impl Sandbox {
                 if !stderr.is_empty() {
                     out.push_str(&String::from_utf8_lossy(&stderr));
                 }
-                Ok(cap_output(out))
+                Ok(self.present_output("verify", out))
             }
             None => Ok("Error: linter timed out".into()),
         }

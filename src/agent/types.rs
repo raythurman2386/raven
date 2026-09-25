@@ -25,6 +25,10 @@ pub struct ChatMessage {
     pub tool_calls: Option<Vec<ToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    /// Provider reasoning replayed on later turns. Chat Completions may return
+    /// this as `reasoning_content`. Omitted when the provider sent none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<TokenUsage>,
 }
@@ -38,6 +42,7 @@ impl ChatMessage {
             content,
             tool_calls: None,
             tool_call_id: None,
+            reasoning_content: None,
             usage: None,
         }
     }

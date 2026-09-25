@@ -210,6 +210,7 @@ fn settings_for(workspace: &std::path::Path, base_url: &str) -> crate::config::S
         sandbox_extra_rw: Vec::new(),
         allow_delegate: true,
         session_state_dir: None,
+        efficiency: crate::config::EfficiencyFlags::default(),
     }
 }
 
@@ -219,6 +220,7 @@ fn plain(role: &str) -> ChatMessage {
         content: Some("x".into()),
         tool_calls: None,
         tool_call_id: None,
+        reasoning_content: None,
         usage: None,
     }
 }
@@ -235,6 +237,7 @@ fn tool_only() -> ChatMessage {
             },
         }]),
         tool_call_id: None,
+        reasoning_content: None,
         usage: None,
     }
 }
@@ -1272,7 +1275,11 @@ async fn multi_turn_conversation() {
         .any(|e| matches!(e, AgentEvent::TextDelta(s) if s == "All done.")));
     assert!(events2.iter().any(|e| matches!(e, AgentEvent::Done)));
 
-    let user_msgs: Vec<_> = agent.messages.iter().filter(|m| m.role == "user").collect();
+    let user_msgs: Vec<_> = agent
+        .messages
+        .iter()
+        .filter(|m| m.role == "user" && !crate::context::is_setup_message(m))
+        .collect();
     assert_eq!(user_msgs.len(), 2);
 }
 

@@ -101,6 +101,9 @@ class CaseResult:
     checks_exit: int | None = None
     tool_calls: int = 0
     iterations: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cached_tokens: int = 0
     dirty_tree: bool = False
     flaky: bool = False
     message: str = ""
@@ -249,12 +252,112 @@ def is_dirty(repo: Path) -> bool:
     return bool(lines)
 
 
+def _usage_int(obj: dict[str, Any], *keys: str) -> int:
+    for key in keys:
+        val = obj.get(key)
+        if isinstance(val, int):
+            return val
+        if isinstance(val, float):
+            return int(val)
+    return 0
+
+
+def _mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _session_activity_mtime(session_dir: Path) -> float:
+    times = [_mtime(session_dir)]
+    for name in ("usage.jsonl", "messages.jsonl"):
+        p = session_dir / name
+        if p.is_file():
+            times.append(_mtime(p))
+    return max(times)
+
+
+def case_session_dirs(sessions: Path, since: float | None) -> list[Path]:
+    """Session dirs that belong to this case run.
+
+    When `since` (epoch seconds) is set, keep sessions touched at/after that
+    time (2s skew). If none match — e.g. planted leftovers in a multi-session
+    workdir — fall back to the single newest session instead of summing all.
+    """
+    if not sessions.is_dir():
+        return []
+    dirs = [p for p in sessions.iterdir() if p.is_dir()]
+    if not dirs:
+        return []
+    dirs.sort(key=_session_activity_mtime, reverse=True)
+    if since is None:
+        return dirs
+    cutoff = since - 2.0
+    matched = [d for d in dirs if _session_activity_mtime(d) >= cutoff]
+    if matched:
+        return matched
+    return dirs[:1]
+
+
+def harvest_usage(work: Path, since: float | None = None) -> tuple[int, int, int]:
+    """Sum provider usage for the case.
+
+    Prefer `{session}/usage.jsonl` (one line per request, with cache fields).
+    Fall back to usage objects on assistant messages for binaries that only
+    persist the meter on the transcript.
+
+    Only sessions belonging to this case run are counted (see
+    [`case_session_dirs`]) so multi-session workdirs do not over-report.
+    """
+    sessions = work / ".raven" / "sessions"
+    session_dirs = case_session_dirs(sessions, since)
+    if not session_dirs:
+        return 0, 0, 0
+    prompt = completion = cached = 0
+    ledgers = [d / "usage.jsonl" for d in session_dirs if (d / "usage.jsonl").is_file()]
+    if ledgers:
+        for path in ledgers:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                prompt += _usage_int(row, "promptTokens", "prompt_tokens")
+                completion += _usage_int(row, "completionTokens", "completion_tokens")
+                cached += _usage_int(row, "cachedTokens", "cached_tokens")
+        return prompt, completion, cached
+    for session_dir in session_dirs:
+        path = session_dir / "messages.jsonl"
+        if not path.is_file():
+            continue
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            usage = msg.get("usage")
+            if not isinstance(usage, dict):
+                continue
+            prompt += _usage_int(usage, "promptTokens", "prompt_tokens")
+            completion += _usage_int(usage, "completionTokens", "completion_tokens")
+            cached += _usage_int(usage, "cachedTokens", "cached_tokens")
+    return prompt, completion, cached
+
+
 def run_case(
     case_dir: Path,
     raven: Path,
     model: str,
     host: str,
     api_key: str | None,
+    provider: str | None = None,
 ) -> CaseResult:
     meta = load_meta(case_dir)
     if meta.skip_live:
@@ -299,6 +402,7 @@ def run_case(
 
     task = task_path.read_text(encoding="utf-8").strip()
     started = time.monotonic()
+    case_started = time.time()
 
     with tempfile.TemporaryDirectory(prefix=f"raven-eval-{meta.id}-") as tmp:
         work = Path(tmp) / "workspace"
@@ -322,17 +426,23 @@ def run_case(
         # The raven CLI no longer takes --host/--api-key. Declare the eval
         # endpoint as a named provider in the workspace config and select it
         # with --provider eval. The API key is passed via env (RAVEN_API_KEY).
-        cfg_dir = work / ".raven"
-        cfg_dir.mkdir(parents=True, exist_ok=True)
-        cfg_lines = [
-            'provider = "eval"',
-            "",
-            "[providers.eval]",
-            f'base_url = "{host}"',
-        ]
-        if api_key:
-            cfg_lines.append(f'api_key = "{api_key}"')
-        (cfg_dir / "config.toml").write_text("\n".join(cfg_lines) + "\n", encoding="utf-8")
+        # Named providers such as grok resolve their own endpoint and session.
+        # Writing an eval provider would shadow that with a bare base URL.
+        if provider:
+            cmd_provider = provider
+        else:
+            cfg_dir = work / ".raven"
+            cfg_dir.mkdir(parents=True, exist_ok=True)
+            cfg_lines = [
+                'provider = "eval"',
+                "",
+                "[providers.eval]",
+                f'base_url = "{host}"',
+            ]
+            if api_key:
+                cfg_lines.append(f'api_key = "{api_key}"')
+            (cfg_dir / "config.toml").write_text("\n".join(cfg_lines) + "\n", encoding="utf-8")
+            cmd_provider = "eval"
 
         cmd = [
             str(raven),
@@ -342,7 +452,7 @@ def run_case(
             "--model",
             model,
             "--provider",
-            "eval",
+            cmd_provider,
             "--mode",
             meta.mode,
             "-p",
@@ -380,6 +490,7 @@ def run_case(
             stderr_path.write_text(err, encoding="utf-8")
             # Capture partial progress so timeouts are diagnosable (tools/iters).
             tool_calls, iterations = parse_metrics(out, err)
+            prompt_tokens, completion_tokens, cached_tokens = harvest_usage(work, since=case_started)
             return CaseResult(
                 id=meta.id,
                 status="timeout",
@@ -387,6 +498,9 @@ def run_case(
                 raven_exit=None,
                 tool_calls=tool_calls,
                 iterations=iterations,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                cached_tokens=cached_tokens,
                 message=f"exceeded {meta.timeout_secs}s",
                 flaky=meta.flaky,
                 tags=list(meta.tags),
@@ -395,6 +509,7 @@ def run_case(
         stdout = stdout_path.read_text(encoding="utf-8")
         stderr = stderr_path.read_text(encoding="utf-8")
         tool_calls, iterations = parse_metrics(stdout, stderr)
+        prompt_tokens, completion_tokens, cached_tokens = harvest_usage(work, since=case_started)
         dirty = is_dirty(work)
 
         if raven_exit != 0 and not meta.expect_raven_fail:
@@ -444,6 +559,9 @@ def run_case(
                     raven_exit=raven_exit,
                     tool_calls=tool_calls,
                     iterations=iterations,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    cached_tokens=cached_tokens,
                     dirty_tree=dirty,
                     message="checks.sh timed out",
                     flaky=meta.flaky,
@@ -470,6 +588,9 @@ def run_case(
             checks_exit=checks_exit,
             tool_calls=tool_calls,
             iterations=iterations,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cached_tokens=cached_tokens,
             dirty_tree=dirty,
             flaky=meta.flaky,
             message=msg,
@@ -520,12 +641,14 @@ def render_markdown(payload: dict[str, Any]) -> str:
         f"({s['pass_rate']*100:.0f}%)",
         f"- hard fails: {s['hard_fails']}",
         "",
-        "| case | status | secs | tools | dirty | notes |",
-        "|------|--------|------|-------|-------|-------|",
+        "| case | status | secs | tools | prompt | cached | completion | dirty | notes |",
+        "|------|--------|------|-------|--------|--------|------------|-------|-------|",
     ]
     for r in payload["results"]:
         lines.append(
             f"| {r['id']} | {r['status']} | {r['seconds']} | {r['tool_calls']} | "
+            f"{r.get('prompt_tokens', 0)} | {r.get('cached_tokens', 0)} | "
+            f"{r.get('completion_tokens', 0)} | "
             f"{'yes' if r['dirty_tree'] else ''} | {r.get('message','')} |"
         )
     lines.append("")
@@ -542,6 +665,12 @@ def main() -> int:
     ap.add_argument("--case", type=str, default=None, help="run a single case id")
     ap.add_argument("--tag", type=str, default=None, help="filter by tag")
     ap.add_argument("--bin", type=str, default=None, help="path to raven binary")
+    ap.add_argument(
+        "--provider",
+        type=str,
+        default=None,
+        help="named provider (e.g. grok). Skips the eval host/api-key config.",
+    )
     ap.add_argument(
         "--model",
         type=str,
@@ -589,7 +718,11 @@ def main() -> int:
         )
         args.host = fixed
 
-    if looks_authenticated_host(args.host) and not args.api_key:
+    if (
+        not args.provider
+        and looks_authenticated_host(args.host)
+        and not args.api_key
+    ):
         print(
             "error: host looks like a cloud API but RAVEN_API_KEY is unset.\n"
             "  export RAVEN_API_KEY=...   # or put it in repo-root .env\n"
@@ -607,22 +740,27 @@ def main() -> int:
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     print(f"raven:  {raven}")
     print(f"model:  {args.model}")
+    print(f"provider: {args.provider or 'eval'}")
     print(f"host:   {args.host}")
-    print(f"auth:   {'yes' if args.api_key else 'no'}")
+    print(f"auth:   {'yes' if args.api_key else 'session' if args.provider == 'grok' else 'no'}")
     print(f"cases:  {', '.join(c.name for c in cases)}")
     print()
 
     results: list[CaseResult] = []
     for case_dir in cases:
         print(f"→ {case_dir.name} ...", flush=True)
-        result = run_case(case_dir, raven, args.model, args.host, args.api_key)
+        result = run_case(
+            case_dir, raven, args.model, args.host, args.api_key, args.provider
+        )
         results.append(result)
         mark = {"pass": "OK", "fail": "FAIL", "skip": "SKIP", "timeout": "TIME", "error": "ERR"}.get(
             result.status, result.status
         )
         print(
             f"  [{mark}] {result.id} {result.seconds}s "
-            f"tools={result.tool_calls} {result.message}".rstrip(),
+            f"tools={result.tool_calls} prompt={result.prompt_tokens} "
+            f"cached={result.cached_tokens} out={result.completion_tokens} "
+            f"{result.message}".rstrip(),
             flush=True,
         )
 
@@ -632,6 +770,7 @@ def main() -> int:
         {
             "model": args.model,
             "host": args.host,
+            "provider": args.provider or "eval",
             "bin": str(raven),
             "smoke": args.smoke,
             "utc": run_id,
@@ -643,5 +782,44 @@ def main() -> int:
     return 1 if summary["hard_fails"] else 0
 
 
+def _selftest_harvest_usage() -> None:
+    """Guard against summing leftover sessions in a multi-session workdir."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        sessions = work / ".raven" / "sessions"
+        old = sessions / "old-session"
+        new = sessions / "new-session"
+        old.mkdir(parents=True)
+        new.mkdir(parents=True)
+        (old / "usage.jsonl").write_text(
+            '{"promptTokens": 1000, "completionTokens": 10, "cachedTokens": 0}\n',
+            encoding="utf-8",
+        )
+        # Make the old ledger look stale.
+        import os
+        os.utime(old / "usage.jsonl", (1_700_000_000, 1_700_000_000))
+        os.utime(old, (1_700_000_000, 1_700_000_000))
+        (new / "usage.jsonl").write_text(
+            '{"promptTokens": 42, "completionTokens": 7, "cachedTokens": 3}\n',
+            encoding="utf-8",
+        )
+        since = time.time() - 1.0
+        prompt, completion, cached = harvest_usage(work, since=since)
+        assert (prompt, completion, cached) == (42, 7, 3), (
+            prompt,
+            completion,
+            cached,
+        )
+        # Blind sum of all sessions would be 1042 — must not happen.
+        dirs = case_session_dirs(sessions, since)
+        assert [d.name for d in dirs] == ["new-session"], dirs
+
+
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--selftest":
+        _selftest_harvest_usage()
+        print("harvest_usage selftest OK")
+        sys.exit(0)
     sys.exit(main())

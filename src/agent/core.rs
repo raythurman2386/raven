@@ -19,7 +19,7 @@ use crate::error::{cap_http_body, AgentError};
 use crate::mcp::McpHandle;
 use crate::memory;
 use crate::plan::Plan;
-use crate::tokenizer::{count_tokens, UsageCalibration, MSG_OVERHEAD};
+use crate::tokenizer::{append_usage_jsonl, count_tokens, UsageCalibration, MSG_OVERHEAD};
 use crate::tools::{tool_definitions, Sandbox};
 
 use super::loop_control::{compute_reminders, summarize_request};
@@ -54,6 +54,26 @@ fn load_usage_supported(base_url: &str) -> bool {
 
 fn store_usage_supported(base_url: &str, supported: bool) {
     if let Ok(mut g) = usage_compat_map().lock() {
+        g.insert(base_url.to_string(), supported);
+    }
+}
+
+static REASONING_REPLAY: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
+
+fn reasoning_replay_map() -> &'static Mutex<HashMap<String, bool>> {
+    REASONING_REPLAY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn load_reasoning_replay(base_url: &str) -> bool {
+    reasoning_replay_map()
+        .lock()
+        .ok()
+        .and_then(|g| g.get(base_url).copied())
+        .unwrap_or(true)
+}
+
+fn store_reasoning_replay(base_url: &str, supported: bool) {
+    if let Ok(mut g) = reasoning_replay_map().lock() {
         g.insert(base_url.to_string(), supported);
     }
 }
@@ -144,6 +164,25 @@ const SYSTEM_BASE: &str = r#"You are an efficient coding agent. You help with so
 </output>
 "#;
 
+/// Shorter system prompt used when `efficiency.lean_prompt` is set.
+///
+/// Descriptions of the product and the tools, without command lists. The
+/// default [`SYSTEM_BASE`] stays in place until a before/after run accepts this.
+const SYSTEM_LEAN: &str = r#"You are a coding agent working in the user's workspace.
+
+read_file, grep, list_dir, search_replace, write_file, and run_shell are the core tools. When one of them covers an action, use it instead of a shell equivalent (read_file rather than cat, grep rather than rg, list_dir rather than ls, search_replace rather than sed). run_shell is for build, test, and other commands that have no tool. git_status, git_diff, and git_log inspect the repository. Commits, amends, and pushes happen only when the user asks.
+
+search_replace needs the exact current text, so read a file before editing it. write_file is for new files and full rewrites. Paths are relative to the workspace root.
+
+read_file returns at most 400 lines. A result that ends with a truncation marker is a partial read; call read_file again with start_line or a larger max_lines before treating the file as fully seen. The <repo_map> block, when present, is the workspace structure.
+
+goal_set stores the objective for a multi-step task. todo_write stores a task list of three or more steps. delegate_task runs a self-contained sub-task in a fresh context and returns a summary.
+
+Claims about file contents, command output, and test results come from tool results in this conversation. If a tool result is missing or errored, say so. <raven_reminder> blocks are harness steering, not conversation to quote back. A request to continue resumes the work.
+
+Answer in text when you already have the information.
+"#;
+
 /// System-prompt base for the `--system` administration scope.
 ///
 /// Used instead of [`SYSTEM_BASE`] when `settings.scope` is `Scope::System`.
@@ -203,11 +242,6 @@ const SYSTEM_YOLO_APPENDIX: &str = r#"
 </autonomy>
 "#;
 
-/// Rebuild the system message (goal/todos, repo map, memory) from disk.
-pub(crate) fn rebuild_system_message(settings: &Settings) -> ChatMessage {
-    build_system_message(settings)
-}
-
 /// Load the goal from a session state directory, or `None` when the file is
 /// absent/corrupt (state lives in `state/goal.json`).
 fn load_goal_dir(state_dir: &std::path::Path) -> Option<crate::state::Goal> {
@@ -219,15 +253,25 @@ fn load_todos_dir(state_dir: &std::path::Path) -> Vec<crate::state::TodoItem> {
     crate::state::load_todos_from_dir(state_dir)
 }
 
-/// Build the system message from settings, including the repo map if applicable.
-fn build_system_message(settings: &Settings) -> ChatMessage {
-    if settings.scope.is_system() {
-        return build_system_scope_message(settings);
+fn mode_text(settings: &Settings) -> &'static str {
+    if settings.efficiency.lean_prompt {
+        return match settings.mode {
+            Mode::Plan => {
+                "Plan mode reads and inspects the workspace. File edits and shell \
+                 commands are unavailable until the user approves a plan."
+            }
+            Mode::Agent => {
+                "Agent mode can read and write files and run shell commands. Git \
+                 commits are created only when the user asks."
+            }
+            Mode::Chat => {
+                "Chat mode reads and inspects the workspace. File edits and shell \
+                 commands are unavailable. ask_user asks a clarifying question. \
+                 Suggest agent mode when the user wants changes made."
+            }
+        };
     }
-    let mut system = SYSTEM_BASE.to_string();
-
-    // Mode awareness: tell the model what it can and cannot do in this mode.
-    let mode_desc = match settings.mode {
+    match settings.mode {
         Mode::Plan => {
             "You are in PLAN mode. You can read files and inspect the workspace \
             but CANNOT edit files or run shell commands. Propose a concise step-by-step \
@@ -244,77 +288,126 @@ fn build_system_message(settings: &Settings) -> ChatMessage {
             codebase, and ask clarifying questions with the ask_user tool. If the user \
             wants changes made, suggest they switch to agent mode."
         }
+    }
+}
+
+/// Stable system text plus the optional setup message that follows it.
+///
+/// The system text is instructions and mode only, so it stays byte-identical
+/// across turns. Workspace, repo map, instructions, memory, goal, todos, and
+/// rules live in the setup message. Git status is not here: it changes often
+/// and is attached after the conversation for the request only.
+fn build_pinned_messages(settings: &Settings) -> (ChatMessage, Option<ChatMessage>) {
+    let system = if settings.scope.is_system() {
+        build_system_scope_message(settings)
+    } else {
+        let base = if settings.efficiency.lean_prompt {
+            SYSTEM_LEAN
+        } else {
+            SYSTEM_BASE
+        };
+        let mut system = base.to_string();
+        system.push_str("\n--- Mode ---\n");
+        system.push_str(mode_text(settings));
+        system.push('\n');
+        ChatMessage::plain("system", Some(system))
     };
-    system.push_str("\n--- Mode ---\n");
-    system.push_str(mode_desc);
-    system.push('\n');
+    let setup_body = setup_body(settings);
+    let setup = if setup_body.trim().is_empty() {
+        None
+    } else {
+        Some(ChatMessage::plain(
+            "user",
+            Some(format!("{}{setup_body}", crate::context::SETUP_PREFIX)),
+        ))
+    };
+    (system, setup)
+}
 
-    system.push_str(&format!(
-        "\n\nWorkspace root: {}\n",
-        settings.workspace.display()
-    ));
-
-    // Workspace state: give the model a ground-truth anchor so it can
-    // verify its mental model of what has changed against reality.
-    let sandbox = Sandbox::new(settings.workspace.clone());
-    if sandbox.is_git_repo().unwrap_or(false) {
-        match sandbox.git_status() {
-            Ok(status) if status.contains("No changes") => {
-                system.push_str("Working tree: clean\n");
-            }
-            Ok(status) => {
-                let lines: Vec<&str> = status.lines().take(10).collect();
-                system.push_str(&format!(
-                    "Working tree: dirty ({} changed)\n{}\n",
-                    status.lines().count(),
-                    lines.join("\n")
-                ));
-            }
-            Err(_) => {}
+fn setup_body(settings: &Settings) -> String {
+    let mut body = String::new();
+    if !settings.scope.is_system() {
+        body.push_str(&format!(
+            "Workspace root: {}\n",
+            settings.workspace.display()
+        ));
+        if let Some(map) = crate::repomap::build_map(&settings.workspace) {
+            body.push('\n');
+            body.push_str(&map);
+            body.push('\n');
         }
-    }
-
-    if let Some(map) = crate::repomap::build_map(&settings.workspace) {
-        system.push('\n');
-        system.push_str(&map);
-        system.push('\n');
-    }
-    let agents = load_agents_md(&settings.workspace);
-    if !agents.is_empty() {
-        system.push_str("\n--- Project instructions (AGENTS.md) ---\n");
-        system.push_str(&agents);
-        system.push('\n');
-    }
-    let mem = memory::load_memory(&settings.workspace);
-    if !mem.is_empty() {
-        system.push_str("\n--- Project memory ---\n");
-        system.push_str(&mem);
-        system.push('\n');
-    }
-    if let Some(state_dir) = &settings.session_state_dir {
-        if let Some(goal) = load_goal_dir(state_dir) {
-            system.push_str("\n--- Current goal ---\n");
-            system.push_str(&crate::state::format_goal(&goal));
-            system.push('\n');
+        let agents = load_agents_md(&settings.workspace);
+        if !agents.is_empty() {
+            body.push_str("\n--- Project instructions (AGENTS.md) ---\n");
+            body.push_str(&agents);
+            body.push('\n');
         }
-        let todos = load_todos_dir(state_dir);
-        if !todos.is_empty() {
-            system.push_str("\n--- Task list ---\n");
-            system.push_str(&crate::state::format_todos(&todos));
-            system.push('\n');
+        let mem = memory::load_memory(&settings.workspace);
+        if !mem.is_empty() {
+            body.push_str("\n--- Project memory ---\n");
+            body.push_str(&mem);
+            body.push('\n');
+        }
+        if let Some(state_dir) = &settings.session_state_dir {
+            if let Some(goal) = load_goal_dir(state_dir) {
+                body.push_str("\n--- Current goal ---\n");
+                body.push_str(&crate::state::format_goal(&goal));
+                body.push('\n');
+            }
+            let todos = load_todos_dir(state_dir);
+            if !todos.is_empty() {
+                body.push_str("\n--- Task list ---\n");
+                body.push_str(&crate::state::format_todos(&todos));
+                body.push('\n');
+            }
+        }
+    } else {
+        let mem = crate::memory::load_system_memory();
+        if !mem.is_empty() {
+            body.push_str("\n--- System memory ---\n");
+            body.push_str(&mem);
+            body.push('\n');
         }
     }
     if let Some(rules) = &settings.rules {
-        system.push_str("\n--- Session rules ---\n");
-        system.push_str(rules);
-        system.push('\n');
+        body.push_str("\n--- Session rules ---\n");
+        body.push_str(rules);
+        body.push('\n');
     }
-    ChatMessage {
-        role: "system".into(),
-        content: Some(system),
-        tool_calls: None,
-        tool_call_id: None,
-        usage: None,
+    if settings.efficiency.tool_offload {
+        let catalog = crate::tools::offloaded_tool_catalog();
+        if !catalog.is_empty() {
+            body.push_str("\n--- Tools available on request ---\n");
+            body.push_str(&catalog);
+            body.push('\n');
+        }
+    }
+    body
+}
+
+/// Git status for this turn, sent after the conversation so it does not
+/// rewrite the cached prefix. `None` when the workspace is not a git repo.
+fn working_tree_note(settings: &Settings) -> Option<String> {
+    if settings.scope.is_system() {
+        return None;
+    }
+    let sandbox = Sandbox::new(settings.workspace.clone());
+    if !sandbox.is_git_repo().unwrap_or(false) {
+        return None;
+    }
+    match sandbox.git_status() {
+        Ok(status) if status.contains("No changes") => {
+            Some("<raven_context>\nWorking tree: clean\n".into())
+        }
+        Ok(status) => {
+            let lines: Vec<&str> = status.lines().take(10).collect();
+            Some(format!(
+                "<raven_context>\nWorking tree: dirty ({} changed)\n{}\n",
+                status.lines().count(),
+                lines.join("\n")
+            ))
+        }
+        Err(_) => None,
     }
 }
 
@@ -332,28 +425,7 @@ fn build_system_scope_message(settings: &Settings) -> ChatMessage {
     system.push_str("\n--- System ---\n");
     system.push_str(&format!("Model: {}\n", settings.model));
     system.push_str("System root: /\n");
-    system.push('\n');
-
-    let mem = crate::memory::load_system_memory();
-    if !mem.is_empty() {
-        system.push_str("\n--- System memory ---\n");
-        system.push_str(&mem);
-        system.push('\n');
-    }
-
-    if let Some(rules) = &settings.rules {
-        system.push_str("\n--- Session rules ---\n");
-        system.push_str(rules);
-        system.push('\n');
-    }
-
-    ChatMessage {
-        role: "system".into(),
-        content: Some(system),
-        tool_calls: None,
-        tool_call_id: None,
-        usage: None,
-    }
+    ChatMessage::plain("system", Some(system))
 }
 ///
 /// Owns the conversation history, a workspace [`Sandbox`], and an HTTP client.
@@ -429,6 +501,12 @@ pub struct Agent {
     /// the first sample arrives, so providers without usage support are
     /// unaffected.
     pub(crate) calibration: UsageCalibration,
+    /// Git status for the current user turn. Appended after history so it
+    /// does not rewrite the cached prefix. Snapshotted once per turn.
+    pub(crate) turn_context: Option<String>,
+    /// Whether to replay `reasoning_content` on later requests. Process-wide
+    /// per base URL; flipped off if the provider rejects the field.
+    pub(crate) reasoning_replay: bool,
     /// Whether the provider tolerates `stream_options.include_usage`.
     /// Seeded from a process-wide cache keyed by base URL (TUI rebuilds
     /// `Agent` every turn); flipped off on a 400 that blames `stream_options`.
@@ -458,10 +536,16 @@ impl Agent {
         let sandbox = Sandbox::with_scope(settings.workspace.clone(), settings.scope);
         let sandbox = Sandbox {
             extra_rw: settings.sandbox_extra_rw.clone(),
+            sparse_lines: settings.efficiency.sparse_line_numbers,
             ..sandbox
         };
-        let messages = vec![build_system_message(&settings)];
+        let (system, setup) = build_pinned_messages(&settings);
+        let mut messages = vec![system];
+        if let Some(setup) = setup {
+            messages.push(setup);
+        }
         let usage_supported = load_usage_supported(settings.base_url());
+        let reasoning_replay = load_reasoning_replay(settings.base_url());
         let state_dir = settings.session_state_dir.clone();
         Ok(Self {
             settings,
@@ -486,6 +570,8 @@ impl Agent {
             current_step: 0,
             compact_thrash_count: 0,
             calibration: UsageCalibration::default(),
+            turn_context: None,
+            reasoning_replay,
             usage_supported,
             #[cfg(test)]
             completion_source: None,
@@ -565,7 +651,7 @@ impl Agent {
     pub fn with_plan(mut self, plan: Plan) -> Self {
         self.plan = Some(plan);
         self.settings.mode = Mode::Agent;
-        self.replace_system_message(build_system_message(&self.settings));
+        self.install_pinned_prompt();
         self
     }
 
@@ -578,11 +664,43 @@ impl Agent {
         let mut agent = Agent::new(settings)?;
         // Skip any system messages in preload (index 0 is rebuilt by new())
         for msg in preload {
-            if msg.role != "system" {
-                agent.messages.push(msg);
+            if msg.role == "system" || crate::context::is_setup_message(&msg) {
+                continue;
             }
+            agent.messages.push(msg);
         }
         Ok(agent)
+    }
+
+    /// Replace the system message and the setup message when their text changed.
+    ///
+    /// Identical text is left in place so the cached prefix stays byte-identical.
+    pub(crate) fn install_pinned_prompt(&mut self) {
+        let (system, setup) = build_pinned_messages(&self.settings);
+        let system_same =
+            self.messages.first().and_then(|m| m.content.as_ref()) == system.content.as_ref();
+        if !system_same {
+            self.replace_system_message(system);
+        }
+        match (
+            &setup,
+            self.messages.get(1).map(crate::context::is_setup_message),
+        ) {
+            (Some(new_setup), Some(true)) => {
+                if self.messages[1].content != new_setup.content {
+                    self.messages[1] = new_setup.clone();
+                }
+            }
+            (Some(new_setup), _) => {
+                let insert_at =
+                    usize::from(self.messages.first().is_some_and(|m| m.role == "system"));
+                self.messages.insert(insert_at, new_setup.clone());
+            }
+            (None, Some(true)) => {
+                self.messages.remove(1);
+            }
+            (None, _) => {}
+        }
     }
 
     pub(crate) fn replace_system_message(&mut self, msg: ChatMessage) {
@@ -610,7 +728,9 @@ impl Agent {
     /// so the model can gather context but physically cannot write files or
     /// run shell.
     pub(crate) fn tools_value(&self) -> serde_json::Value {
-        let tools = if self.plan_only {
+        let tools = if self.settings.efficiency.tool_offload {
+            crate::tools::offloaded_tool_definitions(self.plan_only, self.settings.mode)
+        } else if self.plan_only {
             match self.settings.mode {
                 Mode::Chat => crate::tools::chat_tool_definitions(),
                 _ => crate::tools::plan_tool_definitions(),
@@ -675,7 +795,8 @@ impl Agent {
             crate::repomap::invalidate(&self.settings.workspace);
             self.repo_map_stale = false;
         }
-        self.replace_system_message(build_system_message(&self.settings));
+        self.install_pinned_prompt();
+        self.turn_context = working_tree_note(&self.settings);
 
         let result = self.run_loop(user_text, tx, &mut edited_any).await;
 
@@ -851,6 +972,7 @@ impl Agent {
         let api_key = self.settings.api_key().map(str::to_string);
         let request_headers = self.settings.provider.request_headers.clone();
         let compact_effort = self.settings.auxiliary_effort().map(str::to_string);
+        let short_compact = self.settings.efficiency.short_compact;
         // Thrashing protection: if compaction keeps failing to bring the
         // history under the soft limit (a single huge file/tool output refills
         // context immediately), pause auto-compaction after a few attempts so
@@ -861,11 +983,14 @@ impl Agent {
         let compact_paused =
             self.compact_thrash_count >= MAX_COMPACT_THRASH && !iter.is_multiple_of(4);
         if !compact_paused {
+            let transcript_dir = self.sandbox.raven_dir().join("compact");
             if let Some(report) = compact_if_needed_llm(
                 &mut self.messages,
                 self.settings.context_window,
                 self.settings.compact_threshold,
                 Some(&self.calibration),
+                Some(&transcript_dir),
+                Some(self.sandbox.workspace.as_path()),
                 move |middle| {
                     Box::pin(summarize_request(
                         client.clone(),
@@ -873,7 +998,10 @@ impl Agent {
                         model.clone(),
                         api_key.clone(),
                         request_headers.clone(),
-                        compact_effort.clone(),
+                        super::loop_control::SummarizeOptions {
+                            reasoning_effort: compact_effort.clone(),
+                            short_prompt: short_compact,
+                        },
                         middle,
                     ))
                 },
@@ -907,11 +1035,16 @@ impl Agent {
                 count_tokens(&format!("<raven_reminder>\n{r}\n</raven_reminder>")) + MSG_OVERHEAD
             })
             .sum();
+        let context_tokens = self
+            .turn_context
+            .as_ref()
+            .map(|t| count_tokens(t) + MSG_OVERHEAD)
+            .unwrap_or(0);
         // Raw estimate for this prompt (history + reminders). The calibration
         // learns the gap between this and the provider's real count (tool
         // schema + tokenizer differences), so samples are taken against the
         // RAW estimate, while the clamp below uses the corrected figure.
-        let raw_est = history_tokens(&self.messages) + reminder_tokens;
+        let raw_est = history_tokens(&self.messages) + reminder_tokens + context_tokens;
         let prompt_est = self.calibration.correct(raw_est);
         let margin = 64usize;
         let remaining = self
@@ -921,37 +1054,33 @@ impl Agent {
             .saturating_sub(margin);
         let clamped_max = self.settings.max_tokens.min(remaining.max(256) as u32);
 
-        // Ephemeral reminders go out as user nudges (not extra system
-        // messages) so providers that only honor a single leading system
-        // message still see them. They are request-only and never persisted.
-        let mut body = if reminders.is_empty() {
-            json!({
-                "model": self.settings.model,
-                "messages": request_messages_json(&self.messages),
-                "tools": self.tools_value(),
-                "tool_choice": "auto",
-                "temperature": self.settings.temperature_json(),
-                "max_tokens": clamped_max,
-                "stream": !self.settings.no_stream,
-            })
-        } else {
-            let mut request_messages: Vec<ChatMessage> = self.messages.clone();
-            for text in &reminders {
-                request_messages.push(ChatMessage::plain(
-                    "user",
-                    Some(format!("<raven_reminder>\n{text}\n</raven_reminder>")),
-                ));
-            }
-            json!({
-                "model": self.settings.model,
-                "messages": request_messages_json(&request_messages),
-                "tools": self.tools_value(),
-                "tool_choice": "auto",
-                "temperature": self.settings.temperature_json(),
-                "max_tokens": clamped_max,
-                "stream": !self.settings.no_stream,
-            })
-        };
+        // Ephemeral notes go out as user nudges (not extra system messages)
+        // so providers that only honor a single leading system message still
+        // see them. They are request-only and never persisted. Git status is
+        // last-but-before-reminders so it cannot rewrite the cached prefix.
+        let mut request_messages: Vec<ChatMessage> = self.messages.clone();
+        if let Some(note) = &self.turn_context {
+            request_messages.push(ChatMessage::plain("user", Some(note.clone())));
+        }
+        for text in &reminders {
+            request_messages.push(ChatMessage::plain(
+                "user",
+                Some(format!("<raven_reminder>\n{text}\n</raven_reminder>")),
+            ));
+        }
+        let tools = self.tools_value();
+        log_prompt_sections(&request_messages, &tools);
+        let mut body = completion_body(
+            &self.settings.model,
+            &tools,
+            &request_messages,
+            self.settings.temperature_json(),
+            clamped_max,
+            !self.settings.no_stream,
+        );
+        if !self.reasoning_replay {
+            strip_reasoning_fields(&mut body);
+        }
 
         // Ask the provider for real token usage on streaming requests (the
         // OpenAI `stream_options.include_usage` contract; non-streaming
@@ -1038,18 +1167,37 @@ impl Agent {
         // and the calibration stays inert (graceful fallback).
         if let Some(u) = parsed.usage {
             self.calibration.observe(raw_est, u.prompt_tokens as usize);
-            tracing::debug!(
-                "iter={} usage: prompt={} raw_est={} offset={:?} samples={}",
-                iter + 1,
-                u.prompt_tokens,
-                raw_est,
-                self.calibration.offset(),
-                self.calibration.samples()
+            tracing::info!(
+                iter = iter + 1,
+                prompt = u.prompt_tokens,
+                cached = u.cached_tokens,
+                uncached = u.uncached_input(),
+                completion = u.completion_tokens,
+                reasoning = u.reasoning_tokens,
+                "request_usage"
             );
+            if let Some(dir) = &self.settings.session_state_dir {
+                append_usage_jsonl(dir, &self.settings.model, &u);
+            }
         }
 
         // The meter is captured before `parsed` is consumed by the paths below.
         let iter_usage = parsed.usage;
+        let iter_reasoning = if parsed.reasoning.is_empty() {
+            None
+        } else {
+            Some(parsed.reasoning.clone())
+        };
+        if iter_reasoning.is_none()
+            && self.reasoning_replay
+            && self.settings.reasoning_effort.is_some()
+            && self.messages.iter().any(|m| m.reasoning_content.is_some())
+        {
+            tracing::warn!(
+                "reasoning items missing: a previous assistant message carried \
+                 reasoning_content and this response did not"
+            );
+        }
 
         if let Some(err) = parsed.error {
             let msg = if parsed.finish_reason.as_deref() == Some("length") {
@@ -1072,6 +1220,7 @@ impl Agent {
                     )),
                     tool_calls: None,
                     tool_call_id: None,
+                    reasoning_content: iter_reasoning.clone(),
                     usage: iter_usage,
                 });
                 let _ = tx.send(AgentEvent::Done).await;
@@ -1114,6 +1263,7 @@ impl Agent {
             },
             tool_calls: None,
             tool_call_id: None,
+            reasoning_content: iter_reasoning,
             usage: iter_usage,
         };
 
@@ -1188,6 +1338,16 @@ impl Agent {
                 .post(url)
                 .header("Content-Type", "application/json");
             req = self.settings.apply_auth(req);
+            // xAI caches per server. A stable conversation id keeps a thread
+            // on one server so the prefix actually hits. Other providers
+            // ignore an unknown header; only Grok is documented to need it.
+            if self.settings.provider.name == "grok" {
+                if let Some(id) =
+                    conversation_id_from_state_dir(self.settings.session_state_dir.as_deref())
+                {
+                    req = req.header("x-grok-conv-id", id);
+                }
+            }
 
             match req.json(body).send().await {
                 Ok(resp) if resp.status().is_success() => return Ok(resp),
@@ -1243,12 +1403,15 @@ impl Agent {
                     // 400 that blames an optional field: strip that field and
                     // retry. Read the body once so a stream_options rejection
                     // still falls through when reasoning_effort is also set.
+                    // Replayed reasoning_content is on messages, not a top-level
+                    // key, so it has its own presence check.
                     if status == 400
                         && (body.get("reasoning_effort").is_some()
-                            || body.get("stream_options").is_some())
+                            || body.get("stream_options").is_some()
+                            || body_has_reasoning_content(body))
                     {
                         let text = resp.text().await.unwrap_or_default();
-                        let (dropped_effort, dropped_usage) =
+                        let (dropped_effort, dropped_usage, dropped_reasoning) =
                             strip_rejected_optional_fields(body, &text);
                         if dropped_effort {
                             self.settings.reasoning_effort = None;
@@ -1264,7 +1427,25 @@ impl Agent {
                                  retrying without it — usage calibration disabled for this provider"
                             );
                         }
-                        if dropped_effort || dropped_usage {
+                        if dropped_reasoning {
+                            self.reasoning_replay = false;
+                            store_reasoning_replay(self.settings.base_url(), false);
+                            tracing::warn!(
+                                "provider rejected reasoning_content (400); \
+                                 retrying without replayed reasoning"
+                            );
+                            // A 400 that keeps naming the field after it is gone
+                            // must not spin. This retry counts toward the cap.
+                            if attempt + 1 >= max_retries {
+                                return Err(AgentError::HttpError {
+                                    provider: self.settings.provider.name.clone(),
+                                    status,
+                                    body: cap_http_body(text),
+                                });
+                            }
+                            attempt += 1;
+                        }
+                        if dropped_effort || dropped_usage || dropped_reasoning {
                             continue;
                         }
                         return Err(AgentError::HttpError {
@@ -1334,16 +1515,30 @@ impl Agent {
 
 /// Drop optional request fields the provider's 400 body actually names.
 ///
-/// Returns `(dropped_reasoning_effort, dropped_stream_options)`. A complaint
-/// about one field must not hide the other.
-pub(crate) fn strip_rejected_optional_fields(body: &mut Value, error_text: &str) -> (bool, bool) {
+/// Returns `(dropped_reasoning_effort, dropped_stream_options, dropped_reasoning_content)`.
+/// `dropped_reasoning_content` is true only when a `reasoning_content` field
+/// was removed. A complaint about one field must not hide the other.
+pub(crate) fn strip_rejected_optional_fields(
+    body: &mut Value,
+    error_text: &str,
+) -> (bool, bool, bool) {
     let mut dropped_effort = false;
     let mut dropped_usage = false;
-    if body.get("reasoning_effort").is_some() && error_text.to_lowercase().contains("reasoning") {
+    let mut dropped_reasoning = false;
+    let lower = error_text.to_lowercase();
+    // A complaint about replayed reasoning_content must not be treated as a
+    // rejection of the reasoning_effort request field.
+    if body.get("reasoning_effort").is_some()
+        && lower.contains("reasoning")
+        && !lower.contains("reasoning_content")
+    {
         if let Some(obj) = body.as_object_mut() {
             obj.remove("reasoning_effort");
         }
         dropped_effort = true;
+    }
+    if lower.contains("reasoning_content") && strip_reasoning_fields(body) {
+        dropped_reasoning = true;
     }
     if body.get("stream_options").is_some() && error_text.contains("stream_options") {
         if let Some(obj) = body.as_object_mut() {
@@ -1351,7 +1546,88 @@ pub(crate) fn strip_rejected_optional_fields(body: &mut Value, error_text: &str)
         }
         dropped_usage = true;
     }
-    (dropped_effort, dropped_usage)
+    (dropped_effort, dropped_usage, dropped_reasoning)
+}
+
+/// Session id derived from `{sessions}/{id}/state`.
+pub(crate) fn conversation_id_from_state_dir(
+    state_dir: Option<&std::path::Path>,
+) -> Option<String> {
+    let dir = state_dir?;
+    let id = dir.parent().and_then(|p| p.file_name())?.to_string_lossy();
+    if id.is_empty() || id == "state" {
+        None
+    } else {
+        Some(id.into_owned())
+    }
+}
+
+fn completion_body(
+    model: &str,
+    tools: &Value,
+    messages: &[ChatMessage],
+    temperature: f64,
+    max_tokens: u32,
+    stream: bool,
+) -> Value {
+    // Tools before messages so a provider that hashes the raw body still
+    // sees the stable tool list as part of the prefix. xAI itself caches
+    // the messages array; the system message is the stable head of that.
+    let mut body = serde_json::Map::new();
+    body.insert("model".into(), json!(model));
+    body.insert("tools".into(), tools.clone());
+    body.insert("tool_choice".into(), json!("auto"));
+    body.insert("messages".into(), request_messages_json(messages));
+    body.insert("temperature".into(), json!(temperature));
+    body.insert("max_tokens".into(), json!(max_tokens));
+    body.insert("stream".into(), json!(stream));
+    Value::Object(body)
+}
+
+fn body_has_reasoning_content(body: &Value) -> bool {
+    body.get("messages")
+        .and_then(|m| m.as_array())
+        .is_some_and(|msgs| msgs.iter().any(|m| m.get("reasoning_content").is_some()))
+}
+
+/// Remove replayed `reasoning_content` fields. Returns whether any were present.
+fn strip_reasoning_fields(body: &mut Value) -> bool {
+    let Some(messages) = body.get_mut("messages").and_then(|m| m.as_array_mut()) else {
+        return false;
+    };
+    let mut removed = false;
+    for msg in messages {
+        if let Some(obj) = msg.as_object_mut() {
+            if obj.remove("reasoning_content").is_some() {
+                removed = true;
+            }
+        }
+    }
+    removed
+}
+
+fn log_prompt_sections(messages: &[ChatMessage], tools: &Value) {
+    let system_tokens = messages
+        .first()
+        .filter(|m| m.role == "system")
+        .map(crate::tokenizer::message_tokens)
+        .unwrap_or(0);
+    let setup_tokens = messages
+        .get(1)
+        .filter(|m| crate::context::is_setup_message(m))
+        .map(crate::tokenizer::message_tokens)
+        .unwrap_or(0);
+    let tools_tokens = count_tokens(&tools.to_string());
+    let history_tokens = crate::tokenizer::history_tokens(messages)
+        .saturating_sub(system_tokens)
+        .saturating_sub(setup_tokens);
+    tracing::info!(
+        system_tokens,
+        setup_tokens,
+        tools_tokens,
+        history_tokens,
+        "prompt_sections"
+    );
 }
 
 /// Serialize chat messages for the wire format.
@@ -1402,6 +1678,7 @@ mod wire_format_tests {
                 },
             }]),
             tool_call_id: None,
+            reasoning_content: None,
             usage: None,
         }];
         let v = request_messages_json(&msgs);
@@ -1417,6 +1694,7 @@ mod wire_format_tests {
             content: Some("hi".into()),
             tool_calls: None,
             tool_call_id: None,
+            reasoning_content: None,
             usage: None,
         }];
         let v = request_messages_json(&msgs);
@@ -1432,10 +1710,13 @@ mod wire_format_tests {
             content: Some("hi".into()),
             tool_calls: None,
             tool_call_id: None,
+            reasoning_content: None,
             usage: Some(TokenUsage {
                 prompt_tokens: 12,
                 completion_tokens: 3,
                 total_tokens: 15,
+                cached_tokens: 0,
+                reasoning_tokens: 0,
             }),
         }];
         let v = request_messages_json(&msgs);
@@ -1448,21 +1729,72 @@ mod wire_format_tests {
             "reasoning_effort": "low",
             "stream_options": {"include_usage": true}
         });
-        let (effort, usage) =
+        let (effort, usage, reasoning) =
             super::strip_rejected_optional_fields(&mut body, "unknown field stream_options");
         assert!(!effort);
         assert!(usage);
+        assert!(!reasoning);
         assert!(body.get("reasoning_effort").is_some());
         assert!(body.get("stream_options").is_none());
     }
 
     #[test]
+    fn reasoning_content_is_replayed_and_usage_is_not() {
+        let msgs = vec![ChatMessage {
+            role: "assistant".into(),
+            content: Some("hi".into()),
+            tool_calls: None,
+            tool_call_id: None,
+            reasoning_content: Some("plan".into()),
+            usage: Some(TokenUsage {
+                prompt_tokens: 12,
+                completion_tokens: 3,
+                total_tokens: 15,
+                cached_tokens: 0,
+                reasoning_tokens: 0,
+            }),
+        }];
+        let v = request_messages_json(&msgs);
+        let obj = &v.as_array().unwrap()[0];
+        assert_eq!(obj["reasoning_content"], json!("plan"));
+        assert!(obj.get("usage").is_none());
+    }
+
+    #[test]
+    fn reasoning_content_rejection_does_not_drop_effort() {
+        let mut body = json!({
+            "reasoning_effort": "low",
+            "messages": [{"role": "assistant", "reasoning_content": "x"}]
+        });
+        let (effort, usage, reasoning) =
+            super::strip_rejected_optional_fields(&mut body, "unknown field reasoning_content");
+        assert!(!effort);
+        assert!(!usage);
+        assert!(reasoning);
+        assert!(body.get("reasoning_effort").is_some());
+        assert!(body["messages"][0].get("reasoning_content").is_none());
+    }
+
+    #[test]
+    fn reasoning_content_rejection_is_a_noop_when_absent() {
+        let mut body = json!({
+            "messages": [{"role": "assistant", "content": "hi"}]
+        });
+        let (effort, usage, reasoning) =
+            super::strip_rejected_optional_fields(&mut body, "unknown field reasoning_content");
+        assert!(!effort);
+        assert!(!usage);
+        assert!(!reasoning);
+    }
+
+    #[test]
     fn reasoning_rejection_strips_only_effort() {
         let mut body = json!({"reasoning_effort": "high", "model": "grok-4.7"});
-        let (effort, usage) =
+        let (effort, usage, reasoning) =
             super::strip_rejected_optional_fields(&mut body, "Unsupported reasoning_effort");
         assert!(effort);
         assert!(!usage);
+        assert!(!reasoning);
         assert!(body.get("reasoning_effort").is_none());
     }
 }

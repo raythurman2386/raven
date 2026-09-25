@@ -49,6 +49,7 @@ fn settings(ws: &std::path::Path) -> Settings {
         sandbox_extra_rw: Vec::new(),
         allow_delegate: true,
         session_state_dir: None,
+        efficiency: crate::config::EfficiencyFlags::default(),
     }
 }
 
@@ -560,6 +561,7 @@ async fn load_replays_history() {
                 content: Some("hello history".into()),
                 tool_calls: None,
                 tool_call_id: None,
+                reasoning_content: None,
                 usage: None,
             },
         )
@@ -572,6 +574,7 @@ async fn load_replays_history() {
                 content: Some("hi back".into()),
                 tool_calls: None,
                 tool_call_id: None,
+                reasoning_content: None,
                 usage: None,
             },
         )

@@ -15,6 +15,17 @@ use super::{
     REPLACE_ALL_WARN_THRESHOLD,
 };
 
+/// `{:5}| text` for numbered lines. Sparse mode numbers the first line of the
+/// range and every 10th absolute line; other lines keep the column so the
+/// text still lines up.
+fn render_numbered_line(line_no: usize, text: &str, sparse: bool, first: bool) -> String {
+    if !sparse || first || line_no.is_multiple_of(10) {
+        format!("{line_no:5}| {text}\n")
+    } else {
+        format!("     | {text}\n")
+    }
+}
+
 impl Sandbox {
     /// Resolve `path` relative to the workspace, rejecting traversal and
     /// symlink escapes.
@@ -198,7 +209,12 @@ impl Sandbox {
                     let mut used = out.chars().count();
                     for (i, line) in lines[start..end].iter().enumerate() {
                         let truncated: String = line.chars().take(MAX_LINE_LENGTH).collect();
-                        let rendered = format!("{:5}| {}\n", start + i + 1, truncated);
+                        let rendered = render_numbered_line(
+                            start + i + 1,
+                            &truncated,
+                            self.sparse_lines,
+                            i == 0,
+                        );
                         let rendered_len = rendered.chars().count();
                         if used + rendered_len > MAX_TOOL_OUTPUT {
                             out.push_str(&format!("…[truncated at {} chars]", MAX_TOOL_OUTPUT));
@@ -240,7 +256,8 @@ impl Sandbox {
         let mut used = out.chars().count();
         for (i, line) in lines[start..end].iter().enumerate() {
             let truncated: String = line.chars().take(MAX_LINE_LENGTH).collect();
-            let rendered = format!("{:5}| {}\n", start + i + 1, truncated);
+            let rendered =
+                render_numbered_line(start + i + 1, &truncated, self.sparse_lines, i == 0);
             let rendered_len = rendered.chars().count();
             if used + rendered_len > MAX_TOOL_OUTPUT {
                 out.push_str(&format!("…[truncated at {} chars]", MAX_TOOL_OUTPUT));
