@@ -349,6 +349,9 @@ fn setup_body(settings: &Settings) -> String {
             body.push('\n');
         }
         if let Some(state_dir) = &settings.session_state_dir {
+            // Pinned first-user ask stays above agent-written goal/todos so
+            // re-goal_set cannot erase the original constraint from the prompt.
+            crate::state::append_user_constraint_section(&mut body, state_dir);
             if let Some(goal) = load_goal_dir(state_dir) {
                 body.push_str("\n--- Current goal ---\n");
                 body.push_str(&crate::state::format_goal(&goal));
@@ -778,6 +781,13 @@ impl Agent {
         self.messages
             .push(ChatMessage::plain("user", Some(user_text.to_string())));
 
+        // Pin the first user ask so later goal_set/todo rewrites cannot erase it.
+        if let Some(dir) = self.settings.session_state_dir.clone() {
+            if let Err(e) = crate::state::pin_user_constraint_once(&dir, user_text) {
+                tracing::warn!("failed to pin user constraint: {e}");
+            }
+        }
+
         // Turn-level state (persists across iterations within this turn).
         // `verified` is set when the model dispatches `run_tests`; the
         // enforced-verify gate checks it at the finish branch so an edit in
@@ -788,9 +798,9 @@ impl Agent {
         self.lint_ran = None;
         let mut edited_any = false;
 
-        // Always refresh the system message so persisted goal/todos and
-        // working-tree status stay current. Invalidate the repo map first
-        // when a previous turn edited files.
+        // Always refresh the system message so persisted goal/todos,
+        // pinned user constraint, and working-tree status stay current.
+        // Invalidate the repo map first when a previous turn edited files.
         if self.repo_map_stale {
             crate::repomap::invalidate(&self.settings.workspace);
             self.repo_map_stale = false;
