@@ -360,6 +360,14 @@ fn identical_success_loop_does_not_fire_at_two() {
 }
 
 #[test]
+fn hard_stop_refuse_message_is_an_error_result() {
+    use super::tools_exec::{hard_stop_refuse_message, IDENTICAL_SUCCESS_LOOP_N};
+    let msg = hard_stop_refuse_message("git_status", IDENTICAL_SUCCESS_LOOP_N);
+    assert!(msg.starts_with("Error: HARD STOP"), "{msg}");
+    assert!(msg.contains("refused"), "{msg}");
+}
+
+#[test]
 fn identical_success_loop_ignores_failures_and_different_args() {
     let mut msgs = vec![plain("system"), plain("user")];
     msgs.extend(successful_tool_turn(
