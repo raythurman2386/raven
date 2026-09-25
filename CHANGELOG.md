@@ -10,6 +10,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+## [0.6.9] - 2026-09-25
+
+### Added
+
+- Sticky first-user constraint (`user_constraint.json`) injected above goal/todos every turn so `goal_set` cannot erase the original ask. (#195)
+- Verify-plateau wrap-up: when the same verify-style success repeats K=2 times and primary work is met (or only residue remains), force end-of-turn wrap-up instead of burning remaining `max_iterations`. (#196)
+- Narration-vs-tool nudge: when the assistant claims a clean working tree while the latest `git_status` is dirty, remind it to trust the tool output. (#196)
+
+### Changed
+
+- Tool result cache extends beyond built-in read-only tools to MCP read-only / verify-style tools (e.g. `ripwire__doc_drift`); identical successful `(name, normalized args)` returns the prior result without re-executing. Cleared on successful file-mutating tools. (#195)
+- Success-loop detector in `compute_reminders`: N=3 identical successful tool results in recent turns → HARD STOP reminder to stop / `ask_user` / finalize. (#195)
+- When primary work is satisfied, dated/residue-style open todos auto-complete with an explicit reason instead of becoming a re-anchor target. (#195)
+- MEMORY default budget tightened to 8k chars / 100 lines (was 25k / 200), with a lean 3.5k / 50 budget when `lean_prompt` is on or the pinned constraint looks docs/verify-oriented; relevance slice gated the same way (noop for non-docs pins). (#196)
+
+### Fixed
+
+- Circling / iteration burn after verify success (identical successful tool spam, success-loop without empty-content streaks, goal re-anchor away from the user ask). (#195, #196)
+
 ## [0.6.8] - 2026-09-24
 
 ### Added
