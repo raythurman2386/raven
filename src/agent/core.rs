@@ -343,23 +343,27 @@ fn setup_body(settings: &Settings) -> String {
             body.push('\n');
         }
         // MEMORY budget: lean under lean_prompt or docs/verify-oriented asks;
-        // optional relevance slice from the pinned constraint so a smaller cap
-        // still keeps task-related lessons (circling item #4).
+        // relevance slice only in those same cases so ordinary sessions keep
+        // full budgeted MEMORY (circling item #4 soft-nit).
         let constraint_text = settings
             .session_state_dir
             .as_deref()
             .and_then(crate::state::load_user_constraint_from_dir)
             .map(|c| c.text);
-        let docs_lean = constraint_text
-            .as_deref()
-            .is_some_and(memory::looks_docs_oriented);
-        let budget = if settings.efficiency.lean_prompt || docs_lean {
+        let lean = settings.efficiency.lean_prompt
+            || constraint_text
+                .as_deref()
+                .is_some_and(memory::looks_docs_oriented);
+        let budget = if lean {
             memory::MemoryBudget::lean()
         } else {
             memory::MemoryBudget::standard()
         };
-        let mem =
-            memory::load_memory_budgeted(&settings.workspace, budget, constraint_text.as_deref());
+        let relevance = memory::memory_relevance_for(
+            settings.efficiency.lean_prompt,
+            constraint_text.as_deref(),
+        );
+        let mem = memory::load_memory_budgeted(&settings.workspace, budget, relevance);
         if !mem.is_empty() {
             body.push_str("\n--- Project memory ---\n");
             body.push_str(&mem);

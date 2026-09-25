@@ -109,21 +109,25 @@ impl Agent {
     ) -> Result<()> {
         self.finish_with_wrap_up(
             tx,
-            "You've reached the maximum number of tool-calling iterations             allowed for this turn. Provide a final response summarizing what you've found and             accomplished so far, without calling any more tools.",
+            "You've reached the maximum number of tool-calling iterations allowed for this turn. \
+             Provide a final response summarizing what you've found and accomplished so far, \
+             without calling any more tools.",
         )
         .await
     }
 
     /// Force-finalize after a verify-style success plateau (circling item #5).
+    ///
+    /// The VERIFY PLATEAU text is the live-loop surface for the reminder (we
+    /// return before `compute_reminders`, so that branch is intentionally not
+    /// used for plateau — see [`verify_plateau_wrap_up_prompt`]).
     pub(crate) async fn finish_with_verify_plateau(
         &mut self,
         tx: &mpsc::Sender<AgentEvent>,
         tool_name: &str,
         streak: usize,
     ) -> Result<()> {
-        let prompt = format!(
-            "VERIFY PLATEAU: `{tool_name}` returned the same successful result {streak} times              and primary work is already met (only non-blocking residue remains).              Provide a final response summarizing what you accomplished. Do not call any more tools."
-        );
+        let prompt = verify_plateau_wrap_up_prompt(tool_name, streak);
         self.finish_with_wrap_up(tx, &prompt).await
     }
 
@@ -248,9 +252,9 @@ impl Agent {
 /// - After 3 identical successful `(name, args)` tool results in recent turns
 ///   (with or without assistant text), push a HARD STOP reminder; dispatch
 ///   also refuses further identical calls (see `tools_exec`).
-/// - When a verify-style success has plateaued and primary work is met, push a
-///   VERIFY PLATEAU reminder (`run_loop` also force-finalizes — see
-///   [`verify_plateau_should_stop`]).
+/// - Verify-style success plateau is **not** injected here: the live loop
+///   force-finalizes via [`Agent::finish_with_verify_plateau`] (which surfaces
+///   [`verify_plateau_wrap_up_prompt`] once) before this function runs.
 /// - When the latest assistant narration contradicts the latest tool payload
 ///   (narrow heuristic: clean working tree vs dirty `git_status`), push a
 ///   trust-the-tool reminder.
@@ -318,11 +322,8 @@ pub(crate) fn compute_reminders(
         }
     }
 
-    if let Some((name, n)) = verify_plateau_should_stop(messages, goal, todos) {
-        reminders.push(format!(
-            "VERIFY PLATEAU: `{name}` returned the same successful result {n} times and              primary work is already met. Stop verifying; finalize your answer now."
-        ));
-    }
+    // Plateau reminder: live loop surfaces once via finish_with_verify_plateau
+    // (returns before compute_reminders). Keep this path free of a dead branch.
 
     if let Some(nudge) = narration_contradiction_reminder(messages) {
         reminders.push(nudge);
@@ -394,6 +395,18 @@ fn recent_successful_tool_keys(messages: &[ChatMessage]) -> Vec<(String, String)
         }
     }
     out
+}
+
+/// Wrap-up user prompt when force-finalizing on a verify plateau.
+///
+/// This is the live-loop reminder surface: `run_single_iteration` returns via
+/// [`Agent::finish_with_verify_plateau`] before [`compute_reminders`] runs.
+pub(crate) fn verify_plateau_wrap_up_prompt(tool_name: &str, streak: usize) -> String {
+    format!(
+        "VERIFY PLATEAU: `{tool_name}` returned the same successful result {streak} times and \
+         primary work is already met (only non-blocking residue remains). Provide a final \
+         response summarizing what you accomplished. Do not call any more tools."
+    )
 }
 
 /// How many consecutive identical verify-style successes trigger a plateau stop.
@@ -501,11 +514,11 @@ fn recent_successful_verify_hits(messages: &[ChatMessage]) -> Vec<VerifyHit> {
             continue;
         }
         let content = m.content.as_deref().unwrap_or("");
+        // Error: / Tool error: (including HARD STOP refusals) are skipped —
+        // they do not count as verify successes toward the plateau.
         if content.starts_with("Error:") || content.starts_with("Tool error:") {
             continue;
         }
-        // HARD STOP refusals are sticky for identical-args spam; they still
-        // count toward the plateau so force-finalize can fire after refuse.
         out.push(VerifyHit {
             name: name.clone(),
             args: args.clone(),
@@ -606,13 +619,14 @@ fn latest_assistant_narration(messages: &[ChatMessage]) -> Option<String> {
 
 fn claims_working_tree_clean(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
+    // Prefer phrases anchored on "working tree" / git's clean sentinel so
+    // unrelated "tree is clean" metaphors don't false-positive.
     const PHRASES: &[&str] = &[
         "working tree is clean",
         "working tree clean",
         "clean working tree",
         "nothing to commit",
         "no changes (working tree clean)",
-        "tree is clean",
     ];
     PHRASES.iter().any(|p| lower.contains(p))
 }

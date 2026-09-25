@@ -59,6 +59,21 @@ pub fn looks_docs_oriented(text: &str) -> bool {
     NEEDLES.iter().any(|n| lower.contains(n))
 }
 
+/// Relevance query for MEMORY injection.
+///
+/// Only under `lean_prompt` or a docs/verify-oriented pinned constraint.
+/// Ordinary sessions keep full budgeted MEMORY with no token filter — a
+/// non-docs pinned constraint must not trigger relevance slicing.
+pub fn memory_relevance_for(lean_prompt: bool, constraint: Option<&str>) -> Option<&str> {
+    let trimmed = constraint.map(str::trim).filter(|s| !s.is_empty());
+    let docs = trimmed.is_some_and(looks_docs_oriented);
+    if lean_prompt || docs {
+        trimmed
+    } else {
+        None
+    }
+}
+
 const MEMORY_TEMPLATE: &str = r#"# Project Memory
 
 ## Conventions
@@ -528,5 +543,46 @@ mod tests {
         assert!(looks_docs_oriented("Update README only"));
         assert!(!looks_docs_oriented("Implement memory allocator"));
         assert!(!looks_docs_oriented("Ship circling guards"));
+    }
+
+    #[test]
+    fn relevance_is_noop_for_non_docs_pinned_constraint() {
+        // Ordinary session: non-docs constraint must not become a relevance query.
+        assert_eq!(
+            memory_relevance_for(false, Some("Ship circling guards")),
+            None
+        );
+        assert_eq!(
+            memory_relevance_for(false, Some("Implement memory allocator")),
+            None
+        );
+        // Docs-oriented / lean_prompt still enable relevance.
+        assert_eq!(
+            memory_relevance_for(false, Some("Fix live doc_drift")),
+            Some("Fix live doc_drift")
+        );
+        assert_eq!(
+            memory_relevance_for(true, Some("Ship circling guards")),
+            Some("Ship circling guards")
+        );
+        assert_eq!(memory_relevance_for(false, None), None);
+        assert_eq!(memory_relevance_for(false, Some("   ")), None);
+
+        // With relevance=None, load keeps the full (budgeted) file — including
+        // lines a docs slice would drop.
+        let body = concat!(
+            "# Project Memory\n",
+            "## Decisions\n",
+            "- Use Rust for services\n",
+            "- Deploy via Docker\n",
+            "## Context\n",
+            "- doc_drift verify must stay at drift=0 before ship\n",
+            "- unrelated database sharding note\n",
+        );
+        let ws = workspace_with_memory(body);
+        let out = load_memory_budgeted(&ws, MemoryBudget::standard(), None);
+        assert!(out.contains("Use Rust for services"), "got: {out}");
+        assert!(out.contains("database sharding"), "got: {out}");
+        assert!(out.contains("doc_drift verify"), "got: {out}");
     }
 }
