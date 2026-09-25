@@ -5,7 +5,7 @@
 //! **serially in call order** so two edits to the same file apply in order
 //! instead of racing. All other tools may run in parallel via `spawn_blocking`.
 //! Results are recorded through [`Agent::record_tool_result`], which shares
-//! identical bookkeeping (consecutive-failure tracking, read-only caching,
+//! identical bookkeeping (consecutive-failure tracking, read-only/MCP caching,
 //! `ToolEnd` event, `tool` message push) across both paths.
 
 use anyhow::Result;
@@ -320,7 +320,7 @@ impl Agent {
             let state_dir = self.state_dir.clone();
             let name = tc.function.name.clone();
             let id = tc.id.clone();
-            let cache_key = format!("{}:{}", name, tc.function.arguments);
+            let cache_key = tool_cache_key(&name, &tc.function.arguments);
             let read_only = self.plan_only;
 
             if let Some(mcp) = self.mcp.clone() {
@@ -335,6 +335,19 @@ impl Agent {
                                 .into()),
                         ));
                         continue;
+                    }
+                    // Short-circuit identical successful MCP read/verify calls
+                    // (e.g. ripwire__doc_drift) until a mutating tool clears the cache.
+                    if is_cacheable_tool(&name, Some(&mcp)) {
+                        if let Some(cached) = self.tool_cache.get(&cache_key) {
+                            slots[idx] = Some(PendingToolResult::ready(
+                                id,
+                                name,
+                                cache_key,
+                                Ok(cached.clone()),
+                            ));
+                            continue;
+                        }
                     }
                     handles.push((
                         idx,
@@ -359,21 +372,8 @@ impl Agent {
                         .map(Sandbox::is_verification_command)
                         .unwrap_or(false));
 
-            // Check cache for read-only tools
-            let is_read_only = matches!(
-                name.as_str(),
-                "list_dir"
-                    | "read_file"
-                    | "grep"
-                    | "search_code"
-                    | "git_status"
-                    | "git_diff"
-                    | "git_log"
-                    | "skill_search"
-                    | "skill_load"
-                    | "memory_search"
-            );
-            if is_read_only {
+            // Check cache for read-only / verify-style tools (builtin + MCP).
+            if is_cacheable_tool(&name, self.mcp.as_ref()) {
                 if let Some(cached) = self.tool_cache.get(&cache_key) {
                     slots[idx] = Some(PendingToolResult::ready(
                         id,
@@ -609,21 +609,11 @@ impl Agent {
             self.verified = verification_passed(&result);
         }
 
-        // Cache read-only results
-        let is_read_only = matches!(
-            name.as_str(),
-            "list_dir"
-                | "read_file"
-                | "grep"
-                | "search_code"
-                | "git_status"
-                | "git_diff"
-                | "git_log"
-                | "skill_search"
-                | "skill_load"
-                | "memory_search"
-        );
-        if is_read_only && !cache_key.is_empty() && !is_tool_error_text(&result) {
+        // Cache successful read-only / verify-style results (builtin + MCP).
+        if is_cacheable_tool(&name, self.mcp.as_ref())
+            && !cache_key.is_empty()
+            && !is_tool_error_text(&result)
+        {
             self.tool_cache.insert(cache_key, result.clone());
         }
         let preview: String = result.chars().take(600).collect();
@@ -726,6 +716,85 @@ fn parse_exit_code(output: &str) -> Option<i32> {
         i += 1;
     }
     None
+}
+
+/// Canonicalize tool argument JSON so equivalent objects share a cache key
+/// (`{"b":1,"a":2}` and `{"a":2,"b":1}` hit the same entry).
+pub(crate) fn normalize_tool_args(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    match serde_json::from_str::<Value>(trimmed) {
+        Ok(v) => serde_json::to_string(&sort_json_keys(&v)).unwrap_or_else(|_| trimmed.to_string()),
+        Err(_) => trimmed.to_string(),
+    }
+}
+
+fn sort_json_keys(v: &Value) -> Value {
+    match v {
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            let mut out = serde_json::Map::new();
+            for k in keys {
+                out.insert(k.clone(), sort_json_keys(&map[k]));
+            }
+            Value::Object(out)
+        }
+        Value::Array(arr) => Value::Array(arr.iter().map(sort_json_keys).collect()),
+        other => other.clone(),
+    }
+}
+
+/// Cache key: `name` + normalized argument JSON.
+pub(crate) fn tool_cache_key(name: &str, raw_args: &str) -> String {
+    format!("{}:{}", name, normalize_tool_args(raw_args))
+}
+
+/// Built-in tools whose successful results are safe to reuse until a mutate.
+pub(crate) fn is_builtin_read_only(name: &str) -> bool {
+    matches!(
+        name,
+        "list_dir"
+            | "read_file"
+            | "grep"
+            | "search_code"
+            | "git_status"
+            | "git_diff"
+            | "git_log"
+            | "skill_search"
+            | "skill_load"
+            | "memory_search"
+            | "tool_schema"
+            | "think"
+    )
+}
+
+/// Verify-style MCP names we cache even when `readOnlyHint` is missing
+/// (motivating case: `ripwire__doc_drift`).
+pub(crate) fn is_mcp_verify_cacheable(name: &str) -> bool {
+    name.contains("doc_drift")
+}
+
+/// Whether a successful `(name, args)` result may be short-circuited from cache.
+///
+/// Includes built-in read-only tools, MCP tools annotated read-only, and
+/// doc_drift-style verifies. Mutating tools are never cacheable; a successful
+/// file mutate clears the cache (existing behavior).
+pub(crate) fn is_cacheable_tool(name: &str, mcp: Option<&crate::mcp::McpHandle>) -> bool {
+    if is_builtin_read_only(name) {
+        return true;
+    }
+    if is_mcp_verify_cacheable(name) {
+        return true;
+    }
+    if let Some(mcp) = mcp {
+        if mcp.has_tool(name) && mcp.is_read_only(name) {
+            return true;
+        }
+    }
+    false
 }
 
 fn is_tool_error_text(s: &str) -> bool {
@@ -853,5 +922,59 @@ mod tests {
             "Error: path escapes workspace".into()
         )));
         assert!(mutating_tool_succeeded(&Ok("wrote a.rs".into())));
+    }
+
+    #[test]
+    fn normalize_tool_args_sorts_object_keys() {
+        let a = normalize_tool_args(r#"{"b":1,"a":2}"#);
+        let b = normalize_tool_args(r#"{"a":2,"b":1}"#);
+        assert_eq!(a, b);
+        assert_eq!(a, r#"{"a":2,"b":1}"#);
+    }
+
+    #[test]
+    fn tool_cache_key_matches_for_equivalent_args() {
+        let k1 = tool_cache_key("read_file", r#"{"path":"a.rs","max_lines":10}"#);
+        let k2 = tool_cache_key("read_file", r#"{"max_lines":10,"path":"a.rs"}"#);
+        assert_eq!(k1, k2);
+        assert!(k1.starts_with("read_file:"));
+    }
+
+    #[test]
+    fn builtin_and_mcp_shaped_tools_are_cacheable() {
+        assert!(is_builtin_read_only("git_status"));
+        assert!(is_builtin_read_only("read_file"));
+        assert!(!is_builtin_read_only("write_file"));
+        assert!(is_mcp_verify_cacheable("ripwire__doc_drift"));
+        assert!(!is_mcp_verify_cacheable("ripwire__apply_patch"));
+        // Without an MCP handle, verify-style names still cache; plain MCP names do not.
+        assert!(is_cacheable_tool("ripwire__doc_drift", None));
+        assert!(!is_cacheable_tool("ripwire__mutate", None));
+        assert!(is_cacheable_tool("list_dir", None));
+    }
+
+    #[test]
+    fn tool_cache_hit_returns_prior_builtin_result() {
+        use std::collections::HashMap;
+        let mut cache: HashMap<String, String> = HashMap::new();
+        let key = tool_cache_key("git_status", "{}");
+        assert!(is_cacheable_tool("git_status", None));
+        cache.insert(key.clone(), "clean".into());
+        assert_eq!(cache.get(&key).map(String::as_str), Some("clean"));
+        // Equivalent empty-object args still hit.
+        let key2 = tool_cache_key("git_status", " {} ");
+        assert_eq!(cache.get(&key2).map(String::as_str), Some("clean"));
+    }
+
+    #[test]
+    fn tool_cache_hit_for_mcp_doc_drift_shape() {
+        use std::collections::HashMap;
+        let mut cache: HashMap<String, String> = HashMap::new();
+        let name = "ripwire__doc_drift";
+        let key = tool_cache_key(name, r#"{"path":"docs"}"#);
+        assert!(is_cacheable_tool(name, None));
+        cache.insert(key.clone(), "live drift=0".into());
+        let again = tool_cache_key(name, r#"{"path":"docs"}"#);
+        assert_eq!(cache.get(&again).map(String::as_str), Some("live drift=0"));
     }
 }
