@@ -14,6 +14,8 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Default OpenAI-compatible root for Grok Build's subscription proxy.
@@ -21,6 +23,12 @@ pub const DEFAULT_PROXY_BASE_URL: &str = "https://cli-chat-proxy.grok.com/v1";
 
 /// Header value that marks the bearer token as a Grok CLI session credential.
 const TOKEN_AUTH_VALUE: &str = "xai-grok-cli";
+
+/// Lowest `x-grok-client-version` the CLI chat proxy accepts.
+///
+/// The proxy treats that header as a Grok CLI semver and returns HTTP 426
+/// below this floor. Raven's package version is not a Grok CLI version.
+pub const GROK_PROXY_MIN_CLIENT_VERSION: &str = "1.0.13";
 
 /// Refresh this many seconds before `expires_at`.
 const EARLY_REFRESH_SECS: u64 = 300;
@@ -114,15 +122,132 @@ pub fn proxy_base_url() -> String {
 }
 
 /// Identity headers the CLI chat proxy requires (semver client version).
+///
+/// `x-grok-client-version` is a Grok CLI semver, not Raven's package version.
+/// Precedence: `RAVEN_GROK_CLIENT_VERSION`, then `grok --version` when it
+/// meets [`GROK_PROXY_MIN_CLIENT_VERSION`], then that floor.
 pub fn client_headers() -> Vec<(String, String)> {
     vec![
         ("X-XAI-Token-Auth".into(), TOKEN_AUTH_VALUE.into()),
-        (
-            "x-grok-client-version".into(),
-            env!("CARGO_PKG_VERSION").into(),
-        ),
+        ("x-grok-client-version".into(), proxy_client_version()),
         ("x-grok-client-identifier".into(), "raven".into()),
     ]
+}
+
+/// Semver sent as `x-grok-client-version`.
+fn proxy_client_version() -> String {
+    let override_text = std::env::var("RAVEN_GROK_CLIENT_VERSION").ok();
+    select_proxy_client_version(
+        override_text.as_deref(),
+        installed_grok_cli_version().as_deref(),
+    )
+}
+
+/// Pick the proxy client version from an override string and `grok --version` text.
+fn select_proxy_client_version(
+    override_text: Option<&str>,
+    installed_text: Option<&str>,
+) -> String {
+    if let Some(text) = override_text {
+        if let Some(version) = first_semver_token(text) {
+            return version;
+        }
+    }
+    if let Some(text) = installed_text {
+        if let Some(version) = first_semver_token(text) {
+            if version_at_least(&version, GROK_PROXY_MIN_CLIENT_VERSION) {
+                return version;
+            }
+        }
+    }
+    GROK_PROXY_MIN_CLIENT_VERSION.to_string()
+}
+
+/// Cached `grok --version` semver. `None` when the CLI is missing or unparseable.
+fn installed_grok_cli_version() -> Option<String> {
+    static CACHED: OnceLock<Option<String>> = OnceLock::new();
+    CACHED.get_or_init(probe_grok_cli_version).clone()
+}
+
+fn probe_grok_cli_version() -> Option<String> {
+    use std::io::Read;
+
+    let mut child = Command::new("grok")
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
+    let started = std::time::Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() > Duration::from_secs(2) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    };
+    if !status.success() {
+        return None;
+    }
+    let mut text = String::new();
+    if let Some(mut out) = child.stdout.take() {
+        let _ = out.read_to_string(&mut text);
+    }
+    text.push(' ');
+    if let Some(mut err) = child.stderr.take() {
+        let _ = err.read_to_string(&mut text);
+    }
+    first_semver_token(&text)
+}
+
+/// First `major.minor.patch` token in `text`, ignoring pre-release and build metadata.
+fn first_semver_token(text: &str) -> Option<String> {
+    for token in text.split_whitespace() {
+        let cleaned = token.trim_matches(|c: char| matches!(c, '(' | ')' | ',' | '[' | ']'));
+        if let Some((major, minor, patch)) = parse_semver(cleaned) {
+            return Some(format!("{major}.{minor}.{patch}"));
+        }
+    }
+    None
+}
+
+fn parse_semver(raw: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = raw.split('.');
+    let major: u64 = parts.next()?.parse().ok()?;
+    let minor: u64 = parts.next()?.parse().ok()?;
+    let patch_raw = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    let patch_digits: String = patch_raw
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    if patch_digits.is_empty() {
+        return None;
+    }
+    let rest = &patch_raw[patch_digits.len()..];
+    if !rest.is_empty() && !rest.starts_with('-') && !rest.starts_with('+') {
+        return None;
+    }
+    Some((major, minor, patch_digits.parse().ok()?))
+}
+
+fn version_at_least(version: &str, floor: &str) -> bool {
+    match (parse_semver(version), parse_semver(floor)) {
+        (Some(version), Some(floor)) => version >= floor,
+        _ => false,
+    }
 }
 
 /// Load `~/.grok/auth.json`, refresh if needed, and return a bearer session.
@@ -540,10 +665,14 @@ mod tests {
             .request_headers
             .iter()
             .any(|(k, v)| k == "x-grok-client-identifier" && v == "raven"));
-        assert!(session
+        let version = session
             .request_headers
             .iter()
-            .any(|(k, v)| k == "x-grok-client-version" && v == env!("CARGO_PKG_VERSION")));
+            .find(|(k, _)| k == "x-grok-client-version")
+            .map(|(_, v)| v.as_str())
+            .unwrap();
+        assert!(version_at_least(version, GROK_PROXY_MIN_CLIENT_VERSION));
+        assert!(!version.contains("raven"));
     }
 
     #[test]
@@ -597,9 +726,52 @@ mod tests {
             .find(|(k, _)| k == "x-grok-client-version")
             .unwrap()
             .1;
-        // Proxy rejects non-semver values like "raven-0.6.5".
+        // Proxy rejects non-semver values like "raven-0.6.5" and Raven's own
+        // package version when it sits below the Grok CLI floor.
         assert!(version.chars().next().unwrap().is_ascii_digit());
         assert!(!version.contains("raven"));
+        if std::env::var("RAVEN_GROK_CLIENT_VERSION").is_err() {
+            assert!(version_at_least(&version, GROK_PROXY_MIN_CLIENT_VERSION));
+        }
+    }
+
+    #[test]
+    fn select_proxy_client_version_prefers_override_then_new_enough_cli() {
+        let cases = [
+            (Some("9.1.0"), Some("grok 1.0.52 (abc) [stable]"), "9.1.0"),
+            (Some("not-a-version"), Some("grok 1.0.52 (abc)"), "1.0.52"),
+            (
+                None,
+                Some("grok 0.6.9 (abc) [stable]"),
+                GROK_PROXY_MIN_CLIENT_VERSION,
+            ),
+            (Some("  1.0.13-dev "), None, "1.0.13"),
+            (None, None, GROK_PROXY_MIN_CLIENT_VERSION),
+        ];
+        for (override_text, installed, expect) in cases {
+            assert_eq!(
+                select_proxy_client_version(override_text, installed),
+                expect
+            );
+        }
+    }
+
+    #[test]
+    fn version_compare_matches_proxy_floor() {
+        for (version, at_least) in [
+            ("1.0.13", true),
+            ("1.0.52", true),
+            ("1.1.0", true),
+            ("1.0.12", false),
+            ("0.6.9", false),
+            ("1.0", false),
+        ] {
+            assert_eq!(
+                version_at_least(version, GROK_PROXY_MIN_CLIENT_VERSION),
+                at_least,
+                "{version}"
+            );
+        }
     }
 
     #[test]
