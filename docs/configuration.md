@@ -18,7 +18,7 @@ See the [root README quick start](../README.md#quick-start) for the full flag li
 | `RAVEN_GROK_AUTH` | _(unset)_ | Override path to Grok Build `auth.json` (default `~/.grok/auth.json`) |
 | `GROK_HOME` | _(unset)_ | Grok Build home dir; Raven reads `$GROK_HOME/auth.json` when set |
 | `RAVEN_GROK_PROXY_BASE_URL` / `GROK_CLI_CHAT_PROXY_BASE_URL` | `https://cli-chat-proxy.grok.com/v1` | Grok subscription chat-proxy base URL |
-| `RAVEN_GROK_CLIENT_VERSION` | installed `grok --version`, else `1.0.13` | Semver sent as `x-grok-client-version`. The proxy rejects Raven's package version below this floor (HTTP 426). |
+| `RAVEN_GROK_CLIENT_VERSION` | `grok --version` if `>= 1.0.13`, else `1.0.13` | Semver sent as `x-grok-client-version`. The proxy rejects Raven's package version below this floor (HTTP 426). |
 | `RAVEN_REASONING_EFFORT` | _(unset)_ | Reasoning effort (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`). Also `--effort` and `/effort`. |
 | `RAVEN_MAX_ITER` / `OG_MAX_ITER` | `60` | Max agent iterations per run |
 | `RAVEN_CONTEXT_WINDOW` / `OG_CONTEXT_WINDOW` | _(inferred)_ | Override the model's context window size (tokens) |

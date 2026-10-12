@@ -125,7 +125,8 @@ pub fn proxy_base_url() -> String {
 ///
 /// `x-grok-client-version` is a Grok CLI semver, not Raven's package version.
 /// Precedence: `RAVEN_GROK_CLIENT_VERSION`, then `grok --version` when it
-/// meets [`GROK_PROXY_MIN_CLIENT_VERSION`], then that floor.
+/// meets [`GROK_PROXY_MIN_CLIENT_VERSION`], then that floor. A parsed
+/// override is returned without spawning `grok`.
 pub fn client_headers() -> Vec<(String, String)> {
     vec![
         ("X-XAI-Token-Auth".into(), TOKEN_AUTH_VALUE.into()),
@@ -136,11 +137,12 @@ pub fn client_headers() -> Vec<(String, String)> {
 
 /// Semver sent as `x-grok-client-version`.
 fn proxy_client_version() -> String {
-    let override_text = std::env::var("RAVEN_GROK_CLIENT_VERSION").ok();
-    select_proxy_client_version(
-        override_text.as_deref(),
-        installed_grok_cli_version().as_deref(),
-    )
+    if let Ok(text) = std::env::var("RAVEN_GROK_CLIENT_VERSION") {
+        if let Some(version) = first_semver_token(&text) {
+            return version;
+        }
+    }
+    select_proxy_client_version(None, installed_grok_cli_version())
 }
 
 /// Pick the proxy client version from an override string and `grok --version` text.
@@ -163,10 +165,17 @@ fn select_proxy_client_version(
     GROK_PROXY_MIN_CLIENT_VERSION.to_string()
 }
 
-/// Cached `grok --version` semver. `None` when the CLI is missing or unparseable.
-fn installed_grok_cli_version() -> Option<String> {
-    static CACHED: OnceLock<Option<String>> = OnceLock::new();
-    CACHED.get_or_init(probe_grok_cli_version).clone()
+/// Parsed `grok --version`. A successful parse is cached for the process.
+///
+/// A missing binary, non-zero exit, timeout, or unparseable output returns
+/// `None` and is probed again on the next call.
+fn installed_grok_cli_version() -> Option<&'static str> {
+    static CACHED: OnceLock<String> = OnceLock::new();
+    if let Some(cached) = CACHED.get() {
+        return Some(cached.as_str());
+    }
+    let version = probe_grok_cli_version()?;
+    Some(CACHED.get_or_init(|| version).as_str())
 }
 
 fn probe_grok_cli_version() -> Option<String> {
@@ -179,35 +188,61 @@ fn probe_grok_cli_version() -> Option<String> {
         .stderr(Stdio::piped())
         .spawn()
         .ok()?;
-    let started = std::time::Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if started.elapsed() > Duration::from_secs(2) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
-            Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-        }
+    let Some(mut stdout) = child.stdout.take() else {
+        stop_child(&mut child);
+        return None;
     };
+    let Some(mut stderr) = child.stderr.take() else {
+        stop_child(&mut child);
+        return None;
+    };
+
+    let started = std::time::Instant::now();
+    let (stdout_text, stderr_text, status) = std::thread::scope(|scope| {
+        let stdout_task = scope.spawn(move || {
+            let mut buf = String::new();
+            let _ = stdout.read_to_string(&mut buf);
+            buf
+        });
+        let stderr_task = scope.spawn(move || {
+            let mut buf = String::new();
+            let _ = stderr.read_to_string(&mut buf);
+            buf
+        });
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Some(status),
+                Ok(None) if started.elapsed() > Duration::from_secs(2) => {
+                    stop_child(&mut child);
+                    break None;
+                }
+                Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+                Err(_) => {
+                    stop_child(&mut child);
+                    break None;
+                }
+            }
+        };
+        (
+            stdout_task.join().unwrap_or_default(),
+            stderr_task.join().unwrap_or_default(),
+            status,
+        )
+    });
+
+    let status = status?;
     if !status.success() {
         return None;
     }
-    let mut text = String::new();
-    if let Some(mut out) = child.stdout.take() {
-        let _ = out.read_to_string(&mut text);
-    }
+    let mut text = stdout_text;
     text.push(' ');
-    if let Some(mut err) = child.stderr.take() {
-        let _ = err.read_to_string(&mut text);
-    }
+    text.push_str(&stderr_text);
     first_semver_token(&text)
+}
+
+fn stop_child(child: &mut std::process::Child) {
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// First `major.minor.patch` token in `text`, ignoring pre-release and build metadata.
@@ -222,25 +257,16 @@ fn first_semver_token(text: &str) -> Option<String> {
 }
 
 fn parse_semver(raw: &str) -> Option<(u64, u64, u64)> {
-    let mut parts = raw.split('.');
+    let raw = raw.strip_prefix('v').unwrap_or(raw);
+    let core = raw.split(['-', '+']).next()?;
+    let mut parts = core.split('.');
     let major: u64 = parts.next()?.parse().ok()?;
     let minor: u64 = parts.next()?.parse().ok()?;
-    let patch_raw = parts.next()?;
+    let patch: u64 = parts.next()?.parse().ok()?;
     if parts.next().is_some() {
         return None;
     }
-    let patch_digits: String = patch_raw
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
-    if patch_digits.is_empty() {
-        return None;
-    }
-    let rest = &patch_raw[patch_digits.len()..];
-    if !rest.is_empty() && !rest.starts_with('-') && !rest.starts_with('+') {
-        return None;
-    }
-    Some((major, minor, patch_digits.parse().ok()?))
+    Some((major, minor, patch))
 }
 
 fn version_at_least(version: &str, floor: &str) -> bool {
@@ -671,8 +697,10 @@ mod tests {
             .find(|(k, _)| k == "x-grok-client-version")
             .map(|(_, v)| v.as_str())
             .unwrap();
-        assert!(version_at_least(version, GROK_PROXY_MIN_CLIENT_VERSION));
         assert!(!version.contains("raven"));
+        if std::env::var("RAVEN_GROK_CLIENT_VERSION").is_err() {
+            assert!(version_at_least(version, GROK_PROXY_MIN_CLIENT_VERSION));
+        }
     }
 
     #[test]
@@ -746,6 +774,9 @@ mod tests {
                 GROK_PROXY_MIN_CLIENT_VERSION,
             ),
             (Some("  1.0.13-dev "), None, "1.0.13"),
+            (Some("1.0.52-rc.1"), None, "1.0.52"),
+            (Some("1.0.52+sha.1"), None, "1.0.52"),
+            (Some("v1.0.52"), None, "1.0.52"),
             (None, None, GROK_PROXY_MIN_CLIENT_VERSION),
         ];
         for (override_text, installed, expect) in cases {
@@ -765,6 +796,9 @@ mod tests {
             ("1.0.12", false),
             ("0.6.9", false),
             ("1.0", false),
+            ("1.0.52-rc.1", true),
+            ("v1.0.13", true),
+            ("v1.0.12", false),
         ] {
             assert_eq!(
                 version_at_least(version, GROK_PROXY_MIN_CLIENT_VERSION),
