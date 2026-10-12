@@ -121,6 +121,8 @@ default_model = "deepseek-v4-flash"
 # Uses your Grok Build / SuperGrok subscription via ~/.grok/auth.json
 # (run `grok login` first). No API key env var — session OAuth instead.
 # Override the proxy with RAVEN_GROK_PROXY_BASE_URL or GROK_CLI_CHAT_PROXY_BASE_URL.
+# x-grok-client-version follows `grok --version` (floor 1.0.13). Override with
+# RAVEN_GROK_CLIENT_VERSION if the proxy raises that floor before Raven does.
 base_url = "https://cli-chat-proxy.grok.com/v1"
 default_model = "grok-4.7"
 

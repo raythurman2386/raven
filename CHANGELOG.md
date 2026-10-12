@@ -10,6 +10,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+### Fixed
+
+- Grok chat proxy HTTP 426: `x-grok-client-version` is a Grok CLI semver (`grok --version` when it is at least 1.0.13, otherwise 1.0.13), not Raven's package version. A parsed `RAVEN_GROK_CLIENT_VERSION` (including `v1.0.52`, `1.0.52-rc.1`, and `1.0.52+sha.1`) overrides that and skips the CLI probe.
+
 ## [0.6.9] - 2026-09-25
 
 ### Added
