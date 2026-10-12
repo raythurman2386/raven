@@ -179,57 +179,62 @@ fn installed_grok_cli_version() -> Option<&'static str> {
 }
 
 fn probe_grok_cli_version() -> Option<String> {
-    use std::io::Read;
-
-    let mut child = Command::new("grok")
+    let mut command = Command::new("grok");
+    command
         .arg("--version")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .ok()?;
-    let Some(mut stdout) = child.stdout.take() else {
-        stop_child(&mut child);
+        .stderr(Stdio::piped());
+    // New group so a descendant that inherited the pipes dies with the child.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    read_child_version(command.spawn().ok()?, Duration::from_secs(2))
+}
+
+/// Semver printed by `child`, which must be its own process group.
+///
+/// `None` when `child` misses `timeout`, including when a descendant still
+/// holds the pipes.
+fn read_child_version(mut child: std::process::Child, timeout: Duration) -> Option<String> {
+    use std::sync::mpsc;
+
+    let (stdout_tx, stdout_rx) = mpsc::channel();
+    let (stderr_tx, stderr_rx) = mpsc::channel();
+    let stdout_handle = child
+        .stdout
+        .take()
+        .map(|pipe| spawn_reader(pipe, stdout_tx));
+    let stderr_handle = child
+        .stderr
+        .take()
+        .map(|pipe| spawn_reader(pipe, stderr_tx));
+    if stdout_handle.is_none() || stderr_handle.is_none() {
+        reap_child(child);
         return None;
-    };
-    let Some(mut stderr) = child.stderr.take() else {
-        stop_child(&mut child);
-        return None;
-    };
+    }
 
     let started = std::time::Instant::now();
-    let (stdout_text, stderr_text, status) = std::thread::scope(|scope| {
-        let stdout_task = scope.spawn(move || {
-            let mut buf = String::new();
-            let _ = stdout.read_to_string(&mut buf);
-            buf
-        });
-        let stderr_task = scope.spawn(move || {
-            let mut buf = String::new();
-            let _ = stderr.read_to_string(&mut buf);
-            buf
-        });
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break Some(status),
-                Ok(None) if started.elapsed() > Duration::from_secs(2) => {
-                    stop_child(&mut child);
-                    break None;
-                }
-                Ok(None) => std::thread::sleep(Duration::from_millis(20)),
-                Err(_) => {
-                    stop_child(&mut child);
-                    break None;
-                }
-            }
-        };
-        (
-            stdout_task.join().unwrap_or_default(),
-            stderr_task.join().unwrap_or_default(),
-            status,
-        )
-    });
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if started.elapsed() > timeout => break None,
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Err(_) => break None,
+        }
+    };
+    reap_child(child);
 
+    let drain = Duration::from_millis(250);
+    let drained_at = std::time::Instant::now();
+    let stdout_text = recv_pipe(stdout_rx, stdout_handle, drain);
+    let stderr_text = recv_pipe(
+        stderr_rx,
+        stderr_handle,
+        drain.saturating_sub(drained_at.elapsed()),
+    );
     let status = status?;
     if !status.success() {
         return None;
@@ -240,9 +245,52 @@ fn probe_grok_cli_version() -> Option<String> {
     first_semver_token(&text)
 }
 
-fn stop_child(child: &mut std::process::Child) {
+fn spawn_reader(
+    mut pipe: impl std::io::Read + Send + 'static,
+    tx: std::sync::mpsc::Sender<String>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let mut buf = String::new();
+        let _ = pipe.read_to_string(&mut buf);
+        let _ = tx.send(buf);
+    })
+}
+
+fn recv_pipe(
+    rx: std::sync::mpsc::Receiver<String>,
+    handle: Option<std::thread::JoinHandle<()>>,
+    bound: Duration,
+) -> String {
+    match rx.recv_timeout(bound) {
+        Ok(text) => {
+            if let Some(handle) = handle {
+                let _ = handle.join();
+            }
+            text
+        }
+        Err(_) => String::new(),
+    }
+}
+
+fn reap_child(mut child: std::process::Child) {
+    let pid = child.id();
+    #[cfg(unix)]
+    unsafe {
+        // SAFETY: the child was started with process_group(0), so pid is the group id.
+        libc::kill(-(pid as i32), libc::SIGKILL);
+    }
     let _ = child.kill();
-    let _ = child.wait();
+    let started = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) | Err(_) => return,
+            Ok(None) if started.elapsed() > Duration::from_millis(250) => break,
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+        }
+    }
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
 }
 
 /// First `major.minor.patch` token in `text`, ignoring pre-release and build metadata.
@@ -811,5 +859,55 @@ mod tests {
     #[test]
     fn proxy_base_url_default() {
         assert_eq!(DEFAULT_PROXY_BASE_URL, "https://cli-chat-proxy.grok.com/v1");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn version_probe_returns_when_grandchild_holds_the_pipes() {
+        use std::os::unix::process::CommandExt;
+        use std::process::Command;
+
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg("(sleep 60 &); echo 'grok 1.0.52 (abc) [stable]'")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0);
+        let child = command.spawn().expect("spawn sh");
+        let started = std::time::Instant::now();
+        let version = read_child_version(child, Duration::from_secs(2));
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "probe hung for {:?}",
+            started.elapsed()
+        );
+        assert_eq!(version.as_deref(), Some("1.0.52"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn version_probe_times_out_without_a_version() {
+        use std::os::unix::process::CommandExt;
+        use std::process::Command;
+
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg("sleep 30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0);
+        let child = command.spawn().expect("spawn sh");
+        let started = std::time::Instant::now();
+        let version = read_child_version(child, Duration::from_secs(1));
+        assert!(version.is_none());
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "probe hung for {:?}",
+            started.elapsed()
+        );
     }
 }
