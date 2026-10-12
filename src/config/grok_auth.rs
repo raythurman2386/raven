@@ -165,17 +165,43 @@ fn select_proxy_client_version(
     GROK_PROXY_MIN_CLIENT_VERSION.to_string()
 }
 
+/// How long a failed `grok --version` probe suppresses another spawn.
+const PROBE_MISS_TTL: Duration = Duration::from_secs(5);
+
 /// Parsed `grok --version`. A successful parse is cached for the process.
 ///
-/// A missing binary, non-zero exit, timeout, or unparseable output returns
-/// `None` and is probed again on the next call.
+/// A miss is remembered for [`PROBE_MISS_TTL`] so a stuck `grok` is not
+/// spawned again on the next header build.
 fn installed_grok_cli_version() -> Option<&'static str> {
     static CACHED: OnceLock<String> = OnceLock::new();
+    static MISS_AT: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
     if let Some(cached) = CACHED.get() {
         return Some(cached.as_str());
     }
-    let version = probe_grok_cli_version()?;
-    Some(CACHED.get_or_init(|| version).as_str())
+    if recent_miss(&MISS_AT) {
+        return None;
+    }
+    // The probe waits on a child. Off a worker this is a normal call; on a
+    // multi-thread runtime it frees that worker for the wait.
+    let version = tokio::task::block_in_place(probe_grok_cli_version);
+    match version {
+        Some(version) => {
+            let mut miss = MISS_AT.lock().unwrap_or_else(|err| err.into_inner());
+            *miss = None;
+            drop(miss);
+            Some(CACHED.get_or_init(|| version).as_str())
+        }
+        None => {
+            let mut miss = MISS_AT.lock().unwrap_or_else(|err| err.into_inner());
+            *miss = Some(std::time::Instant::now());
+            None
+        }
+    }
+}
+
+fn recent_miss(slot: &std::sync::Mutex<Option<std::time::Instant>>) -> bool {
+    let miss = slot.lock().unwrap_or_else(|err| err.into_inner());
+    miss.is_some_and(|at| at.elapsed() < PROBE_MISS_TTL)
 }
 
 fn probe_grok_cli_version() -> Option<String> {
@@ -212,29 +238,46 @@ fn read_child_version(mut child: std::process::Child, timeout: Duration) -> Opti
         .take()
         .map(|pipe| spawn_reader(pipe, stderr_tx));
     if stdout_handle.is_none() || stderr_handle.is_none() {
-        reap_child(child);
+        stop_child(child);
         return None;
     }
 
+    let pid = raw_pid(child.id());
     let started = std::time::Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
-            Ok(None) if started.elapsed() > timeout => break None,
-            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
-            Err(_) => break None,
+    let mut group_held = pid.is_some();
+    let saw_exit = loop {
+        let Some(pid) = pid else {
+            break false;
+        };
+        match poll_exited(pid) {
+            Some(true) => break true,
+            Some(false) if started.elapsed() > timeout => break false,
+            Some(false) => std::thread::sleep(Duration::from_millis(20)),
+            None => {
+                group_held = false;
+                break false;
+            }
         }
     };
-    reap_child(child);
+    // Signal before the leader is reaped. After `try_wait` the PGID can be
+    // reused, and `kill(-pid)` would hit that new group.
+    if group_held {
+        signal_group(pid);
+    }
+    if !saw_exit {
+        let _ = child.kill();
+    }
+    let status = reap_direct(child);
 
     let drain = Duration::from_millis(250);
     let drained_at = std::time::Instant::now();
-    let stdout_text = recv_pipe(stdout_rx, stdout_handle, drain);
-    let stderr_text = recv_pipe(
-        stderr_rx,
-        stderr_handle,
-        drain.saturating_sub(drained_at.elapsed()),
-    );
+    let stdout_text = recv_pipe(stdout_rx, drain);
+    let stderr_text = recv_pipe(stderr_rx, drain.saturating_sub(drained_at.elapsed()));
+    drop(stdout_handle);
+    drop(stderr_handle);
+    if !saw_exit {
+        return None;
+    }
     let status = status?;
     if !status.success() {
         return None;
@@ -256,34 +299,73 @@ fn spawn_reader(
     })
 }
 
-fn recv_pipe(
-    rx: std::sync::mpsc::Receiver<String>,
-    handle: Option<std::thread::JoinHandle<()>>,
-    bound: Duration,
-) -> String {
-    match rx.recv_timeout(bound) {
-        Ok(text) => {
-            if let Some(handle) = handle {
-                let _ = handle.join();
-            }
-            text
-        }
-        Err(_) => String::new(),
+fn recv_pipe(rx: std::sync::mpsc::Receiver<String>, bound: Duration) -> String {
+    rx.recv_timeout(bound).unwrap_or_default()
+}
+
+fn raw_pid(pid: u32) -> Option<i32> {
+    if pid == 0 || pid > i32::MAX as u32 {
+        None
+    } else {
+        Some(pid as i32)
     }
 }
 
-fn reap_child(mut child: std::process::Child) {
-    let pid = child.id();
-    #[cfg(unix)]
-    unsafe {
-        // SAFETY: the child was started with process_group(0), so pid is the group id.
-        libc::kill(-(pid as i32), libc::SIGKILL);
+/// `Some(true)` when `pid` has exited and is still unreaped.
+/// `Some(false)` when it is still running. `None` when the pid cannot be polled.
+#[cfg(unix)]
+fn poll_exited(pid: i32) -> Option<bool> {
+    let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+    let rc = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            pid as libc::id_t,
+            info.as_mut_ptr(),
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        )
+    };
+    if rc != 0 {
+        return None;
     }
-    let _ = child.kill();
+    let info = unsafe { info.assume_init() };
+    // SAFETY: waitid wrote this siginfo. si_pid shares its offset with the
+    // SIGCHLD payload, and it stays 0 when WNOHANG finds no status.
+    let exited_pid = unsafe { info.si_pid() };
+    Some(exited_pid != 0)
+}
+
+#[cfg(not(unix))]
+fn poll_exited(_pid: i32) -> Option<bool> {
+    None
+}
+
+fn signal_group(pid: Option<i32>) {
+    #[cfg(unix)]
+    if let Some(pid) = pid {
+        // SAFETY: caller proved `pid` is an unreaped leader of its own group,
+        // so this PGID is still that group.
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+    }
+}
+
+fn stop_child(child: std::process::Child) {
+    let pid = raw_pid(child.id());
+    signal_group(pid);
+    reap_direct(child);
+}
+
+fn reap_direct(mut child: std::process::Child) -> Option<std::process::ExitStatus> {
     let started = std::time::Instant::now();
     loop {
         match child.try_wait() {
-            Ok(Some(_)) | Err(_) => return,
+            Ok(Some(status)) => return Some(status),
+            Err(_) => return None,
             Ok(None) if started.elapsed() > Duration::from_millis(250) => break,
             Ok(None) => std::thread::sleep(Duration::from_millis(20)),
         }
@@ -291,6 +373,7 @@ fn reap_child(mut child: std::process::Child) {
     std::thread::spawn(move || {
         let _ = child.wait();
     });
+    None
 }
 
 /// First `major.minor.patch` token in `text`, ignoring pre-release and build metadata.

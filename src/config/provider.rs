@@ -319,14 +319,16 @@ pub fn resolve_provider(cfg: &ConfigFile, explicit: Option<String>) -> Provider 
     p.resolve_key()
 }
 
+const BUILTIN_NAMES: &[&str] = &["ollama", "openrouter", "opencode-go", "grok"];
+
 /// Names a user can pass to `/provider` or `--provider`.
 ///
 /// Built-in presets are always included; config-declared names are merged in.
 pub fn known_provider_names(cfg: &ConfigFile) -> Vec<String> {
     let mut names: Vec<String> = cfg.providers.keys().cloned().collect();
-    for builtin in ["ollama", "openrouter", "opencode-go", "grok"] {
+    for builtin in BUILTIN_NAMES {
         if !names.iter().any(|n| n == builtin) {
-            names.push(builtin.to_string());
+            names.push((*builtin).to_string());
         }
     }
     names.sort();
@@ -335,8 +337,10 @@ pub fn known_provider_names(cfg: &ConfigFile) -> Vec<String> {
 }
 
 /// Whether `name` is a built-in preset or a config-declared provider.
+///
+/// This does not construct the preset. Building `grok` runs `grok --version`.
 pub fn is_known_provider(cfg: &ConfigFile, name: &str) -> bool {
-    Provider::builtin(name).is_some() || cfg.providers.contains_key(name)
+    BUILTIN_NAMES.contains(&name) || cfg.providers.contains_key(name)
 }
 
 #[cfg(test)]
@@ -481,6 +485,9 @@ mod tests {
         assert!(is_known_provider(&cfg, "opencode-go"));
         assert!(is_known_provider(&cfg, "grok"));
         assert!(!is_known_provider(&cfg, "nope"));
+        for name in BUILTIN_NAMES {
+            assert!(Provider::builtin(name).is_some(), "{name}");
+        }
     }
 
     #[test]
