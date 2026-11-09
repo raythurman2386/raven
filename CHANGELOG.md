@@ -13,6 +13,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - Grok chat proxy HTTP 426: `x-grok-client-version` is a Grok CLI semver (`grok --version` when it is at least 1.0.13, otherwise 1.0.13), not Raven's package version. A parsed `RAVEN_GROK_CLIENT_VERSION` (including `v1.0.52`, `1.0.52-rc.1`, and `1.0.52+sha.1`) overrides that and skips the CLI probe.
+- `zip` 8.6.0 extract advisories (RUSTSEC-2026-0367, RUSTSEC-2026-0368, RUSTSEC-2026-0369, RUSTSEC-2026-0429). Published `anydoc` 0.2.4 still requires `zip` 8.6.0, so the workspace patches that crate onto `zip` 9.5.0. Compatible dependency updates also pick up the published fixes for `rustls`, `rustls-webpki`, `webpki-roots`, `pulldown-cmark`, `zstd`, `ctutils`, and `tokio`.
 
 ## [0.6.9] - 2026-09-25
 
