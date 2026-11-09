@@ -1,16 +1,18 @@
 # Raven — Best Mini Coding-Agent Harness Roadmap
 
 **Goal:** Rework every component of `raven` so it is as helpful and fast as
-Grok Build, while remaining a lean single-crate *mini* harness (not a 60-crate
-monorepo). Design decisions are grounded in `xai-org/grok-build` source and in
-cross-agent research (Aider/Goose/Cline/Continue).
+Grok Build, while remaining a lean *mini* harness: one `raven` binary and a
+small Cargo workspace. That workspace is a compile and ownership boundary,
+not Grok Build's layout and not a 60-crate monorepo. Design decisions are
+grounded in `xai-org/grok-build` source and in cross-agent research
+(Aider/Goose/Cline/Continue).
 
 **Guiding principles:**
 - Zero dead code, zero `unreachable!()`, comprehensive offline tests. `unsafe` is allowed only where the platform requires it (Linux `pre_exec`), each block carrying a sound SAFETY comment.
 - Clean full transitions — never leave fallback flags or conditional cruft behind.
 - Focused conventional commits (`feat:`/`fix:`/`perf:`/`chore:`), one per logical change.
-- Every change: `cargo test` → `cargo clippy --all-targets -- -D warnings` → `cargo fmt`, then `cargo install --path . --force`.
-- `mini` means: borrow grok-build's *patterns*, not its monorepo sprawl.
+- Every change: `cargo test --workspace` → `cargo clippy --workspace --all-targets -- -D warnings` → `cargo fmt --all`, then `cargo install --path . --force`.
+- `mini` means: borrow grok-build's *patterns*, not its monorepo sprawl. One binary. The crates (`raven-proto`, `raven-tokenizer`, `raven-config`, `raven-persist`, `raven-sandbox`, `raven-tools`, `raven-agent`, `raven-tui`, `raven-acp`, `raven-testutil`) are ownership boundaries, not new product surfaces.
 
 **Reference roots (read before each phase):**
 - grok-build: `crates/codegen/`
@@ -31,7 +33,7 @@ fmt.
 
 ### Agent loop & context
 - **Streaming agent loop** — OpenAI-compatible `/v1/chat/completions`, incremental SSE parsing (UTF-8-safe across TCP chunks), non-streaming fallback (`--no-stream`).
-- **Plan mode** — parse → approve → revise → execute, human-gated, read-only plan toolset (`src/plan.rs`, `src/agent/`).
+- **Plan mode** — parse → approve → revise → execute, human-gated, read-only plan toolset (`raven-proto` plan types, `raven-agent`).
 - **Context management** — pure-Rust token estimator, context-window inference (live `/api/show` + name heuristic), automatic compaction (tool-result pruning + LLM-structured summary with extractive fallback, facts block for goal/todos/paths/last verification, compaction note), compaction thrashing protection.
 - **Session export** — `/export` and `--export` write a local Markdown/JSON bundle.
 - **Stall/verify recovery** — blank-response retry (capped), enforced-verify gate (must run tests after edits, `exit=0` exact), repeated-failure detection, goal-aware reflection reminders.
@@ -97,8 +99,8 @@ boringly reliable. See `docs/troubleshooting.md` for the operational notes.
 
 ## Non-goals (explicit, YAGNI for a mini harness)
 
-These are real grok-build features but would bloat raven past "mini". Not
-planned unless a checklist item forces a small split.
+These are real grok-build features but would bloat raven past "mini". The
+workspace split does not add them.
 
 - In-tree CDP / Browser Use
 - MCP marketplace (stdio MCP is supported; no catalog/UI)

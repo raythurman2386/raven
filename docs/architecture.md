@@ -1,24 +1,46 @@
 # Architecture
 
-Design overview for **Raven**. See the [project layout](../README.md#project-layout) for a summary, and [contributing.md](contributing.md) for how to extend the codebase.
+Design overview for **Raven**. The [crate workspace](#crate-workspace) is the source map. See [contributing.md](contributing.md) for how to extend the codebase.
+
+## Crate workspace
+
+One binary, `raven` (`cargo install --path .` installs that package). Implementation lives under `crates/`. Dependencies point only downward. The root package is the clap CLI (`src/main.rs`), the headless runner (`src/runner.rs`), and self-update (`src/update.rs`), plus thin `pub use` facades so existing paths keep resolving (`raven::agent::ChatMessage`, `raven::tokenizer`, `raven::context`, `raven::repomap`, `raven::testutil`, and the other historical module paths). Benches stay at the repo root and call those facades.
+
+| Crate | Owns | Depends on |
+| --- | --- | --- |
+| `raven-proto` | `ChatMessage`, `ToolCall`, `FunctionCall`, `AgentEvent`, `AgentError` / `ToolError`, plan types, `TodoItem`, `Goal` | — |
+| `raven-tokenizer` | estimator, usage meters, pricing | proto |
+| `raven-config` | `Settings`, named providers, onboarding, Grok auth | proto |
+| `raven-persist` | session JSONL, session-scoped goal/todos, memory | proto, config |
+| `raven-sandbox` | path confinement, Landlock, seccomp, rlimits | proto |
+| `raven-tools` | tool defs, dispatch, git, patch, documents, validate, web, skills, repomap, plugins, stdio MCP client | proto, config, persist, sandbox |
+| `raven-agent` | streaming loop, compaction, stream parse, tool exec, parallel / `delegate_task` | proto, tokenizer, config, persist, tools |
+| `raven-tui` | ratatui UI, markdown, slash commands | proto, config, persist, agent |
+| `raven-acp` | ACP v1 stdio adapter | proto, config, persist, agent |
+| `raven-testutil` | `outer_sandbox_restrictive`, `home_env_lock` | — |
+| `raven` (root) | clap CLI, headless runner, self-update, facade re-exports | the crates above |
+
+`landlock` and `seccompiler` are Linux target-cfg dependencies of `raven-sandbox` only. ratatui, crossterm, and pulldown-cmark stay on `raven-tui` only. clap stays in the root binary. `delegate_task` runs in `raven-agent` (`tools_exec`), not in tool dispatch, so tools do not depend on the agent. A TUI or ACP edit does not rebuild the agent. A tokenizer edit does not rebuild the sandbox.
+
+Release profile is workspace-wide: lto, codegen-units 1, strip, opt-level z, panic abort.
 
 ## High-level data flow
 
 ```
-CLI (main.rs)
-  └─ Settings (config/mod.rs) ── named providers, context-window inference,
+CLI (src/main.rs)
+  └─ Settings (raven-config) ── named providers, context-window inference,
   │                              scope (repo | system) via resolve_scope
-  └─ Agent (agent/)
+  └─ Agent (raven-agent)
        ├─ system prompt (stable instructions + mode) and a following setup message (workspace, repo map, AGENTS.md, memory, goal, rules). Git status is request-only, after the conversation.
        ├─ streaming loop ── POST /v1/chat/completions (Ollama / OpenRouter / …)
-       ├─ compaction (context.rs) ── estimate tokens, summarize middle
-       ├─ tool dispatch (tools/) ── mutators serial; others spawn_blocking
+       ├─ compaction (raven-agent context) ── estimate tokens, summarize middle
+       ├─ tool dispatch (raven-tools) ── mutators serial; others spawn_blocking
        └─ events (mpsc) ── TextDelta, ToolStart/End, Iteration, Compacted,
                            VerifyRequired, AskUser, PlanProgress, Done, Error
-  └─ TUI (tui/)  ── ratatui event loop, drains agent events
+  └─ TUI (raven-tui)  ── ratatui event loop, drains agent events
   └─ headless_run ── one-shot tasks (repo and system scope)
   └─ run_parallel ── N independent Agent tasks on git worktrees (repo scope)
-  └─ MCP (mcp/) ── stdio JSON-RPC client; tools merged as `{server}__{tool}`
+  └─ MCP (raven-tools client; specs in raven-config) ── stdio JSON-RPC; tools merged as `{server}__{tool}`
 ```
 
 ### Scope axis
@@ -34,7 +56,7 @@ opt-in (denylist + network block still apply).
 
 ### Step-by-step
 
-1. **CLI** (`main.rs`) parses flags with `clap`, builds a [`Settings`](../src/config/mod.rs) struct (resolving env vars, loading config files, and querying the model's actual context window via Ollama's `/api/show` endpoint).
+1. **CLI** (`main.rs`) parses flags with `clap`, builds a [`Settings`](../crates/raven-config/src/lib.rs) struct (resolving env vars, loading config files, and querying the model's actual context window via Ollama's `/api/show` endpoint).
 2. **Agent construction** (`Agent::new`): validates the workspace, builds a stable system message (instructions + mode) and a following setup message (workspace, repo map, `AGENTS.md`, memory, goal, todos, `--rules`). Git status is not stored; it is appended for the request only.
 3. **Agent loop** (`Agent::run`): appends the user message, then loops up to `max_iterations`:
    - **Compaction check**: estimate history tokens; if over the soft limit, summarize the middle (see [Compaction](#compaction)).
@@ -43,7 +65,7 @@ opt-in (denylist + network block still apply).
    - **Accumulate tool calls**: tool-call deltas arrive incrementally; they are accumulated by index into `(id, name, arguments)`.
    - **No tool calls**: append the assistant message, emit `Done`, return.
    - **Tool calls**: append the assistant message, execute all tools in parallel via `tokio::task::spawn_blocking`, append each result as a `tool`-role message, loop back.
-4. **Events**: progress flows through an `mpsc` channel as [`AgentEvent`](../src/agent/types.rs) variants. The headless runner and TUI consume these.
+4. **Events**: progress flows through an `mpsc` channel as [`AgentEvent`](../crates/raven-proto/src/chat.rs) variants. The headless runner and TUI consume these.
 
 ---
 
@@ -82,7 +104,7 @@ opt-in (denylist + network block still apply).
 
 ## Compaction
 
-Implemented in [`context.rs`](../src/context.rs). Token counting uses a built-in token estimator ([`tokenizer.rs`](../src/tokenizer.rs)) for fast, conservative estimates.
+Implemented in [`context.rs`](../crates/raven-agent/src/context.rs). Token counting uses a built-in token estimator ([`raven-tokenizer`](../crates/raven-tokenizer/src/lib.rs)) for fast, conservative estimates.
 
 Compaction is guaranteed to never grow the history: if the assembled compacted form (summary + kept tail) would be no smaller than the original, the original is left unchanged. This guards the degenerate case of many tiny, near-identical messages where the extractive summary's per-line prefixes can cost more than the verbatim middle they replace.
 
@@ -122,7 +144,7 @@ retrying every 4th iteration so a later prune can resume shrinking.
 ## Persistent agent state
 
 Raven keeps long-horizon task state on disk in the session's `state/`
-directory (`.raven/sessions/{id}/state/`; see [`src/state.rs`](../src/state.rs))
+directory (`.raven/sessions/{id}/state/`; see [`state.rs`](../crates/raven-persist/src/state.rs))
 so it survives context compaction and process restarts. State is
 **session-scoped** (issue #185): a fresh session starts with empty state, and
 only resuming that session restores it:
@@ -158,7 +180,7 @@ sub-agent in a fresh context window and return its distilled output (capped at
 
 ## Sandbox
 
-Implemented in [`src/tools/`](../src/tools/). See [tools.md](tools.md) for the full tool contracts.
+Implemented in [`raven-sandbox`](../crates/raven-sandbox/). Tool dispatch lives in [`raven-tools`](../crates/raven-tools/). See [tools.md](tools.md) for the full tool contracts.
 
 ### Path confinement
 
@@ -227,12 +249,12 @@ returned in order.
 
 ## TUI limitations
 
-The TUI (`src/tui/`) is intentionally minimal:
+The TUI (`raven-tui`) is intentionally minimal:
 
 - **Plan approval is human-gated**: plan mode always waits for the user to approve/revise/abort before executing. The TUI sets `plan_pending` and waits for `yes`/`y`/`approve`/`go`/`execute`/`ok` to execute, or any other text to revise.
 - **No multi-line input**: the input box is single-line only.
 
-Assistant output is rendered as markdown (`src/tui/markdown.rs`, via
+Assistant output is rendered as markdown (`crates/raven-tui/src/markdown.rs`, via
 `pulldown-cmark`): headings, bold/italic/strikethrough, inline code, fenced
 code blocks, ordered/unordered lists, blockquotes, links, and tables. The
 renderer re-parses the accumulated text on each stream delta and degrades

@@ -330,33 +330,27 @@ Raven makes exactly two kinds of outbound requests, both under your control:
 1. **LLM requests** to your configured endpoint (Ollama local, Ollama Cloud, OpenRouter, …).
 2. **Optional** `web_search` requests to DuckDuckGo or a self-hosted SearXNG instance.
 
-That's the whole list. No update checks run on their own (self-update is an explicit `raven self update`), nothing is collected or reported, and all session state — JSONL transcripts, debug-event logs, git-diff snapshots — lives as plain files under `.raven/` on your disk. If you want to verify that, it's ~26K lines; the network calls are all in `agent/stream.rs` and `web.rs`.
+That's the whole list. No update checks run on their own (self-update is an explicit `raven self update`), nothing is collected or reported, and all session state — JSONL transcripts, debug-event logs, git-diff snapshots — lives as plain files under `.raven/` on your disk. If you want to verify that, the network calls are in `crates/raven-agent/src/stream.rs` and `crates/raven-tools/src/web.rs`.
 
 ---
 
 ## Project layout
 
 ```
+crates/
+  raven-proto/      # Messages, events, errors, plan types, TodoItem, Goal
+  raven-tokenizer/  # Pure-Rust token counter (no vocab file)
+  raven-config/     # Layered config.toml, provider presets, onboarding
+  raven-persist/    # JSONL sessions, session-scoped goal/todos, memory
+  raven-sandbox/    # Path confinement, Landlock/seccomp/rlimits
+  raven-tools/      # Tool implementations, git, patch, web, skills, repomap, MCP
+  raven-agent/      # Streaming loop, compaction, parallel sub-agents
+  raven-tui/        # ratatui TUI, markdown, slash commands
+  raven-acp/        # Agent Client Protocol v1 stdio adapter
+  raven-testutil/   # outer_sandbox_restrictive, home_env_lock
 src/
-  main.rs           # CLI, TUI, headless runner, session management
-  lib.rs            # Library re-exports for benchmarks/integration tests
-  agent/            # Core agent loop (core, tools_exec, stream, parallel)
-  commands/         # Slash-command registry + parser (/retry, /loop, /steer, /cleanup, ...)
-  tools/            # Tool implementations (24 total) + sandbox/
-  tui/              # ratatui TUI (render, markdown, completion, dispatch)
-  config/           # Layered config.toml loading, provider presets, onboarding
-  context.rs        # Context-window management and compaction
-  tokenizer.rs      # Pure-Rust token counter (no vocab file)
-  session.rs        # JSONL persistence, resume, list
-  plan.rs           # Structured plan mode
-  memory.rs         # Cross-session `.raven/MEMORY.md`
-  state.rs          # Session-scoped goal.json + todos.json
-  skills.rs         # SKILL.md discovery
-  plugins/          # Agent Plugins v1.0.0 (skills + stdio MCP) discovery
-  mcp/              # Stdio MCP client
-  acp/              # Agent Client Protocol v1 stdio adapter
-  repomap/          # Repo symbol map for large codebases
-  web.rs            # web_search / web_fetch
+  main.rs           # clap CLI, one binary named raven
+  runner.rs         # Headless runner
   update.rs         # Signed self-update (`raven self update`)
 evals/              # Agent evaluation suite
 docs/               # Documentation

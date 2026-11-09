@@ -236,11 +236,10 @@ deployment is:
 Run the test suite to verify the confinement layers are active:
 
 ```bash
-cargo test --lib tools::tests::confined_child
-cargo test --lib tools::tests::open_beneath
-cargo test --lib tools::tests::is_direct_exec_command
-cargo test --lib tools::tests::confined_child_oversized_write_capped_by_fsize
-cargo test --lib tools::validate
+cargo test -p raven-tools --lib confined_child
+cargo test -p raven-tools --lib open_beneath
+cargo test -p raven-tools --lib is_direct_exec_command
+cargo test -p raven-tools --lib validate::
 ```
 
 These tests verify that a confined child cannot read outside the Landlock

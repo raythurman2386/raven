@@ -5,17 +5,18 @@ How to build, test, and extend **Raven**.
 ## Build
 
 ```bash
-# Debug build
-cargo build
+# Debug build (every member)
+cargo build --workspace
 
-# Release build (LTO + strip)
+# Release build (LTO + strip). Installs from the root package.
 cargo build --release
+cargo install --path .
 
 # Run
 ./target/release/raven --help
 
 # Docs
-cargo doc --no-deps
+cargo doc --workspace --no-deps
 ```
 
 ## Style
@@ -30,38 +31,27 @@ cargo doc --no-deps
 
 ## Project layout
 
+One binary, `raven`. `cargo install --path .` installs the root package. Implementation is under `crates/`; dependencies point only downward. Root `src/*.rs` files other than `main.rs`, `runner.rs`, and `update.rs` are `pub use` facades (`raven::agent`, `raven::tokenizer`, `raven::context`, `raven::repomap`, `raven::testutil`, and the other historical paths). From the repo root, `cargo test` selects every member (`default-members`).
+
 ```
+crates/
+├── raven-proto/       # ChatMessage, events, errors, plan types, TodoItem, Goal
+├── raven-tokenizer/   # estimator, usage meters, pricing
+├── raven-config/      # Settings, named providers, onboarding, Grok auth, MCP specs
+├── raven-persist/     # session JSONL, session-scoped goal/todos, memory
+├── raven-sandbox/     # path confinement, Landlock/seccomp/rlimits, file and shell ops
+├── raven-tools/       # definitions, dispatch, git, patch, documents, validate,
+│                      # web, skills, repomap, plugins, stdio MCP client
+├── raven-agent/       # streaming loop, compaction (context.rs), stream parse,
+│                      # tool exec, parallel / delegate_task
+├── raven-tui/         # ratatui UI, markdown, slash commands
+├── raven-acp/         # ACP v1 stdio adapter
+└── raven-testutil/    # outer_sandbox_restrictive, home_env_lock
 src/
-├── main.rs       # CLI entry, headless runner
-├── lib.rs        # Library crate re-exports
-├── config/       # Settings, providers, onboarding, Grok auth, AGENTS.md loader
-├── agent/        # Streaming loop (core, stream, tools_exec, loop_control, parallel, types)
-├── context.rs    # Token estimation, compaction
-├── tools/
-│   ├── mod.rs         # Tool module root, glob matcher, todo_write
-│   ├── definitions.rs # OpenAI function-calling tool schemas
-│   ├── dispatch.rs    # Tool dispatch by name
-│   ├── validate.rs    # Tool-argument schema checks before dispatch
-│   ├── sandbox/       # Path confinement, shell filtering, Landlock/seccomp/rlimits, file ops
-│   ├── document.rs    # Document extraction (.docx, .pdf, .xlsx, .odt, .epub)
-│   ├── git.rs         # Git operations (status, diff, log, worktrees, patch-apply)
-│   └── patch.rs       # Unified diff parsing and application
-├── tui/          # ratatui interactive UI (mod, render, markdown, dispatch, completion, …)
-├── commands/     # Slash-command registry and parsing
-├── plan.rs       # Structured plan data model, parsing, step advancement
-├── skills.rs     # SKILL.md discovery + skill_search/skill_load
-├── plugins/      # Agent Plugins v1.0.0 (skills + stdio MCP) discovery + validation
-├── session.rs    # JSONL session persistence, resume, list
-├── memory.rs     # Project memory (MEMORY.md) loading, update, search
-├── state.rs      # Persistent agent state (session-scoped goal.json + todos.json)
-├── repomap/mod.rs # Lightweight repo symbol map
-├── tokenizer.rs  # Pure-Rust token estimator
-├── web.rs        # Keyless web tools (web_fetch, web_search)
-├── mcp/          # Stdio MCP client (config + ACP session/new)
-├── acp/          # Agent Client Protocol v1 stdio adapter
-├── error.rs      # Typed error enums (AgentError, ToolError)
-├── runner.rs     # Shared event-draining and plan-approval flow
-└── update.rs     # Signed self-update (`raven self update`)
+├── main.rs            # clap CLI
+├── lib.rs             # facade module declarations
+├── runner.rs          # headless runner and plan approval
+└── update.rs          # signed self-update (`raven self update`)
 docs/
 ├── README.md           # index
 ├── usage.md            # user workflows
@@ -77,7 +67,7 @@ docs/
 
 ## Adding a tool
 
-Tools live in [`src/tools/`](../src/tools/). To add a new tool:
+Tools live in [`raven-tools`](../crates/raven-tools/). Sandbox methods live in [`raven-sandbox`](../crates/raven-sandbox/). To add a new tool:
 
 ### 1. Implement the method on `Sandbox`
 
@@ -93,7 +83,7 @@ impl Sandbox {
 
 ### 2. Add the OpenAI function schema to `tool_definitions`
 
-In [`src/tools/definitions.rs`](../src/tools/definitions.rs), add a new entry to the `tool_definitions()` function:
+In [`definitions.rs`](../crates/raven-tools/src/definitions.rs), add a new entry to the `tool_definitions()` function:
 
 ```rust
 pub fn tool_definitions() -> serde_json::Value {
@@ -119,7 +109,7 @@ pub fn tool_definitions() -> serde_json::Value {
 
 ### 3. Add a dispatch arm
 
-In [`src/tools/dispatch.rs`](../src/tools/dispatch.rs), add a match arm to the `dispatch()` function:
+In [`dispatch.rs`](../crates/raven-tools/src/dispatch.rs), add a match arm to the `dispatch()` function:
 
 ```rust
 pub fn dispatch(sandbox: &Sandbox, name: &str, args: &serde_json::Value) -> String {
@@ -155,7 +145,7 @@ cargo doc --no-deps
 
 ## Adding an event
 
-Events are defined in [`src/agent/types.rs`](../src/agent/types.rs) as the `AgentEvent` enum.
+Events are defined in [`chat.rs`](../crates/raven-proto/src/chat.rs) as the `AgentEvent` enum.
 
 ### 1. Add the variant
 
@@ -176,7 +166,7 @@ let _ = tx.send(AgentEvent::MyEvent { detail: "..." }).await;
 ### 3. Handle it in consumers
 
 - **Headless runner** (`main.rs`): add a match arm in the `while let Some(ev) = rx.recv().await` loop.
-- **TUI** (`src/tui/`): add a match arm in the `while let Ok(ev) = rx.try_recv()` loop.
+- **TUI** (`raven-tui`): add a match arm in the `while let Ok(ev) = rx.try_recv()` loop.
 
 ### 4. Document it
 
@@ -187,7 +177,7 @@ let _ = tx.send(AgentEvent::MyEvent { detail: "..." }).await;
 
 ## Adding a slash command
 
-Slash commands live in [`src/commands/`](../src/commands/). The registry
+Slash commands live in [`commands.rs`](../crates/raven-tui/src/commands.rs). The registry
 is the single source of truth, so `/help` auto-lists any command you add.
 
 ### 1. Add a `CommandSpec` to the registry
@@ -203,7 +193,7 @@ CommandSpec {
 
 ### 2. Handle it in the TUI dispatcher
 
-In [`src/tui/dispatch.rs`](../src/tui/dispatch.rs), add a match arm in `dispatch_slash_command`.
+In [`dispatch.rs`](../crates/raven-tui/src/dispatch.rs), add a match arm in `dispatch_slash_command`.
 It receives the parsed command, shared UI state (`log`, `mode`,
 `session`, `quit`, ...), and `&SessionStore` — push any user-visible feedback
 to `log`.
@@ -216,12 +206,12 @@ to `log`.
 
 ## Changing compaction
 
-Compaction lives in [`src/context.rs`](../src/context.rs).
+Compaction lives in [`context.rs`](../crates/raven-agent/src/context.rs).
 
-- **Threshold**: `compact_threshold` in `Settings` (default `0.75`). Change the default in `config/mod.rs` or via `--compact-threshold` / `RAVEN_COMPACT_THRESHOLD` / `OG_COMPACT_THRESHOLD`.
+- **Threshold**: `compact_threshold` in `Settings` (default `0.75`). Change the default in `raven-config` or via `--compact-threshold` / `RAVEN_COMPACT_THRESHOLD` / `OG_COMPACT_THRESHOLD`.
 - **Trailing budget**: hardcoded at 40% of usable context in `compact_if_needed`. Change the `0.40` factor.
 - **Summary cap**: `MAX_SUMMARY_CHARS` (4000) and `MAX_TOOL_BODY_CHARS` (200) in `build_summary_user`.
-- **Token estimate**: implemented by the pure-Rust token estimator in `src/tokenizer.rs` (`count_tokens`). Non-newline whitespace is free (BPE glues a leading space to the following word) and a ~12% structural-overhead factor keeps the estimate biased slightly above the real count so compaction triggers early rather than late.
+- **Token estimate**: implemented by the pure-Rust token estimator in `raven-tokenizer` (`count_tokens`). Non-newline whitespace is free (BPE glues a leading space to the following word) and a ~12% structural-overhead factor keeps the estimate biased slightly above the real count so compaction triggers early rather than late.
 
 ### Invariants to preserve
 
@@ -233,9 +223,9 @@ Compaction lives in [`src/context.rs`](../src/context.rs).
 ## Running tests
 
 ```bash
-cargo test                    # offline suite (~850 tests; no live model)
-cargo clippy --all-targets -- -D warnings
-cargo fmt
+cargo test --workspace        # offline suite; every member (no live model)
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all
 ```
 
 See [testing.md](testing.md) for coverage and mutation-testing instructions.

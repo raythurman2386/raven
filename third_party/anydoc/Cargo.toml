@@ -1,0 +1,25 @@
+[package]
+name = "anydoc"
+version = "0.2.4"
+edition = "2024"
+# Edition 2024 needs 1.85; zip raises it to 1.88.
+rust-version = "1.88"
+description = "Convert documents (doc, docx, odt, rtf, epub, pdf, presentations, spreadsheets, csv) to GitHub-Flavored Markdown"
+license = "MIT"
+repository = "https://github.com/firecrawl/anydoc"
+readme = "README.md"
+keywords = ["markdown", "docx", "pdf", "converter", "document"]
+categories = ["parser-implementations", "text-processing"]
+publish = false
+
+[dependencies]
+cfb = "0.14.0"
+csv = "1.4.0"
+flate2 = "1"
+encoding_rs = "0.8.35"
+log = "0.4"
+pdf-inspector = "1.14.2"
+quick-xml = "0.41.0"
+# Published anydoc 0.2.4 pins zip 8.6.0. The extract advisories are fixed
+# only in zip >= 9, and 9.5.0 builds this crate with no source changes.
+zip = { version = "9.5.0", default-features = false, features = ["deflate"] }

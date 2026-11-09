@@ -21,7 +21,7 @@ the full context to work on it correctly.
 ## When to Use
 
 - Implementing or fixing issues in the raven repo
-- Adding or modifying tools in `src/tools/`
+- Adding or modifying tools in `crates/raven-tools/` or confinement in `crates/raven-sandbox/`
 - Changing the agent loop, compaction, or context management
 - Modifying the TUI, session persistence, or CLI
 - Reviewing PRs to the repo
@@ -32,44 +32,38 @@ Don't use for: porting the Ravenwood palette to other apps — use the
 ## Architecture
 
 ```
-CLI (main.rs)
-  └─ Settings (config/mod.rs) ── named providers, context-window inference
-  └─ Agent (src/agent/)
-       ├─ system prompt (SYSTEM_BASE + AGENTS.md + repo map + --rules)
+CLI (src/main.rs)
+  └─ Settings (raven-config) ── named providers, context-window inference
+  └─ Agent (raven-agent)
+       ├─ system prompt (stable instructions + mode) and a following setup message
        ├─ streaming loop ── POST /v1/chat/completions (Ollama / OpenRouter / …)
-       ├─ compaction (context.rs) ── estimate tokens, summarize middle
-       ├─ tool dispatch (tools/) ── mutators serial; others spawn_blocking
+       ├─ compaction (raven-agent context) ── estimate tokens, summarize middle
+       ├─ tool dispatch (raven-tools) ── mutators serial; others spawn_blocking
        └─ events (mpsc) ── TextDelta, ToolStart/End, Iteration, Compacted,
                            VerifyRequired, AskUser, PlanProgress, Done, Error
-  └─ TUI (tui/)  ── ratatui event loop, drains agent events
+  └─ TUI (raven-tui)  ── ratatui event loop, drains agent events
   └─ run_parallel ── N independent Agent tasks on git worktrees
 ```
 
+One binary, `raven`. Dependencies point only downward. Do not add a crate. `delegate_task` runs in `raven-agent` (`tools_exec.rs`), not in `raven-tools`.
+
 ### Module Layout
 
-| Path | Purpose |
-|------|---------|
-| `src/main.rs` | CLI entry, headless runner (repo + system scope), session management |
-| `src/lib.rs` | Library crate re-exports for benchmarks/integration tests |
-| `src/agent/` | Streaming loop (`core.rs`), stream parse, tool exec, loop control, parallel sub-agents |
-| `src/commands.rs` | Slash-command registry + parsing for the TUI |
-| `src/config/mod.rs` | `Settings`, config.toml, AGENTS.md loader; `provider.rs` holds `Provider`/resolution |
-| `src/context.rs` | Token estimation, compaction strategy, tool-result pruning |
-| `src/error.rs` | Typed `AgentError` / `ToolError` |
-| `src/memory.rs` | Cross-session project memory (`.raven/MEMORY.md`) |
-| `src/plan.rs` | Structured plan mode, `parse_plan`, `format_plan` |
-| `src/repomap/mod.rs` | Cached, walk-capped repo symbol map (`<repo_map>`); `patterns.rs` holds the language regexes |
-| `src/runner.rs` | Shared event-draining and plan-approval flow |
-| `src/session.rs` | JSONL session persistence, resume, list (atomic writes); scope-aware store (`for_settings`: repo → `{workspace}/.raven/sessions`, system → `~/.raven/system/sessions`) |
-| `src/skills.rs` | `SKILL.md` discovery + `skill_search`/`skill_load` |
-| `src/state.rs` | Persistent agent state — `.raven/state/todos.json` + `goal.json`, injected into the system prompt |
-| `src/tokenizer.rs` | Pure-Rust BPE token estimator (no external vocab) |
-| `src/tools/` | 24 tools + sandbox — `mod.rs`, `definitions.rs`, `dispatch.rs`, `sandbox/` (`mod.rs` + `confinement.rs`), `document.rs`, `git.rs`, `patch.rs` |
-| `src/tui/` | ratatui TUI with status bar, streaming, scrollback, /commands |
-| `src/web.rs` | Web tools (`web_search`, `web_fetch`) |
-| `src/acp/` | ACP v1 stdio adapter (`raven --acp`) — protocol + server |
-| `src/mcp/` | Thin stdio MCP client (`[mcp.servers]`, ACP `mcpServers`) |
-| `src/plugins/` | Agent Plugins v1.0.0 (skills + `mcp.json`) |
+| Crate | Owns |
+|------|------|
+| `crates/raven-proto` | `ChatMessage`, `ToolCall`, `FunctionCall`, `AgentEvent`, `AgentError` / `ToolError`, plan types, `TodoItem`, `Goal`. Depends on serde, thiserror, tokio, serde_json. |
+| `crates/raven-tokenizer` | Estimator, usage meters, pricing. Depends on proto. |
+| `crates/raven-config` | `Settings`, named providers, onboarding, Grok auth, MCP server specs. Depends on proto. |
+| `crates/raven-persist` | Session JSONL (atomic writes), session-scoped goal/todos, memory. Depends on proto, config. |
+| `crates/raven-sandbox` | Path confinement, shell, Landlock, seccomp, rlimits. Depends on proto. `landlock` and `seccompiler` are Linux target-cfg deps of this crate only. |
+| `crates/raven-tools` | Definitions, dispatch, git, patch, documents, validate, web, skills, repomap, plugins, stdio MCP client. Depends on proto, config, persist, sandbox. |
+| `crates/raven-agent` | Streaming loop (`core`, `stream`, `tools_exec`, `loop_control`, `parallel`), compaction (`context.rs`). Depends on proto, tokenizer, config, persist, tools. Re-exports the MCP client and plugin specs the TUI and ACP call. |
+| `crates/raven-tui` | Ratatui UI, markdown, slash commands. Depends on proto, config, persist, agent. ratatui, crossterm, and pulldown-cmark stay here. |
+| `crates/raven-acp` | ACP v1 stdio adapter (`raven --acp`). Depends on proto, config, persist, agent. |
+| `crates/raven-testutil` | `outer_sandbox_restrictive`, `home_env_lock`. Depends only on libc. |
+| root `raven` | `src/main.rs` (clap), `src/runner.rs`, `src/update.rs`, and `src/lib.rs` facade re-exports. |
+
+Root `src/<module>.rs` files other than `main.rs`, `runner.rs`, and `update.rs` are `pub use` facades. Public paths that benches and integration tests use stay: `raven::agent::ChatMessage`, `raven::tokenizer`, `raven::context`, `raven::repomap`, `raven::testutil`. Session store: repo → `{workspace}/.raven/sessions`, system → `~/.raven/system/sessions`. Goal and todos: `.raven/sessions/<id>/state/`; legacy `.raven/state/` is read-only.
 
 ## Conventions
 
@@ -80,32 +74,32 @@ CLI (main.rs)
   (no marketplace, no HTTP/SSE). Agent Plugins `mcp.json` is stdio-only.
   No telemetry.
 - Every public struct, enum, and fn should have a doc comment.
-- `cargo doc --no-deps` must build with no warnings.
-- `cargo build` must build with no warnings.
+- `cargo doc --workspace --no-deps` must build with no warnings.
+- `cargo build --workspace` must build with no warnings.
 - Prefer `anyhow` for error handling in the binary; `thiserror` is available if a crate-level error type is needed.
 - **DO NOT add comments unless asked** — keep code self-documenting.
 
 ### File Organization
 
-- Modules are declared in `src/lib.rs` and consumed by `src/main.rs` (so
-  benchmarks and integration tests can import them).
-- Tests live in `#[cfg(test)] mod tests` blocks at the bottom of each source
-  file (agent tests under `src/agent/tests/`), plus black-box tests in `tests/`.
+- The root `src/lib.rs` declares the facade modules. Implementation lives in
+  `crates/<name>/src`. Benches stay at the repo root and call the facades.
+- Tests live in `#[cfg(test)]` modules next to the code they cover (agent
+  tests under `crates/raven-agent/src/tests/`), plus black-box tests in `tests/`.
 
 ## Build, Lint, Test
 
 ```bash
 cargo build                    # debug build, must be warning-free
 cargo build --release          # LTO + strip
-cargo test                     # 824 tests, all offline (no Ollama needed)
-cargo clippy --all-targets -- -D warnings   # must be zero warnings
+cargo test --workspace         # every member, all offline (no Ollama needed)
+cargo clippy --workspace --all-targets -- -D warnings   # must be zero warnings
 cargo fmt --all --check        # formatting check
-cargo doc --no-deps            # docs must build with no warnings
+cargo doc --workspace --no-deps # docs must build with no warnings
 cargo bench                    # Criterion benchmarks (tokenizer, context, repomap)
 ```
 
-CI runs: `cargo fmt --all --check`, `cargo clippy --all-targets -- -D warnings`,
-`cargo build --all-targets`, `cargo test`, `cargo doc --no-deps`, and
+CI runs: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+`cargo build --workspace --all-targets`, `cargo test --workspace`, `cargo doc --workspace --no-deps`, and
 `cargo audit`. **All of these must pass before a PR is mergeable.**
 
 ## The Enforced-Verify Gate
@@ -124,18 +118,18 @@ before finishing, the harness injects a recovery reminder and re-runs the turn
   (do not use `contains("exit=0")` — `exit=10` must fail).
 - Failed / sandbox-rejected edits must not arm the gate.
 
-When implementing a fix, **always run the real verification commands** (`cargo
-test`, `cargo clippy`, `cargo fmt`) — do not rely on the agent's simulated
-`run_tests` tool.
+When implementing a fix, **always run the real verification commands**
+(`cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`,
+`cargo fmt --all`) — do not rely on the agent's simulated `run_tests` tool.
 
 ## Common Pitfalls
 
-1. **`tools/` directory** — the tool module was split from a single `tools.rs`
-   into `tools/mod.rs`, `definitions.rs`, `dispatch.rs`, `sandbox/`
-   (`mod.rs` + `confinement.rs`), `document.rs`, `git.rs`, `patch.rs`. When
-   adding a tool, keep the existing structure; definitions go in
-   `definitions.rs`, dispatch in `dispatch.rs`. OS confinement (Landlock /
-   seccomp / rlimits) lives in `sandbox/confinement.rs`.
+1. **Tools and sandbox are separate crates** — definitions and dispatch live
+   in `crates/raven-tools` (`definitions.rs`, `dispatch.rs`). OS confinement
+   (Landlock / seccomp / rlimits) lives in `crates/raven-sandbox`
+   (`confinement.rs`). `landlock` and `seccompiler` stay on that crate.
+   `raven-tokenizer` does not depend on the sandbox. `delegate_task` stays
+   in `raven-agent`'s `tools_exec.rs`.
 2. **Tokenizer is a fast estimator, not exact** — it over-estimates tiktoken counts by roughly 10–35% (mean ~28%), biased slightly high so compaction triggers early. It treats non-newline whitespace as free and applies a ~12% structural-overhead factor. Don't "fix" it to be exact without a real tokenizer to validate against.
 3. **Compaction invariants** — `messages[0]` is always the system message;
    tool-call/tool-result pairs are never split. Don't break these.
@@ -169,8 +163,9 @@ test`, `cargo clippy`, `cargo fmt`) — do not rely on the agent's simulated
 10. **Headless plan revise** — after `[r]evise` + approve, execute the
     *revised* plan and *revised* message list (`run_plan_flow`), not the first
     proposal.
-11. **Persistent state** — todos/goal live in `.raven/state/` (`src/state.rs`),
-    not a `static`. `todo_write`/`goal_set` persist; rebuild the system
+11. **Persistent state** — todos/goal live under `.raven/sessions/<id>/state/`
+    (`crates/raven-persist/src/state.rs`); legacy `.raven/state/` is read-only.
+    Not a `static`. `todo_write`/`goal_set` persist; rebuild the system
     message at the start of every turn *and* after those tools. Nested
     `delegate_task` is depth-1 (`allow_delegate = false` on the child; no
     parent goal/todo overwrite). `think` is read-only and available in
@@ -182,10 +177,10 @@ test`, `cargo clippy`, `cargo fmt`) — do not rely on the agent's simulated
 ## Verification Checklist
 
 - [ ] `cargo build` succeeds with no warnings
-- [ ] `cargo clippy --all-targets -- -D warnings` passes (zero warnings)
+- [ ] `cargo clippy --workspace --all-targets -- -D warnings` passes (zero warnings)
 - [ ] `cargo fmt --all --check` passes
-- [ ] `cargo test` passes (all offline)
-- [ ] `cargo doc --no-deps` builds with no warnings
+- [ ] `cargo test --workspace` passes (all offline)
+- [ ] `cargo doc --workspace --no-deps` builds with no warnings
 - [ ] New public items have doc comments
 - [ ] New logic has unit tests in the module's `#[cfg(test)]` block
 - [ ] No new dependencies unless justified (keep the binary small)

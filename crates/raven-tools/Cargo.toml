@@ -1,0 +1,27 @@
+[package]
+name = "raven-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Tool definitions, dispatch, git, documents, web, skills, repo map, plugins, and the stdio MCP client"
+
+[dependencies]
+raven-proto = { workspace = true }
+raven-config = { workspace = true }
+raven-persist = { workspace = true }
+raven-sandbox = { workspace = true }
+anyhow = { workspace = true }
+dirs = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+reqwest = { workspace = true }
+anydoc = { workspace = true }
+ignore = { workspace = true }
+regex = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+raven-testutil = { workspace = true }
+zip = { workspace = true }
+tokio = { workspace = true }

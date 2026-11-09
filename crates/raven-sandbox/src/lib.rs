@@ -1,0 +1,475 @@
+//! Workspace sandbox: path confinement, shell filtering, subprocess management.
+//!
+//! All file paths are relative to the workspace root and confined to it.
+//! [`Sandbox::safe_resolve`] rejects `..` traversal. [`Sandbox::run_shell`]
+//! blocks a set of destructive patterns and uses a clean environment with only
+//! explicitly allowed vars.
+//!
+//! # Shell safety model
+//!
+//! The shell filter uses two complementary mechanisms, neither of which is a
+//! security boundary:
+//!
+//! 1. **Denylist** ([`dangerous_re`]) — a regex that blocks the most obviously
+//!    destructive patterns (recursive root deletes, fork bombs, `curl | sh`,
+//!    etc.). This is a **best-effort guard**, not a security boundary. A
+//!    denylist is inherently incomplete — it can always be bypassed (e.g. a
+//!    recursive delete of a home directory is not blocked even though a
+//!    recursive delete of the root is).
+//!
+//! 2. **Allowlist** ([`safe_command_re`]) — a regex that matches known-safe
+//!    development commands (build tools, version control, file inspection,
+//!    linters, test runners). When `confirm_shell` is enabled (the default,
+//!    non-`--yolo` path), commands matching the allowlist run without a
+//!    confirmation prompt. Anything outside the allowlist requires explicit
+//!    user approval.
+//!
+//! The `--yolo` flag disables confirmation entirely, but the denylist still
+//! applies as a last-resort filter. These shell-level guards are complemented
+//! by OS-level sandboxing (Landlock, seccomp, rlimits, openat2) applied to
+//! every subprocess — see the confinement module and docs/security.md.
+//!
+//! # Layout
+//!
+//! The file-tool methods (fs), shell execution (shell), and
+//! verification/lint (verify) each live in their own submodule; this
+//! module holds the shared [`Sandbox`] type, the open-flag/limit constants,
+//! and the free helpers they all use.
+
+mod confinement;
+mod fs;
+mod shell;
+mod verify;
+
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
+use regex::Regex;
+
+pub use confinement::{setup_shell_env, spawn_confined, wait_for_child};
+pub use fs::{render_numbered_line, sandbox_search_code};
+pub use shell::is_direct_exec_command;
+
+/// Cross-platform open flags for [`Sandbox::open_beneath`].
+///
+/// Kept intentionally small — just the flags the sandbox's file tools need.
+/// Linux maps these onto `rustix::fs::OFlags` for `openat2`; other platforms
+/// map them onto `std::fs::OpenOptions`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OpenFlags(u32);
+
+impl std::ops::BitOr for OpenFlags {
+    type Output = Self;
+    fn bitor(self, rhs: Self) -> Self {
+        Self(self.0 | rhs.0)
+    }
+}
+
+impl OpenFlags {
+    pub const RDONLY: Self = Self(1 << 0);
+    pub const WRONLY: Self = Self(1 << 1);
+    pub const CREATE: Self = Self(1 << 2);
+    pub const TRUNC: Self = Self(1 << 3);
+    pub const APPEND: Self = Self(1 << 4);
+    pub const CLOEXEC: Self = Self(1 << 5);
+
+    fn contains(self, other: Self) -> bool {
+        self.0 & other.0 != 0
+    }
+
+    #[cfg(target_os = "linux")]
+    fn to_rustix(self) -> rustix::fs::OFlags {
+        let mut f = rustix::fs::OFlags::empty();
+        if self.contains(Self::RDONLY) {
+            f |= rustix::fs::OFlags::RDONLY;
+        }
+        if self.contains(Self::WRONLY) {
+            f |= rustix::fs::OFlags::WRONLY;
+        }
+        if self.contains(Self::CREATE) {
+            f |= rustix::fs::OFlags::CREATE;
+        }
+        if self.contains(Self::TRUNC) {
+            f |= rustix::fs::OFlags::TRUNC;
+        }
+        if self.contains(Self::APPEND) {
+            f |= rustix::fs::OFlags::APPEND;
+        }
+        if self.contains(Self::CLOEXEC) {
+            f |= rustix::fs::OFlags::CLOEXEC;
+        }
+        f
+    }
+}
+
+pub const MAX_TOOL_OUTPUT: usize = 12_000;
+pub const MAX_LINE_LENGTH: usize = 2000;
+const REPLACE_ALL_WARN_THRESHOLD: usize = 20;
+
+/// Best-effort denylist for obviously destructive shell commands.
+///
+/// This is **not a security boundary** — a denylist is inherently incomplete
+/// and can always be bypassed. It blocks the most common destructive patterns
+/// (recursive root deletes, filesystem formatting, fork bombs, `dd` to block
+/// devices, `chmod 777` on root, and `curl`/`wget` piped to a shell) as a
+/// first-pass filter. The `--yolo` flag and `confirm_shell` setting provide
+/// the real safety net.
+pub fn dangerous_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r"(?i)(rm\s+(-[a-z]*f[a-z]*\s+)?/|mkfs|: \(\)\s*\{\s*:\|:&\s*\};:|dd\s+if=/dev/(zero|random|urandom)|chmod\s+(-R\s+)?777\s+/|curl\s+.*\|\s*(ba)?sh|wget\s+.*\|\s*(ba)?sh|format\s+[A-Za-z]:|del\s+/[sfq]\s+[A-Za-z]:\\|rd\s+/[sq]\s+[A-Za-z]:\\|rmdir\s+/[sq]\s+[A-Za-z]:\\|powershell\s+-[Cc]ommand\s+.*Remove-Item.*-Recurse.*-Force|Remove-Item\s+-Recurse\s+-Force\s+[A-Za-z]:\\|diskpart|/dev/tcp|bash\s+-i|nc(at)?\s+[^\n]*-e|mkfifo|powershell[^\n]*-[Ee]nc(odedcommand)?|certutil[^\n]*-decode|Invoke-Expression|\biex\s*\(|base64\s+[^\n]*\|\s*(ba)?sh|curl\s+[^\n]*\|\s*(pwsh|powershell|cmd)|wget\s+[^\n]*\|\s*(pwsh|powershell|cmd))",
+        )
+        .expect("valid regex")
+    })
+}
+
+/// Allowlist of known-safe development commands.
+///
+/// When `confirm_shell` is enabled (the default, non-`--yolo` path), commands
+/// matching this regex run without a confirmation prompt. Commands outside
+/// this set require explicit user approval. This is a convenience, not a
+/// security boundary — the allowlist can be bypassed by chaining commands
+/// (e.g. `cargo build && rm -rf ~`), which is why the denylist still applies.
+pub fn safe_command_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r"(?i)^\s*(cargo|rustc|rustup|rustfmt|go|node|npm|npx|yarn|pnpm|bun|deno|uv|python|python3|pip|pip3|poetry|pytest|ruff|mypy|black|isort|flake8|eslint|prettier|tsc|jest|vitest|mocha|make|cmake|ninja|meson|just|gcc|g\+\+|clang|clang\+\+|ld|lld|ar|strip|objcopy|objdump|nm|readelf|size|strings|file|where|which|type|command|hash|set|env|printenv|pwd|cd|ls|dir|cat|head|tail|wc|sort|uniq|cut|tr|sed|awk|grep|rg|fd|find|findstr|xargs|tee|diff|cmp|comp|fc|comm|patch|tar|gzip|gunzip|bzip2|bunzip2|xz|unxz|zip|unzip|git|hg|svn|fossil|pijul|jj|echo|printf|true|false|test|\[|expr|sleep|date|stat|du|df|basename|dirname|realpath|readlink|mkdir|touch|copy|cp|move|mv|ren|rename|chmod|chown|icacls|attrib|id|whoami|uname|hostname|uptime|ps|tasklist|time|timeout|nice|renice|nohup|exec|source|\.|call|cmd|jq|yq|bat|delta|sccache|wasm-pack|hyperfine|tokei|buf|protoc)(\s|$)",
+        )
+        .expect("valid regex")
+    })
+}
+
+/// System-scope allowlist: commands the system agent may run without a
+/// confirmation prompt. Tiered on top of [`safe_command_re`] (which still
+/// applies — dev commands stay safe in system scope too).
+///
+/// Autonomous in system scope (read-only diagnostics only):
+/// - `pacman` query/search/info forms (never `-S`/`-R`/`-U`/`--sync`),
+/// - `systemctl`/`journalctl`/`coredumpctl`/`loginctl` read-only subcommands,
+/// - `hyprctl`/`nmcli`/`resolvectl`/`bluetoothctl` status readers,
+/// - hardware/resource readers (`lsblk`, `lscpu`, `free`, `sensors`, …),
+/// - `omarchy` informational commands (`version`, `commands`, `debug`,
+///   `<group> --help`, `theme list`, `plugin list`, `bar list`).
+///
+/// Still confirmed (never autonomous): package install/remove/upgrade
+/// (including long forms `--sync`/`-S`), `systemctl
+/// start/stop/restart/enable/disable/mask`, `nmcli` mutations (`connection
+/// modify/up`, `networking off`), `hyprctl keyword/reload/dispatch`,
+/// `journalctl --vacuum*`/`--rotate` (log deletion), `omarchy
+/// install/refresh/restart/theme set/pkg/remove`, anything matching the
+/// destructive denylist (`dangerous_re`), `sudo`/`su`, power operations,
+/// process kills, and raw config writes outside the sandbox's file tools.
+///
+/// Whole-line safety is enforced separately by
+/// [`system_command_autonomous`]: every `|`-segment must individually match
+/// this allowlist, and sequencing/redirect metacharacters (`;`, `&&`, `||`,
+/// `>`, `<`, `$(`, backticks) force a confirmation — an allowlisted prefix
+/// alone must never approve a compound line.
+pub fn system_safe_command_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        // Verbose mode (?x): whitespace/comments in the pattern are ignored.
+        // Read-only only: the `regex` crate has no lookahead, so pacman's
+        // sync flags are enumerated explicitly (query/search/info only —
+        // install (-S pkg), refresh (-Sy), upgrade (-Su), and the long forms
+        // --sync/--remove are NOT listed).
+        Regex::new(
+            r"(?xi)^\s*(?:
+            pacman\s+(?:-[Qq](?:[SiIlodtu]*)|-Q[a-z]*|-Ss|-Si|-Sl|-Sp|-Sn|-F[a-z]*|--query|--search|--info)\b|
+            pacman-conf|
+            # systemd read-only
+            systemctl\s+(?:status|list-|show|is-active|is-enabled|is-failed|cat|get-default|list-dependencies)|
+            journalctl\s+(?:-[a-zA-Z]|--[a-zA-Z-]+)|
+            coredumpctl\s+(?:list|info|dump)|
+            loginctl\s+(?:list|show|status)|
+            systemd-analyze\s+(?:blame|critical-chain|security|time|dump)|
+            busctl\s+(?:list|status|tree)|
+            # desktop / hardware state readers
+            hyprctl\s+(?:monitors|workspaces|clients|activewindow|activeworkspace|version|getoption|decos|devices|binds|layers|splash|cursorinfo)|
+            nmcli\s+(?:device\s+status|general\s+status|networking\s+connectivity|connection\s+show)|
+            resolvectl\s+(?:status|query)|
+            bluetoothctl\s+(?:info|devices|list)|
+            upower\s+-[id]|
+            # resource / hardware readers
+            free|vmstat|iostat|mpstat|pidstat|sensors|lscpu|lsblk|lspci|lsusb|lsmem|lsscsi|
+            # omarchy informational
+            omarchy\s+(?:--help|-h|version|commands|debug)|
+            omarchy\s+\S+\s+--help|
+            omarchy\s+(?:theme\s+list|plugin\s+list|bar\s+list|menu\s+show)
+            )",
+        )
+        .expect("valid regex")
+    })
+}
+
+/// Decide whether a `run_shell` command may run without confirmation in
+/// system scope.
+///
+/// Rules, in order:
+/// 1. Sequencing/redirect/substitution metacharacters (`;`, `&`, `<`, `>`,
+///    backtick, `$(`) always prompt — an allowlisted prefix (`systemctl
+///    status x; sudo …`) must not approve what follows, and `>` changes
+///    where data lands.
+/// 2. Otherwise the line must be autonomous segment-by-segment: each
+///    `|`-separated segment individually matches the system read-only
+///    allowlist ([`system_safe_command_re`]) or the dev allowlist
+///    ([`safe_command_re`]). A pipe to a non-allowlisted sink prompts.
+///
+/// This gate never *blocks*: anything it does not auto-approve still goes
+/// through the normal confirmation prompt (or runs under `--yolo`).
+pub fn system_command_autonomous(command: &str, scope: raven_proto::Scope) -> bool {
+    if !scope.is_system() {
+        return false;
+    }
+    // Any metacharacter forces a prompt: sequencing (`;`, `&&`, `||`),
+    // pipes (`|` — the sink can be a writer: `lscpu | tee /etc/ld.so.preload`),
+    // redirection (`>`), and substitution (`$(`, backtick). An allowlisted
+    // prefix must never stand in for what follows it, and segment-wise
+    // approval via the dev allowlist would let `chmod`/`tee`-class sinks
+    // write privileged files. System-scope diagnostics are issued as single
+    // commands; anything compound prompts.
+    let sequence = Regex::new(r"[;|&<>`]|\$\(").expect("valid regex");
+    if sequence.is_match(command) {
+        return false;
+    }
+    // journalctl's --vacuum* / --rotate flags delete or rotate logs: they are
+    // state-changing, so journalctl is only autonomous without them (checked
+    // here because the regex crate has no lookahead).
+    if command.contains("--vacuum") || command.contains("--rotate") {
+        return false;
+    }
+    // Only the system read-only allowlist auto-runs. The dev allowlist
+    // (chmod, mv, cp, …) is deliberately NOT honored here: in system scope
+    // those targets are system files, so mutations prompt.
+    system_safe_command_re().is_match(command.trim())
+}
+
+/// Normalize a path by resolving `.` and `..` components lexically.
+///
+/// Does not touch the filesystem — purely lexical normalization. This lets
+/// us detect path traversal (`..` escaping the workspace) without relying on
+/// `canonicalize()` (which fails for non-existent paths).
+pub(crate) fn normalize_path(p: &Path) -> PathBuf {
+    let mut components = Vec::new();
+    for comp in p.components() {
+        match comp {
+            std::path::Component::ParentDir => {
+                if let Some(std::path::Component::Normal(_)) = components.last() {
+                    components.pop();
+                } else {
+                    components.push(comp);
+                }
+            }
+            std::path::Component::CurDir => {}
+            other => components.push(other),
+        }
+    }
+    components.iter().collect()
+}
+
+/// A workspace sandbox that confines file operations and shell commands.
+///
+/// All tool methods resolve paths relative to `workspace` and reject any
+/// target that escapes it. `run_shell` additionally applies a best-effort
+/// denylist (`dangerous_re`) and strips secret environment variables.
+///
+/// The denylist is **not a security boundary** — it can always be bypassed.
+/// The `confirm_shell` setting (off with `--yolo`) provides the real safety
+/// net by requiring user approval for each command. Commands matching the
+/// [`safe_command_re`] allowlist skip the confirmation prompt.
+#[derive(Clone)]
+pub struct Sandbox {
+    /// The workspace root; all paths are confined to this directory.
+    pub workspace: PathBuf,
+    /// Extra Landlock RW roots granted to every confined child (e.g. a git
+    /// worktree's shared main repo). Defaults to empty. The process temp dir
+    /// is never implied (see `confinement::FsPolicy`).
+    pub extra_rw: Vec<PathBuf>,
+    /// The operational scope. System scope (workspace `/`) redirects
+    /// `.raven` scratch/state dirs to `~/.raven` via [`Sandbox::raven_dir`].
+    pub scope: raven_proto::Scope,
+    /// When true, `read_file` numbers every 10th line (and the first line of
+    /// the range) instead of every line.
+    pub sparse_lines: bool,
+}
+
+impl Sandbox {
+    /// Create a sandbox rooted at `workspace` (repo scope).
+    pub fn new(workspace: PathBuf) -> Self {
+        Self {
+            workspace,
+            extra_rw: Vec::new(),
+            scope: raven_proto::Scope::Repo,
+            sparse_lines: false,
+        }
+    }
+
+    /// Create a sandbox rooted at `workspace` with extra Landlock RW roots
+    /// granted to every confined child. Used for git worktree sub-agents that
+    /// must reach the shared main repo (a sibling under the temp dir).
+    pub fn with_extra_rw(workspace: PathBuf, extra_rw: Vec<PathBuf>) -> Self {
+        Self {
+            workspace,
+            extra_rw,
+            scope: raven_proto::Scope::Repo,
+            sparse_lines: false,
+        }
+    }
+
+    /// The `.raven` directory for scratch/state (pinned caches, temp dir,
+    /// patch staging). Repo scope keeps it in the workspace; system scope
+    /// moves it under `$HOME/.raven` because the workspace is `/` and
+    /// `/.raven` is neither writable nor meaningful for a per-user agent.
+    pub fn raven_dir(&self) -> PathBuf {
+        if self.scope.is_system() {
+            match std::env::var_os("HOME") {
+                Some(home) => PathBuf::from(home).join(".raven"),
+                None => self.workspace.join(".raven"),
+            }
+        } else {
+            self.workspace.join(".raven")
+        }
+    }
+
+    /// Create a sandbox rooted at `workspace` with an explicit scope.
+    pub fn with_scope(workspace: PathBuf, scope: raven_proto::Scope) -> Self {
+        Self {
+            workspace,
+            extra_rw: Vec::new(),
+            scope,
+            sparse_lines: false,
+        }
+    }
+}
+
+/// Truncate output to max chars with a clear marker.
+///
+/// Char-safe: truncates on a character boundary so multi-byte UTF-8 never
+/// panics on a byte-slice boundary. Production tool results use
+/// [`Sandbox::present_output`] instead of dropping the middle of the output.
+#[allow(dead_code)]
+pub fn truncate_output(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let truncated: String = s.chars().take(max).collect();
+        format!("{}\n...[truncated at {} chars]", truncated, max)
+    }
+}
+
+impl Sandbox {
+    /// Return `body` inline, or write it under `.raven/tool-output` and return
+    /// the path, size, and a short tail.
+    ///
+    /// Truncating drops data the model may need later and the tail-only form
+    /// stays small in every subsequent request.
+    pub fn present_output(&self, label: &str, body: String) -> String {
+        if body.chars().count() <= MAX_TOOL_OUTPUT {
+            return body;
+        }
+        let dir = self.raven_dir().join("tool-output");
+        let seq = SPILL_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let millis = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let safe_label: String = label
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .take(24)
+            .collect();
+        let file_name = format!("{safe_label}-{millis}-{seq}.log");
+        let path = dir.join(&file_name);
+        let bytes = body.len();
+        let lines = body.lines().count();
+        let tail = output_tail(&body, 40, 1500);
+        // The status line is what the verify gate and the model use
+        // (`exit=0`, `killed by signal`). It sits at the front, so a tail-only
+        // stub would hide a passing run and the network-block note.
+        let preamble = status_preamble(&body);
+        if std::fs::create_dir_all(&dir).is_ok() && std::fs::write(&path, &body).is_ok() {
+            let shown = path
+                .strip_prefix(&self.workspace)
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|_| path.display().to_string());
+            format!(
+                "{preamble}\
+                 Full output saved to {shown} ({bytes} bytes, {lines} lines).\n\
+                 Use read_file or grep on that path for any part not shown.\n\
+                 Tail:\n{tail}"
+            )
+        } else {
+            let head: String = body.chars().take(1500).collect();
+            format!(
+                "Could not save the full output ({bytes} bytes). Showing the start and the tail.\n\
+                 {head}\n...\n{tail}"
+            )
+        }
+    }
+}
+
+/// Leading status lines that must survive a spill: the first line, plus a
+/// following `exit=` / signal header and the sandbox network-block note.
+fn status_preamble(body: &str) -> String {
+    let mut out = String::new();
+    for (i, line) in body.lines().take(6).enumerate() {
+        let keep = i == 0
+            || line.contains("exit=")
+            || line.contains("killed by signal")
+            || line.starts_with("This sandbox blocks network access");
+        if !keep {
+            break;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+fn output_tail(body: &str, max_lines: usize, max_chars: usize) -> String {
+    let lines: Vec<&str> = body.lines().collect();
+    let start = lines.len().saturating_sub(max_lines);
+    let mut tail = lines[start..].join("\n");
+    if tail.chars().count() > max_chars {
+        let skip = tail.chars().count() - max_chars;
+        tail = tail.chars().skip(skip).collect();
+    }
+    tail
+}
+
+static SPILL_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Minimal glob matcher: supports `*` and `?` against the file name.
+pub fn glob_matches(path: &Path, pattern: &str) -> bool {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    glob_segment_match(name, pattern)
+}
+
+pub fn glob_segment_match(text: &str, pat: &str) -> bool {
+    let t = text.as_bytes();
+    let p = pat.as_bytes();
+    let (mut ti, mut pi) = (0, 0);
+    let (mut star_t, mut star_p): (Option<usize>, Option<usize>) = (None, None);
+    while ti < t.len() {
+        if pi < p.len() && (p[pi] == b'?' || p[pi] == t[ti]) {
+            ti += 1;
+            pi += 1;
+        } else if pi < p.len() && p[pi] == b'*' {
+            star_p = Some(pi);
+            star_t = Some(ti);
+            pi += 1;
+        } else if let (Some(sp), Some(st)) = (star_p, star_t) {
+            pi = sp + 1;
+            ti = st + 1;
+            star_t = Some(ti);
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && p[pi] == b'*' {
+        pi += 1;
+    }
+    pi == p.len()
+}
