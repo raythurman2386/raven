@@ -1,16 +1,14 @@
-[package]
-name = "raven"
+[workspace]
+resolver = "2"
+members = ["."]
+
+[workspace.package]
 version = "0.6.9"
 edition = "2021"
-description = "An opinionated, personal coding-agent harness for Linux and Raspberry Pi (Ollama / OpenAI-compatible endpoints)"
 license = "MIT"
 rust-version = "1.88"
 
-[[bin]]
-name = "raven"
-path = "src/main.rs"
-
-[dependencies]
+[workspace.dependencies]
 clap = { version = "=4.6.7", features = ["derive", "env"] }
 tokio = { version = "1.36", features = ["rt-multi-thread", "sync", "time", "net", "io-util", "macros"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "blocking"] }
@@ -38,14 +36,59 @@ libc = "0.2"
 ignore = "0.4"
 ring = "0.17"
 base64 = "0.23"
-
-[target.'cfg(target_os = "linux")'.dependencies]
 landlock = "0.4.7"
 seccompiler = "0.5.0"
-
-[dev-dependencies]
 criterion = "0.8"
 zip = "8.6"
+
+[package]
+name = "raven"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "An opinionated, personal coding-agent harness for Linux and Raspberry Pi (Ollama / OpenAI-compatible endpoints)"
+
+[[bin]]
+name = "raven"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+futures-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+dirs = { workspace = true }
+walkdir = { workspace = true }
+regex = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+crossterm = { workspace = true }
+ratatui = { workspace = true }
+unicode-width = { workspace = true }
+unicode-segmentation = { workspace = true }
+pulldown-cmark = { workspace = true }
+anydoc = { workspace = true }
+tempfile = { workspace = true }
+rustix = { workspace = true }
+shlex = { workspace = true }
+libc = { workspace = true }
+ignore = { workspace = true }
+ring = { workspace = true }
+base64 = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = { workspace = true }
+seccompiler = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+zip = { workspace = true }
 
 [[bench]]
 name = "tokenizer"
