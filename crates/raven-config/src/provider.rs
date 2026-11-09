@@ -696,6 +696,7 @@ mod tests {
         // must survive (not wiped by a full HashMap replace).
         //
         // Isolate HOME so a real user global config doesn't leak in.
+        let _home = raven_testutil::home_env_lock();
         let original_home = std::env::var_os("HOME");
         let home = tempfile::tempdir().unwrap();
         std::env::set_var("HOME", home.path());

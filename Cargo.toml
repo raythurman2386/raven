@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [".", "crates/raven-proto", "crates/raven-tokenizer", "crates/raven-config", "crates/raven-persist", "crates/raven-sandbox", "crates/raven-tools", "crates/raven-agent", "crates/raven-tui", "crates/raven-acp", "crates/raven-testutil"]
+default-members = [".", "crates/raven-proto", "crates/raven-tokenizer", "crates/raven-config", "crates/raven-persist", "crates/raven-sandbox", "crates/raven-tools", "crates/raven-agent", "crates/raven-tui", "crates/raven-acp", "crates/raven-testutil"]
 
 [workspace.package]
 version = "0.6.9"

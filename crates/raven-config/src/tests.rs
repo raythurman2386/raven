@@ -334,6 +334,7 @@ fn config_file_parses_no_stream() {
 fn config_file_missing_returns_defaults() {
     // Isolate HOME so a real user global config (~/.raven/config.toml)
     // doesn't leak into this test.
+    let _home = raven_testutil::home_env_lock();
     let original_home = std::env::var_os("HOME");
     let home = tempfile::tempdir().unwrap();
     std::env::set_var("HOME", home.path());
@@ -486,6 +487,7 @@ fn round_temperature_normalizes_negative_zero() {
 #[test]
 fn load_global_dotenv_reads_home_env() {
     // Isolate HOME so a real user ~/.raven/.env doesn't leak in.
+    let _home = raven_testutil::home_env_lock();
     let original_home = std::env::var_os("HOME");
     // Unset any pre-existing OLLAMA_API_KEY so the no-overwrite loader is the
     // one that sets it (and we can assert n==1). Restored afterwards.

@@ -2602,6 +2602,7 @@ dependencies = [
  "dirs",
  "libc",
  "raven-proto",
+ "raven-testutil",
  "reqwest",
  "serde",
  "serde_json",
