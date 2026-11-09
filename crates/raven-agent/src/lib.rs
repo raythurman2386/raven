@@ -41,6 +41,19 @@ pub use parallel::{delegate_task, run_parallel, SubAgentReport};
 pub use raven_proto::{AgentEvent, ChatMessage, FunctionCall, ToolCall};
 pub use title::{generate_session_title, is_title_prompt, sanitize_title};
 
+/// MCP client pieces the TUI and ACP call.
+///
+/// The client stays in raven-tools. Specs and `merge_specs` stay in raven-config.
+pub mod mcp {
+    pub use raven_config::{merge_specs, McpServerSpec};
+    pub use raven_tools::mcp::{connect_specs, McpHandle};
+}
+
+/// Plugin stdio specs merged into a session's MCP list.
+pub mod plugins {
+    pub use raven_tools::plugins::mcp_specs;
+}
+
 // The shared helpers also serve crates that do not call every function.
 #[cfg(test)]
 #[allow(dead_code)]

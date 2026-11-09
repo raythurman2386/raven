@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = [".", "crates/raven-proto", "crates/raven-tokenizer", "crates/raven-config", "crates/raven-persist", "crates/raven-sandbox", "crates/raven-tools", "crates/raven-agent"]
+members = [".", "crates/raven-proto", "crates/raven-tokenizer", "crates/raven-config", "crates/raven-persist", "crates/raven-sandbox", "crates/raven-tools", "crates/raven-agent", "crates/raven-tui", "crates/raven-acp"]
 
 [workspace.package]
 version = "0.6.9"
@@ -47,6 +47,8 @@ raven-persist = { path = "crates/raven-persist", version = "0.6.9" }
 raven-sandbox = { path = "crates/raven-sandbox", version = "0.6.9" }
 raven-tools = { path = "crates/raven-tools", version = "0.6.9" }
 raven-agent = { path = "crates/raven-agent", version = "0.6.9" }
+raven-tui = { path = "crates/raven-tui", version = "0.6.9" }
+raven-acp = { path = "crates/raven-acp", version = "0.6.9" }
 
 [package]
 name = "raven"
@@ -68,22 +70,15 @@ raven-persist = { workspace = true }
 raven-sandbox = { workspace = true }
 raven-tools = { workspace = true }
 raven-agent = { workspace = true }
+raven-tui = { workspace = true }
+raven-acp = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }
 reqwest = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
 anyhow = { workspace = true }
-thiserror = { workspace = true }
 dirs = { workspace = true }
-toml = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-crossterm = { workspace = true }
-ratatui = { workspace = true }
-unicode-width = { workspace = true }
-unicode-segmentation = { workspace = true }
-pulldown-cmark = { workspace = true }
 tempfile = { workspace = true }
 libc = { workspace = true }
 ring = { workspace = true }

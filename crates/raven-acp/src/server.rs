@@ -16,10 +16,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, Mutex};
 
-use crate::agent::{Agent, AgentEvent, ChatMessage};
-use crate::config::{Mode, Settings};
-use crate::mcp::{connect_specs, merge_specs, McpHandle, McpServerSpec};
-use crate::session::{Session, SessionStore};
+use raven_agent::mcp::{connect_specs, merge_specs, McpHandle, McpServerSpec};
+use raven_agent::{Agent, AgentEvent, ChatMessage};
+use raven_config::{Mode, Settings};
+use raven_persist::session::{Session, SessionStore};
 
 use super::protocol::{
     agent_capabilities, agent_info, auth_methods, error_code, error_msg, extract_prompt_text,
@@ -78,7 +78,7 @@ pub struct AcpServer {
     template: Settings,
     /// The full loaded config, so the server can enumerate every configured
     /// provider for the model picker and switch a session onto any of them.
-    cfg: crate::config::ConfigFile,
+    cfg: raven_config::ConfigFile,
     /// Native `[mcp.servers]` specs, merged with per-session ACP `mcpServers`.
     native_mcp: Vec<McpServerSpec>,
     initialized: bool,
@@ -90,7 +90,7 @@ pub struct AcpServer {
 impl AcpServer {
     /// Create a server that clones `template` settings for each new session
     /// and can enumerate providers from `cfg`.
-    pub fn new(template: Settings, cfg: crate::config::ConfigFile) -> Self {
+    pub fn new(template: Settings, cfg: raven_config::ConfigFile) -> Self {
         Self {
             native_mcp: cfg.mcp.specs(),
             template,
@@ -132,7 +132,7 @@ impl AcpServer {
 /// which panics if dropped on the async runtime — so run the whole build
 /// on a blocking thread.
 async fn build_config_options(
-    cfg: crate::config::ConfigFile,
+    cfg: raven_config::ConfigFile,
     current_model: String,
     current_mode: String,
 ) -> Value {
@@ -164,7 +164,7 @@ async fn attach_mcp(
     params: Value,
 ) -> Option<McpHandle> {
     tokio::task::spawn_blocking(move || {
-        let plugin = crate::plugins::mcp_specs(&workspace);
+        let plugin = raven_agent::plugins::mcp_specs(&workspace);
         let specs = merge_specs(
             merge_specs(plugin, native),
             McpServerSpec::from_acp_params(&params),
@@ -711,9 +711,9 @@ async fn apply_model_selection(srv: &mut AcpServer, sid: &str, value: &str) -> R
     // is a known provider name; otherwise the whole value is a model on the
     // current provider.
     if let Some((provider_name, model)) = value.split_once('/') {
-        if crate::config::is_known_provider(&srv.cfg, provider_name) {
+        if raven_config::is_known_provider(&srv.cfg, provider_name) {
             let new_provider =
-                crate::config::resolve_provider(&srv.cfg, Some(provider_name.to_string()));
+                raven_config::resolve_provider(&srv.cfg, Some(provider_name.to_string()));
             sess.settings.provider = new_provider;
             sess.settings.model = model.to_string();
         } else {
@@ -725,7 +725,8 @@ async fn apply_model_selection(srv: &mut AcpServer, sid: &str, value: &str) -> R
 
     // Re-fetch the context window for the (possibly switched) provider/model.
     sess.settings.context_window =
-        crate::context::fetch_context_window(&sess.settings.provider, &sess.settings.model).await;
+        raven_agent::context::fetch_context_window(&sess.settings.provider, &sess.settings.model)
+            .await;
     sess.settings.max_tokens = Settings::derived_max_tokens(sess.settings.context_window);
     let _ = sess
         .store
@@ -892,14 +893,14 @@ async fn run_prompt_inner(
             .sessions
             .get(&sid)
             .ok_or_else(|| anyhow::anyhow!("unknown session"))?;
-        if sess.persisted.summary.title.is_empty() && !crate::agent::is_title_prompt(&text) {
+        if sess.persisted.summary.title.is_empty() && !raven_agent::is_title_prompt(&text) {
             let settings = sess.settings.clone();
             let store = sess.store.clone();
             let id = sess.persisted.summary.id.clone();
             let prompt = text.clone();
             tokio::spawn(async move {
                 if let Some(generated) =
-                    crate::agent::generate_session_title(&settings, &prompt).await
+                    raven_agent::generate_session_title(&settings, &prompt).await
                 {
                     let _ = store.apply_title_if_empty(&id, &generated);
                 }
@@ -916,7 +917,7 @@ async fn run_prompt_inner(
     if settings.provider.name == "grok" && !settings.provider.refresh_grok_session() {
         let msg = format!(
             "No Grok session in {}. Run `raven login` in a terminal, then send this message again.",
-            crate::config::grok_auth_path().display()
+            raven_config::grok_auth_path().display()
         );
         let _ = writer.lock().await.write_frame(&session_update(
             &sid,
@@ -1187,7 +1188,7 @@ async fn serve_io_loop(
 }
 
 /// Run `raven --acp` on real stdin/stdout.
-pub async fn run_stdio(settings: Settings, cfg: crate::config::ConfigFile) -> Result<()> {
+pub async fn run_stdio(settings: Settings, cfg: raven_config::ConfigFile) -> Result<()> {
     tracing::info!("ACP serving (raven {})", env!("CARGO_PKG_VERSION"));
     let server = AcpServer::new(settings, cfg);
     let result = serve_io(

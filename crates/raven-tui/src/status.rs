@@ -6,7 +6,7 @@
 
 use ratatui::style::Color;
 
-use crate::plan::AgentState;
+use raven_proto::AgentState;
 
 use super::Theme;
 

@@ -8,8 +8,8 @@
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::agent::AgentEvent;
-use crate::plan::{Plan, PlanStepStatus};
+use raven_agent::AgentEvent;
+use raven_proto::{Plan, PlanStepStatus};
 
 /// ACP protocol major version Raven implements.
 pub const PROTOCOL_VERSION: u16 = 1;
@@ -185,17 +185,17 @@ pub const ACP_MAX_MODELS_PER_PROVIDER: usize = 200;
 /// endpoint when reachable, else its curated `fallback_models`. Options are
 /// sorted by provider then model and deduped, and per-provider bounded by
 /// [`ACP_MAX_MODELS_PER_PROVIDER`].
-pub fn model_config_option(cfg: &crate::config::ConfigFile, current_value: &str) -> Value {
+pub fn model_config_option(cfg: &raven_config::ConfigFile, current_value: &str) -> Value {
     let mut options: Vec<Value> = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
 
-    for name in crate::config::known_provider_names(cfg) {
+    for name in raven_config::known_provider_names(cfg) {
         // Resolve the provider (config table or built-in) to reach its
         // endpoint + key, then fetch its live model list.
-        let provider = crate::config::resolve_provider(cfg, Some(name.clone()));
-        let models = crate::tui::fetch_live_provider_models(&provider);
+        let provider = raven_config::resolve_provider(cfg, Some(name.clone()));
+        let models = raven_config::fetch_live_provider_models(&provider);
         let models = if models.is_empty() {
-            crate::config::fallback_models(&name)
+            raven_config::fallback_models(&name)
         } else {
             models
         };

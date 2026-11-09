@@ -3,8 +3,8 @@
 
 use super::render::prewrap_lines;
 use super::*;
-use crate::config::{ConfigFile, Provider, Scope};
-use crate::plan::AgentState;
+use raven_config::{ConfigFile, Provider, Scope};
+use raven_proto::AgentState;
 use serde_json::json;
 use std::path::Path;
 
@@ -628,7 +628,7 @@ fn show_plan_hidden_when_no_preview() {
 
 #[test]
 fn plan_step_progress_counts_completed() {
-    use crate::plan::{Plan, PlanStep, PlanStepStatus};
+    use raven_proto::{Plan, PlanStep, PlanStepStatus};
     let plan = Plan {
         title: "t".into(),
         created_at: "now".into(),
@@ -680,7 +680,7 @@ fn test_settings(workspace: &std::path::Path) -> Settings {
         sandbox_extra_rw: Vec::new(),
         allow_delegate: true,
         session_state_dir: None,
-        efficiency: crate::config::EfficiencyFlags::default(),
+        efficiency: raven_config::EfficiencyFlags::default(),
     }
 }
 
@@ -796,7 +796,7 @@ fn slash_command_completes_provider_and_model_names() {
     }
     let settings = test_settings(tempfile::tempdir().unwrap().path());
     let arg_candidates = |cmd: &str| -> Vec<String> {
-        crate::tui::completion_arg_candidates(&settings, &ConfigFile::default(), cmd)
+        crate::completion_arg_candidates(&settings, &ConfigFile::default(), cmd)
     };
 
     let provider = candidates_for("/provider o", &arg_candidates).unwrap();
@@ -1371,11 +1371,11 @@ fn opencode_go_models_autocomplete() {
     // The provider-aware fallback must surface opencode-go models even when
     // the live /models fetch returns nothing (deterministic offline test).
     let mut settings = test_settings(tempfile::tempdir().unwrap().path());
-    settings.provider = crate::config::Provider::builtin("opencode-go")
+    settings.provider = raven_config::Provider::builtin("opencode-go")
         .expect("opencode-go builtin")
         .resolve_key();
     let arg_candidates = |cmd: &str| -> Vec<String> {
-        crate::tui::completion_arg_candidates(&settings, &ConfigFile::default(), cmd)
+        crate::completion_arg_candidates(&settings, &ConfigFile::default(), cmd)
     };
 
     let q = candidates_for("/model q", &arg_candidates).unwrap();
@@ -1655,7 +1655,7 @@ fn mouse_scroll_moves_log_not_history() {
     let size = Rect::new(0, 0, 80, 24);
     let log_rect = Rect::new(0, 1, 80, 18);
     let dir = tempfile::tempdir().unwrap();
-    let store = crate::session::SessionStore::for_workspace(dir.path()).unwrap();
+    let store = raven_persist::session::SessionStore::for_workspace(dir.path()).unwrap();
     let mut session = store.create("test-model").unwrap();
 
     let up = MouseEvent {

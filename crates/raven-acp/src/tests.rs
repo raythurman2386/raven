@@ -5,9 +5,9 @@ use super::protocol::{
     tool_kind, Incoming, StopReason, AUTH_METHOD_ID,
 };
 use super::server::{dispatch, AcpServer, FrameWrite};
-use crate::agent::AgentEvent;
-use crate::config::{ConfigFile, Mode, Provider, Scope, Settings};
-use crate::plan::{Plan, PlanStep, PlanStepStatus};
+use raven_agent::AgentEvent;
+use raven_config::{ConfigFile, Mode, Provider, Scope, Settings};
+use raven_proto::{Plan, PlanStep, PlanStepStatus};
 use serde_json::{json, Value};
 use std::io::Write;
 use std::sync::{Arc, Mutex as StdMutex};
@@ -49,7 +49,7 @@ fn settings(ws: &std::path::Path) -> Settings {
         sandbox_extra_rw: Vec::new(),
         allow_delegate: true,
         session_state_dir: None,
-        efficiency: crate::config::EfficiencyFlags::default(),
+        efficiency: raven_config::EfficiencyFlags::default(),
     }
 }
 
@@ -551,12 +551,12 @@ async fn load_replays_history() {
     }
     let tmp = tempfile::tempdir().unwrap();
     let ws = tmp.path().canonicalize().unwrap();
-    let store = crate::session::SessionStore::for_workspace(&ws).unwrap();
+    let store = raven_persist::session::SessionStore::for_workspace(&ws).unwrap();
     let mut sess = store.create("fake-model").unwrap();
     store
         .append_message(
             &sess,
-            &crate::agent::ChatMessage {
+            &raven_agent::ChatMessage {
                 role: "user".into(),
                 content: Some("hello history".into()),
                 tool_calls: None,
@@ -569,7 +569,7 @@ async fn load_replays_history() {
     store
         .append_message(
             &sess,
-            &crate::agent::ChatMessage {
+            &raven_agent::ChatMessage {
                 role: "assistant".into(),
                 content: Some("hi back".into()),
                 tool_calls: None,
@@ -1168,7 +1168,7 @@ async fn checkpoint_persists_each_tool_round_through_acp() {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
 
-    let store = crate::session::SessionStore::for_workspace(&ws).unwrap();
+    let store = raven_persist::session::SessionStore::for_workspace(&ws).unwrap();
     let persisted = store.load(&sid).unwrap();
     let tool_results = persisted
         .messages

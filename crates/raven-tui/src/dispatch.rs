@@ -12,8 +12,8 @@
 use anyhow::Result;
 
 use crate::commands::ParsedCommand;
-use crate::config::Settings;
-use crate::session::{Session, SessionStore};
+use raven_config::Settings;
+use raven_persist::session::{Session, SessionStore};
 
 use super::blocks::BlockKind;
 use super::{begin_agent_turn, theme_name, Theme, TuiState};
@@ -30,7 +30,7 @@ pub(super) async fn dispatch_slash_command(
     store: &SessionStore,
     session: &mut Session,
     compact_at: &mut usize,
-    config_file: &crate::config::ConfigFile,
+    config_file: &raven_config::ConfigFile,
 ) -> Result<bool> {
     match pc.name.as_str() {
         "help" => {
@@ -72,7 +72,7 @@ pub(super) async fn dispatch_slash_command(
                 ));
                 state.log_dirty = true;
             } else {
-                match crate::config::parse_reasoning_effort(raw) {
+                match raven_config::parse_reasoning_effort(raw) {
                     Some(level) => {
                         settings.reasoning_effort = Some(level.to_string());
                         state.push_system(format!("reasoning effort → {level}"));
@@ -100,7 +100,8 @@ pub(super) async fn dispatch_slash_command(
                 // Match startup behaviour: prefer the live Ollama `/api/show`
                 // value, falling back to the name heuristic when unreachable.
                 settings.context_window =
-                    crate::context::fetch_context_window(&settings.provider, &settings.model).await;
+                    raven_agent::context::fetch_context_window(&settings.provider, &settings.model)
+                        .await;
                 settings.max_tokens = Settings::derived_max_tokens(settings.context_window);
                 *compact_at = ((settings.context_window - settings.context_window / 8) as f32
                     * settings.compact_threshold) as usize;
@@ -136,14 +137,14 @@ pub(super) async fn dispatch_slash_command(
         "provider" => {
             let name = pc.args.trim();
             if name.is_empty() {
-                let names = crate::config::known_provider_names(config_file);
+                let names = raven_config::known_provider_names(config_file);
                 state.push_system(format!(
                     "current provider: {}\navailable: {}",
                     settings.provider.name,
                     names.join(", ")
                 ));
                 state.log_dirty = true;
-            } else if !crate::config::is_known_provider(config_file, name) {
+            } else if !raven_config::is_known_provider(config_file, name) {
                 state.push_system(format!("unknown provider {name:?} — try /provider to list"));
                 state.log_dirty = true;
             } else {
@@ -152,7 +153,7 @@ pub(super) async fn dispatch_slash_command(
                 // /model override), adopt the new provider's default model.
                 let old_default = settings.provider.default_model.clone();
                 let new_provider =
-                    crate::config::resolve_provider(config_file, Some(name.to_string()));
+                    raven_config::resolve_provider(config_file, Some(name.to_string()));
                 if settings.model == old_default {
                     settings.model = new_provider.default_model.clone();
                 }
@@ -160,7 +161,8 @@ pub(super) async fn dispatch_slash_command(
                 // Match startup behaviour: prefer the live provider API value,
                 // falling back to the name heuristic when unreachable.
                 settings.context_window =
-                    crate::context::fetch_context_window(&settings.provider, &settings.model).await;
+                    raven_agent::context::fetch_context_window(&settings.provider, &settings.model)
+                        .await;
                 settings.max_tokens = Settings::derived_max_tokens(settings.context_window);
                 *compact_at = ((settings.context_window - settings.context_window / 8) as f32
                     * settings.compact_threshold) as usize;
@@ -362,7 +364,7 @@ pub(super) async fn dispatch_slash_command(
                     return Ok(true);
                 }
             };
-            let cutoff = date_minus_days(crate::session::now_iso_public().as_str(), days);
+            let cutoff = date_minus_days(raven_persist::session::now_iso_public().as_str(), days);
             let current_id = session.summary.id.clone();
             let mut stale = Vec::new();
             match store.list() {

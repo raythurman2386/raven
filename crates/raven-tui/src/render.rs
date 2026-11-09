@@ -8,7 +8,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
 
-use crate::agent::ChatMessage;
+use raven_agent::ChatMessage;
 
 use super::blocks::{AssistantBlock, BlockKind, SystemBlock, ToolBlock, UserBlock};
 use super::markdown;
@@ -390,7 +390,7 @@ pub fn message_to_block(msg: &ChatMessage) -> Option<BlockKind> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::blocks::{AssistantBlock, ErrorBlock};
+    use crate::blocks::{AssistantBlock, ErrorBlock};
 
     fn mk(texts: &[&str]) -> Vec<Line<'static>> {
         texts

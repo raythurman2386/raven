@@ -43,15 +43,15 @@ use std::io::{stdout, Write};
 use std::sync::{Mutex, OnceLock};
 use tokio::sync::mpsc;
 
-use crate::agent::{generate_session_title, is_title_prompt, Agent, AgentEvent, ChatMessage};
-use crate::commands;
-use crate::config::{Mode, Settings};
-use crate::context::history_tokens;
-use crate::mcp::McpHandle;
-use crate::plan::{self, AgentState};
-use crate::session::{Session, SessionStore};
+use raven_agent::context::history_tokens;
+use raven_agent::mcp::McpHandle;
+use raven_agent::{generate_session_title, is_title_prompt, Agent, AgentEvent, ChatMessage};
+use raven_config::{Mode, Settings};
+use raven_persist::session::{Session, SessionStore};
+use raven_proto::{self as plan, AgentState};
 
 mod blocks;
+pub mod commands;
 mod completion;
 mod dispatch;
 mod markdown;
@@ -78,7 +78,7 @@ use status::{fmt_tokens, spinner_frame, state_label, usage_color, waiting_diamon
 static MODEL_COMPLETION_CACHE: OnceLock<Mutex<HashMap<String, Option<Vec<String>>>>> =
     OnceLock::new();
 
-fn provider_model_candidates(provider: &crate::config::Provider) -> Vec<String> {
+fn provider_model_candidates(provider: &raven_config::Provider) -> Vec<String> {
     let cache = MODEL_COMPLETION_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let key = format!(
         "{}|{}|{}",
@@ -105,12 +105,12 @@ fn provider_model_candidates(provider: &crate::config::Provider) -> Vec<String> 
     fetched
 }
 
-pub(crate) use crate::config::fetch_live_provider_models;
+pub(crate) use raven_config::fetch_live_provider_models;
 
 /// Argument completion candidates for slash commands that accept a value.
 pub fn completion_arg_candidates(
     settings: &Settings,
-    config_file: &crate::config::ConfigFile,
+    config_file: &raven_config::ConfigFile,
     cmd: &str,
 ) -> Vec<String> {
     match cmd {
@@ -123,7 +123,7 @@ pub fn completion_arg_candidates(
             .into_iter()
             .map(str::to_string)
             .collect(),
-        "provider" => crate::config::known_provider_names(config_file),
+        "provider" => raven_config::known_provider_names(config_file),
         "model" => {
             let live_names = provider_model_candidates(&settings.provider);
             let mut preferred = Vec::new();
@@ -150,7 +150,7 @@ pub fn completion_arg_candidates(
             }
             // Provider-aware curated fallback (e.g. opencode-go models) so
             // autocomplete always has candidates even before a live fetch.
-            for candidate in crate::config::fallback_models(&settings.provider.name) {
+            for candidate in raven_config::fallback_models(&settings.provider.name) {
                 push_unique(&candidate);
             }
             // Provider-agnostic commonly-used models, kept as a final net.
@@ -211,7 +211,7 @@ struct TuiState {
     iterations_max: usize,
     plan_pending: bool,
     plan_preview: Vec<String>,
-    active_plan: Option<crate::plan::Plan>,
+    active_plan: Option<raven_proto::Plan>,
     running: bool,
     mode: Mode,
     assistant_text: String,
@@ -484,14 +484,15 @@ impl Command for DisableAlternateScroll {
 
 pub async fn run_tui(
     mut settings: Settings,
-    config_file: crate::config::ConfigFile,
+    config_file: raven_config::ConfigFile,
     resume_session: Option<Session>,
 ) -> Result<()> {
     let workspace = settings.workspace.clone();
     let native = config_file.mcp.specs();
     let mcp = tokio::task::spawn_blocking(move || {
-        let specs = crate::mcp::merge_specs(crate::plugins::mcp_specs(&workspace), native);
-        crate::mcp::connect_specs(&specs)
+        let specs =
+            raven_agent::mcp::merge_specs(raven_agent::plugins::mcp_specs(&workspace), native);
+        raven_agent::mcp::connect_specs(&specs)
     })
     .await
     .unwrap_or(None);
@@ -580,7 +581,7 @@ pub async fn run_tui(
             state.log_dirty || state.stream_patch || state.messages_dirty || state.input_dirty;
 
         if state.follow_omarchy {
-            if let Some(mtime) = crate::tui::theme::omarchy_colors_mtime() {
+            if let Some(mtime) = crate::theme::omarchy_colors_mtime() {
                 if state.omarchy_mtime != Some(mtime) {
                     if let Some((theme, mtime)) = Theme::read_omarchy_theme() {
                         state.omarchy_mtime = Some(mtime);
@@ -1577,7 +1578,7 @@ fn keyhint(state: &TuiState) -> String {
 
 /// Count completed vs total plan steps for the status-strip progress readout.
 /// A step counts as done when `Completed` or `Skipped`.
-fn plan_step_progress(plan: &crate::plan::Plan) -> (usize, usize) {
+fn plan_step_progress(plan: &raven_proto::Plan) -> (usize, usize) {
     let total = plan.steps.len();
     let done = plan
         .steps
@@ -1585,7 +1586,7 @@ fn plan_step_progress(plan: &crate::plan::Plan) -> (usize, usize) {
         .filter(|s| {
             matches!(
                 s.status,
-                crate::plan::PlanStepStatus::Completed | crate::plan::PlanStepStatus::Skipped
+                raven_proto::PlanStepStatus::Completed | raven_proto::PlanStepStatus::Skipped
             )
         })
         .count();
@@ -1598,12 +1599,12 @@ fn task_hint(settings: &Settings) -> String {
     let Some(dir) = settings.session_state_dir.as_deref() else {
         return String::new();
     };
-    let todos = crate::state::load_todos_from_dir(dir);
+    let todos = raven_persist::state::load_todos_from_dir(dir);
     let open: Vec<_> = todos
         .iter()
         .filter(|t| t.status != "completed" && t.status != "cancelled")
         .collect();
-    let goal = crate::state::load_goal_from_dir(dir).filter(|g| {
+    let goal = raven_persist::state::load_goal_from_dir(dir).filter(|g| {
         !g.description.trim().is_empty() && g.status != "done" && g.status != "completed"
     });
     if open.is_empty() && goal.is_none() {
@@ -2510,7 +2511,7 @@ fn start_task(
     text: &str,
     settings: &Settings,
     store: &SessionStore,
-    session: &crate::session::Session,
+    session: &raven_persist::session::Session,
 ) -> Result<()> {
     state.running = true;
     state.status = "running…".into();
@@ -2570,7 +2571,7 @@ fn handle_plan_response(
     text: &str,
     settings: &Settings,
     store: &SessionStore,
-    session: &crate::session::Session,
+    session: &raven_persist::session::Session,
 ) -> Result<()> {
     let low = text.to_lowercase();
     let approve = matches!(
@@ -2741,6 +2742,11 @@ pub(crate) fn theme_name(theme: Theme) -> &'static str {
         .map(|(n, _)| *n)
         .unwrap_or("?")
 }
+
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../../../src/testutil.rs"]
+mod testutil;
 
 #[cfg(test)]
 mod tests;

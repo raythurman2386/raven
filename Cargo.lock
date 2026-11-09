@@ -2538,11 +2538,9 @@ dependencies = [
  "base64 0.23.1",
  "clap",
  "criterion",
- "crossterm",
  "dirs",
  "libc",
- "pulldown-cmark",
- "ratatui",
+ "raven-acp",
  "raven-agent",
  "raven-config",
  "raven-persist",
@@ -2550,18 +2548,30 @@ dependencies = [
  "raven-sandbox",
  "raven-tokenizer",
  "raven-tools",
+ "raven-tui",
  "reqwest",
  "ring",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "raven-acp"
+version = "0.6.9"
+dependencies = [
+ "anyhow",
+ "libc",
+ "raven-agent",
+ "raven-config",
+ "raven-persist",
+ "raven-proto",
  "serde",
  "serde_json",
  "tempfile",
- "thiserror 2.0.21",
  "tokio",
- "toml",
  "tracing",
- "tracing-subscriber",
- "unicode-segmentation",
- "unicode-width",
 ]
 
 [[package]]
@@ -2673,6 +2683,29 @@ dependencies = [
  "tokio",
  "tracing",
  "zip",
+]
+
+[[package]]
+name = "raven-tui"
+version = "0.6.9"
+dependencies = [
+ "anyhow",
+ "crossterm",
+ "dirs",
+ "libc",
+ "pulldown-cmark",
+ "ratatui",
+ "raven-agent",
+ "raven-config",
+ "raven-persist",
+ "raven-proto",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml",
+ "unicode-segmentation",
+ "unicode-width",
 ]
 
 [[package]]

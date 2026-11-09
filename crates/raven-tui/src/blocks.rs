@@ -57,7 +57,7 @@ impl AssistantBlock {
 }
 
 /// A tool call. `active` glimmers bright while running; `end_tick` drives the
-/// fade after completion. `name` matches [`crate::agent::AgentEvent::ToolEnd`]
+/// fade after completion. `name` matches [`raven_agent::AgentEvent::ToolEnd`]
 /// so parallel tools deactivate the correct row (not always `blocks.last()`).
 #[derive(Clone)]
 pub struct ToolBlock {
