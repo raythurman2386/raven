@@ -4,8 +4,8 @@
 //! model endpoint. Run with: `cargo test eval_suite`
 
 use super::super::core::{Agent, CompletionSource};
-use super::super::types::AgentEvent;
 use crate::config::{Mode, Provider, Scope, Settings};
+use raven_proto::AgentEvent;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 

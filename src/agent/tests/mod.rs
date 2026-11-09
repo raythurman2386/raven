@@ -13,8 +13,8 @@ use super::loop_control::{
     VERIFY_PLATEAU_K,
 };
 use super::stream::args_to_string;
-use super::types::{AgentEvent, ChatMessage, FunctionCall, ToolCall};
 use crate::config::{Mode, Scope};
+use raven_proto::{AgentEvent, ChatMessage, FunctionCall, ToolCall};
 use serde_json::{json, Value};
 use std::net::TcpListener as StdTcpListener;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -300,7 +300,7 @@ fn loop_breaker_ignores_recent_text_output() {
 }
 
 fn successful_tool_turn(name: &str, args: &str, call_id: &str, result: &str) -> Vec<ChatMessage> {
-    use super::types::{FunctionCall, ToolCall};
+    use raven_proto::{FunctionCall, ToolCall};
     vec![
         ChatMessage {
             role: "assistant".into(),

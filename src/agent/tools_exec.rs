@@ -12,14 +12,14 @@ use anyhow::Result;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
-use crate::error::ToolError;
 use crate::tools::{
     dispatch, safe_command_re, system_command_autonomous, validate_tool_call, Sandbox,
     MAX_ARGUMENTS_BYTES,
 };
+use raven_proto::ToolError;
 
 use super::core::Agent;
-use super::types::{AgentEvent, ChatMessage, ToolCall};
+use raven_proto::{AgentEvent, ChatMessage, ToolCall};
 
 /// Outcome of a parallel `spawn_blocking` tool dispatch.
 type ParallelToolJoin = (String, String, Result<String, ToolError>, String, bool);
@@ -497,7 +497,7 @@ impl Agent {
         // Plan progress: mark the current step Completed and advance to
         // the next step after tool calls finish.
         if let Some(ref mut plan) = self.plan {
-            crate::plan::advance_step(plan, &mut self.current_step, true, false);
+            raven_proto::advance_step(plan, &mut self.current_step, true, false);
             let _ = tx.send(AgentEvent::PlanProgress(plan.clone())).await;
         }
 
@@ -1095,7 +1095,7 @@ mod tests {
 
     #[test]
     fn identical_success_streak_counts_trailing_matches() {
-        use super::super::types::{FunctionCall, ToolCall};
+        use raven_proto::{FunctionCall, ToolCall};
         let mut msgs = Vec::new();
         for i in 0..3 {
             let id = format!("c{i}");
@@ -1131,7 +1131,7 @@ mod tests {
 
     #[test]
     fn hard_stop_refusal_stays_sticky_for_same_call() {
-        use super::super::types::{FunctionCall, ToolCall};
+        use raven_proto::{FunctionCall, ToolCall};
 
         let mut msgs = Vec::new();
         for i in 0..3 {

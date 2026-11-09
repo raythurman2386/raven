@@ -2547,6 +2547,8 @@ dependencies = [
  "libc",
  "pulldown-cmark",
  "ratatui",
+ "raven-proto",
+ "raven-tokenizer",
  "regex",
  "reqwest",
  "ring",
@@ -2565,6 +2567,26 @@ dependencies = [
  "unicode-width",
  "walkdir",
  "zip",
+]
+
+[[package]]
+name = "raven-proto"
+version = "0.6.9"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
+name = "raven-tokenizer"
+version = "0.6.9"
+dependencies = [
+ "raven-proto",
+ "regex",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

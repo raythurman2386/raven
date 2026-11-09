@@ -12,9 +12,9 @@
 //! - System message (index 0) is never dropped.
 //! - Tool-call / tool-result pairs are never split.
 
-use crate::agent::ChatMessage;
-pub use crate::tokenizer::{history_tokens, message_tokens};
-use crate::tokenizer::{TokenUsage, UsageCalibration};
+use raven_proto::ChatMessage;
+pub use raven_tokenizer::{history_tokens, message_tokens};
+use raven_tokenizer::{TokenUsage, UsageCalibration};
 
 /// Prefix of the user-role setup message that sits after the stable system
 /// prompt and before the conversation. Compaction keeps it with the system
@@ -841,7 +841,7 @@ fn prune_tool_results(messages: &mut [ChatMessage], keep_turns: usize) {
 mod tests {
     use super::*;
     use crate::agent::{ChatMessage, FunctionCall, ToolCall};
-    use crate::tokenizer::{count_tokens as estimate_tokens, TokenUsage, MSG_OVERHEAD};
+    use raven_tokenizer::{count_tokens as estimate_tokens, TokenUsage, MSG_OVERHEAD};
 
     fn msg(role: &str, content: &str) -> ChatMessage {
         ChatMessage {

@@ -12,8 +12,8 @@ use crate::context::history_tokens;
 
 use super::core::Agent;
 use super::tools_exec::IDENTICAL_SUCCESS_LOOP_N;
-use super::types::{AgentEvent, ChatMessage};
-use crate::tokenizer::TokenUsage;
+use raven_proto::{AgentEvent, ChatMessage};
+use raven_tokenizer::TokenUsage;
 
 impl Agent {
     /// Handle the no-tool-calls branch of an iteration.
@@ -84,7 +84,7 @@ impl Agent {
         }
         self.messages.push(assistant);
         if let Some(ref mut plan) = self.plan {
-            crate::plan::advance_step(plan, &mut self.current_step, false, true);
+            raven_proto::advance_step(plan, &mut self.current_step, false, true);
             let _ = tx.send(AgentEvent::PlanProgress(plan.clone())).await;
         }
         let _ = tx.send(AgentEvent::Done).await;

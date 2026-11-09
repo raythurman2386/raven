@@ -15,18 +15,18 @@ use tokio::sync::mpsc;
 
 use crate::config::{load_agents_md, Mode, Settings};
 use crate::context::{compact_if_needed_llm, history_tokens};
-use crate::error::{cap_http_body, AgentError};
 use crate::mcp::McpHandle;
 use crate::memory;
-use crate::plan::Plan;
-use crate::tokenizer::{append_usage_jsonl, count_tokens, UsageCalibration, MSG_OVERHEAD};
 use crate::tools::{tool_definitions, Sandbox};
+use raven_proto::Plan;
+use raven_proto::{cap_http_body, AgentError};
+use raven_tokenizer::{append_usage_jsonl, count_tokens, UsageCalibration, MSG_OVERHEAD};
 
 use super::loop_control::{compute_reminders, summarize_request, verify_plateau_should_stop};
 use super::stream::ParsedCompletion;
 #[cfg(test)]
 use super::stream::{process_non_stream_json, process_stream_text};
-use super::types::{AgentEvent, ChatMessage, FunctionCall, ToolCall};
+use raven_proto::{AgentEvent, ChatMessage, FunctionCall, ToolCall};
 
 enum IterationOutcome {
     Continue,
@@ -964,7 +964,7 @@ impl Agent {
         let mut edited = false;
 
         if let Some(ref mut plan) = self.plan {
-            crate::plan::advance_step(plan, &mut self.current_step, false, false);
+            raven_proto::advance_step(plan, &mut self.current_step, false, false);
             let _ = tx.send(AgentEvent::PlanProgress(plan.clone())).await;
         }
 
@@ -1537,14 +1537,14 @@ impl Agent {
                     return Err(AgentError::ProviderUnreachable {
                         provider: self.settings.provider.name.clone(),
                         url: url.to_string(),
-                        source: e,
+                        detail: e.to_string(),
                     });
                 }
                 Err(e) => {
                     return Err(AgentError::ProviderUnreachable {
                         provider: self.settings.provider.name.clone(),
                         url: url.to_string(),
-                        source: e,
+                        detail: e.to_string(),
                     });
                 }
             }
@@ -1655,15 +1655,15 @@ fn log_prompt_sections(messages: &[ChatMessage], tools: &Value) {
     let system_tokens = messages
         .first()
         .filter(|m| m.role == "system")
-        .map(crate::tokenizer::message_tokens)
+        .map(raven_tokenizer::message_tokens)
         .unwrap_or(0);
     let setup_tokens = messages
         .get(1)
         .filter(|m| crate::context::is_setup_message(m))
-        .map(crate::tokenizer::message_tokens)
+        .map(raven_tokenizer::message_tokens)
         .unwrap_or(0);
     let tools_tokens = count_tokens(&tools.to_string());
-    let history_tokens = crate::tokenizer::history_tokens(messages)
+    let history_tokens = raven_tokenizer::history_tokens(messages)
         .saturating_sub(system_tokens)
         .saturating_sub(setup_tokens);
     tracing::info!(
@@ -1801,9 +1801,9 @@ mod setup_body_tests {
 
 #[cfg(test)]
 mod wire_format_tests {
-    use super::super::types::{ChatMessage, FunctionCall, ToolCall};
     use super::request_messages_json;
-    use crate::tokenizer::TokenUsage;
+    use raven_proto::{ChatMessage, FunctionCall, ToolCall};
+    use raven_tokenizer::TokenUsage;
     use serde_json::json;
 
     #[test]

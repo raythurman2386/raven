@@ -7,8 +7,8 @@
 //! finish logic all run against deterministic scripted completions.
 
 use super::super::core::{clamp_max_tokens, Agent, CompletionSource};
-use super::super::types::AgentEvent;
 use crate::config::{Mode, Provider, Scope, Settings};
+use raven_proto::AgentEvent;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
@@ -875,16 +875,16 @@ fn prompt_section_estimates_for_this_repo() {
     let mut settings = settings_for(&root);
     settings.model = "grok-4.7".into();
     let agent = Agent::new(settings.clone()).unwrap();
-    let system = crate::tokenizer::count_tokens(agent.messages[0].content.as_deref().unwrap_or(""));
-    let setup = crate::tokenizer::count_tokens(agent.messages[1].content.as_deref().unwrap_or(""));
-    let tools = crate::tokenizer::count_tokens(&agent.tools_value().to_string());
+    let system = raven_tokenizer::count_tokens(agent.messages[0].content.as_deref().unwrap_or(""));
+    let setup = raven_tokenizer::count_tokens(agent.messages[1].content.as_deref().unwrap_or(""));
+    let tools = raven_tokenizer::count_tokens(&agent.tools_value().to_string());
     settings.efficiency.lean_prompt = true;
     settings.efficiency.tool_offload = true;
     settings.efficiency.sparse_line_numbers = true;
     let lean = Agent::new(settings).unwrap();
     let lean_system =
-        crate::tokenizer::count_tokens(lean.messages[0].content.as_deref().unwrap_or(""));
-    let lean_tools = crate::tokenizer::count_tokens(&lean.tools_value().to_string());
+        raven_tokenizer::count_tokens(lean.messages[0].content.as_deref().unwrap_or(""));
+    let lean_tools = raven_tokenizer::count_tokens(&lean.tools_value().to_string());
     eprintln!(
         "SECTION_EST system={system} setup={setup} tools={tools} lean_system={lean_system} offload_tools={lean_tools}"
     );
@@ -982,12 +982,12 @@ fn with_plan_switches_agent_to_executor_mode() {
     let tmp = tempfile::tempdir().unwrap();
     let mut s = settings_for(tmp.path());
     s.mode = Mode::Plan;
-    let plan = crate::plan::Plan {
+    let plan = raven_proto::Plan {
         title: "t".into(),
         created_at: "now".into(),
-        steps: vec![crate::plan::PlanStep {
+        steps: vec![raven_proto::PlanStep {
             description: "do it".into(),
-            status: crate::plan::PlanStepStatus::Pending,
+            status: raven_proto::PlanStepStatus::Pending,
         }],
     };
     let agent = Agent::new(s).unwrap().with_plan(plan);

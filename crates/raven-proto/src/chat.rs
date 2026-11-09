@@ -3,8 +3,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::plan::Plan;
-use crate::tokenizer::TokenUsage;
+use crate::{Plan, TokenUsage};
 
 /// A single chat message in the OpenAI conversation format.
 ///
@@ -64,7 +63,7 @@ pub struct FunctionCall {
     pub arguments: String,
 }
 
-/// Events emitted by [`crate::agent::Agent::run`] over an `mpsc` channel.
+/// Events emitted by the agent loop over an `mpsc` channel.
 ///
 /// Consumers (headless runner, TUI) match on these to render progress.
 pub enum AgentEvent {

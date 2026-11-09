@@ -17,8 +17,8 @@ use std::collections::BTreeMap;
 use tokio::sync::mpsc;
 
 use super::core::Agent;
-use super::types::AgentEvent;
-use crate::tokenizer::TokenUsage;
+use raven_proto::AgentEvent;
+use raven_tokenizer::TokenUsage;
 
 /// Parsed completion payload shared by stream and non-stream paths.
 #[derive(Debug, Default)]

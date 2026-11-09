@@ -16,22 +16,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-/// A single todo item (content + status + priority).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TodoItem {
-    pub content: String,
-    pub status: String,
-    pub priority: String,
-}
-
-/// The agent's current goal, persisted across turns and — via session resume
-/// — across process restarts.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Goal {
-    pub description: String,
-    pub status: String,
-    pub updated_at: String,
-}
+pub use raven_proto::{Goal, TodoItem};
 
 const STATE_DIR_NAME: &str = "state";
 const TODOS_FILE: &str = "todos.json";

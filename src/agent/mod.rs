@@ -29,14 +29,12 @@ mod core;
 mod loop_control;
 mod parallel;
 mod stream;
-mod title;
-mod tools_exec;
-mod types;
-
 #[cfg(test)]
 mod tests;
+mod title;
+mod tools_exec;
 
 pub use core::Agent;
 pub use parallel::{delegate_task, run_parallel, SubAgentReport};
+pub use raven_proto::{AgentEvent, ChatMessage, FunctionCall, ToolCall};
 pub use title::{generate_session_title, is_title_prompt, sanitize_title};
-pub use types::{AgentEvent, ChatMessage, FunctionCall, ToolCall};

@@ -9,7 +9,7 @@ use crate::config::Settings;
 use crate::tools::Sandbox;
 
 use super::core::Agent;
-use super::types::AgentEvent;
+use raven_proto::AgentEvent;
 
 #[cfg(test)]
 thread_local! {
