@@ -517,7 +517,8 @@ mod tests {
             "raven-test-echo",
             &minimal_manifest("raven-test-echo"),
         );
-        let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake_mcp.py");
+        let script =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/fake_mcp.py");
         std::fs::copy(&script, plugin.join("server.py")).unwrap();
         write_mcp(
             &plugin,

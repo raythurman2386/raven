@@ -192,7 +192,7 @@ fn first_executable(command: &str) -> String {
 /// dangerous" toward "allowlist safe": known-safe commands run without a
 /// shell (no injection surface), everything else falls back to the shell path
 /// (still denylist-filtered + confirmation-gated).
-pub(crate) fn is_direct_exec_command(command: &str) -> bool {
+pub fn is_direct_exec_command(command: &str) -> bool {
     if has_shell_metachars(command) {
         return false;
     }

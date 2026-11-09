@@ -1,7 +1,7 @@
 //! Tests for `run_tests` / `run_lint` and the verification-gate matcher
 //! (`Sandbox::is_verification_command`).
 
-use crate::tools::Sandbox;
+use crate::Sandbox;
 
 #[test]
 fn run_lint_no_project_returns_message() {

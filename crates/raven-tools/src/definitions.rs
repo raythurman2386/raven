@@ -3,7 +3,7 @@
 /// OpenAI-style function-calling tool definitions for the model.
 ///
 /// Returns a JSON array of tool schemas consumed by the `/v1/chat/completions`
-/// `tools` field. The names here must match the arms in [`crate::tools::dispatch`].
+/// `tools` field. The names here must match the arms in [`crate::dispatch`].
 pub fn tool_definitions() -> serde_json::Value {
     serde_json::json!([
         {
@@ -481,10 +481,10 @@ fn tool_schema_definition() -> serde_json::Value {
 }
 
 /// Static tool list for `efficiency.tool_offload`: core tools plus `tool_schema`.
-pub fn offloaded_tool_definitions(plan_only: bool, mode: crate::config::Mode) -> serde_json::Value {
+pub fn offloaded_tool_definitions(plan_only: bool, mode: raven_config::Mode) -> serde_json::Value {
     let base = if plan_only {
         match mode {
-            crate::config::Mode::Chat => chat_tool_definitions(),
+            raven_config::Mode::Chat => chat_tool_definitions(),
             _ => plan_tool_definitions(),
         }
     } else {

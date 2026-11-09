@@ -423,9 +423,9 @@ fn apply_os_confinement(
 /// `LANG`.
 ///
 /// Also pins build-tool caches (`CARGO_HOME`, `TMPDIR`, npm cache, …) under
-/// `raven_dir` — see [`pin_build_tool_dirs`]. System scope passes
+/// `raven_dir` — see `pin_build_tool_dirs`. System scope passes
 /// `~/.raven` there; repo scope the workspace's own `.raven`.
-pub(crate) fn setup_shell_env(cmd: &mut Command, workspace: &Path, raven_dir: &Path) {
+pub fn setup_shell_env(cmd: &mut Command, workspace: &Path, raven_dir: &Path) {
     cmd.env_clear();
     cmd.env("PWD", workspace);
     for key in &["PATH", "HOME", "LANG", "TERM", "USER", "LOGNAME"] {
@@ -525,15 +525,15 @@ fn seed_cargo_home(cargo_home: &Path) {
 }
 
 /// A running subprocess plus its OS-level confinement guard.
-pub(crate) struct ConfinedChild {
-    pub(crate) child: std::process::Child,
+pub struct ConfinedChild {
+    pub child: std::process::Child,
 }
 
 /// Spawn a configured `Command` under OS-level confinement.
 ///
 /// Shared by `run_shell`, `run_tests`, `run_lint`, and the git tools.
 /// The `Command` must already have its env, cwd, and stdio configured.
-pub(crate) fn spawn_confined(
+pub fn spawn_confined(
     cmd: &mut Command,
     workspace: &Path,
     extra_rw: &[PathBuf],
@@ -628,7 +628,7 @@ pub(crate) fn run_confined(
 ///
 /// After the direct child exits, the child's entire process group is killed
 /// to close inherited pipe fds held by grandchildren.
-pub(crate) fn wait_for_child(
+pub fn wait_for_child(
     child: &mut std::process::Child,
     timeout_secs: u64,
 ) -> Option<(std::process::ExitStatus, Vec<u8>, Vec<u8>)> {

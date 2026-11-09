@@ -1,8 +1,8 @@
 //! Tests for sandbox path resolution and workspace-scoped file operations
 //! (`read_file`, `write_file`, `search_replace`, `grep`, globs, `list_dir`).
 
-use crate::tools::sandbox::{truncate_output, OpenFlags};
-use crate::tools::{glob_segment_match, Sandbox};
+use crate::sandbox::{truncate_output, OpenFlags};
+use crate::{glob_segment_match, Sandbox};
 use std::io::Write;
 
 use super::sandbox;
@@ -422,7 +422,7 @@ fn read_file_extracts_docx() {
     std::fs::write(&docx, cursor.into_inner()).unwrap();
 
     let sb = Sandbox::new(ws);
-    let out = sb.read_file("report.docx", 1, 100).unwrap();
+    let out = crate::document::read_file(&sb, "report.docx", 1, 100).unwrap();
     assert!(out.contains("Hello from read_file"), "output: {out}");
     assert!(out.contains("extracted document"), "output: {out}");
 }
@@ -432,7 +432,7 @@ fn read_file_rejects_binary() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("img.png"), b"\x89PNG\r\n\x1a\n").unwrap();
     let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
-    let out = sb.read_file("img.png", 1, 100).unwrap();
+    let out = crate::document::read_file(&sb, "img.png", 1, 100).unwrap();
     assert!(out.contains("binary file"), "output: {out}");
 }
 
@@ -641,7 +641,7 @@ fn search_code_caps_walk_and_notes_truncation() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("app.rs"), "fn alpha() {}\n").unwrap();
     let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
-    let out = crate::tools::sandbox::sandbox_search_code(&sb, "alpha", 10).unwrap();
+    let out = crate::sandbox::sandbox_search_code(&sb, "alpha", 10).unwrap();
     assert!(out.contains("app.rs:1"), "must find the symbol: {out}");
     assert!(
         !out.contains("search stopped"),

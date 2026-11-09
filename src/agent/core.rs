@@ -17,7 +17,7 @@ use crate::config::{load_agents_md, Mode, Settings};
 use crate::context::{compact_if_needed_llm, history_tokens};
 use crate::mcp::McpHandle;
 use crate::memory;
-use crate::tools::{tool_definitions, Sandbox};
+use crate::tools::{tool_definitions, GitOps, Sandbox};
 use raven_proto::Plan;
 use raven_proto::{cap_http_body, AgentError};
 use raven_tokenizer::{append_usage_jsonl, count_tokens, UsageCalibration, MSG_OVERHEAD};

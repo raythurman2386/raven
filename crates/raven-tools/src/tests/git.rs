@@ -1,6 +1,7 @@
 //! Tests for git inspect tools, worktree isolation, and patch-apply merge.
 
-use crate::tools::Sandbox;
+use crate::git::GitOps;
+use crate::Sandbox;
 
 /// Initialize a throwaway git repo and return a Sandbox for it.
 fn git_sandbox() -> (tempfile::TempDir, Sandbox) {

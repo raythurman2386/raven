@@ -2,11 +2,11 @@
 //! command allow/deny lists used to gate shell execution.
 
 #[cfg(unix)]
-use crate::tools::sandbox::wait_for_child;
-use crate::tools::sandbox::{
+use crate::sandbox::wait_for_child;
+use crate::sandbox::{
     dangerous_re, is_direct_exec_command, safe_command_re, system_command_autonomous,
 };
-use crate::tools::Sandbox;
+use crate::Sandbox;
 #[cfg(unix)]
 use std::process::Command;
 
@@ -766,7 +766,7 @@ fn system_gate_autoruns_readonly_diagnostics() {
     ];
     for cmd in allow {
         assert!(
-            system_command_autonomous(cmd, crate::config::Scope::System),
+            system_command_autonomous(cmd, raven_config::Scope::System),
             "read-only diagnostic must autorun in system scope: {cmd}"
         );
     }
@@ -829,7 +829,7 @@ fn system_gate_requires_confirmation_for_mutations() {
     ];
     for cmd in deny {
         assert!(
-            !system_command_autonomous(cmd, crate::config::Scope::System),
+            !system_command_autonomous(cmd, raven_config::Scope::System),
             "state-changing command must still prompt in system scope: {cmd}"
         );
     }
@@ -858,13 +858,13 @@ fn system_gate_compound_lines_always_prompt() {
     ];
     for cmd in deny {
         assert!(
-            !system_command_autonomous(cmd, crate::config::Scope::System),
+            !system_command_autonomous(cmd, raven_config::Scope::System),
             "compound line must prompt in system scope: {cmd}"
         );
     }
     // Repo scope is never auto-approved by the system gate.
     assert!(!system_command_autonomous(
         "lsblk",
-        crate::config::Scope::Repo
+        raven_config::Scope::Repo
     ));
 }

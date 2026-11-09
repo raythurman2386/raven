@@ -137,11 +137,17 @@ pub(crate) fn apply_hunk(content: &str, hunk: &DiffHunk) -> Result<String> {
     Ok(result.join("\n") + if content.ends_with('\n') { "\n" } else { "" })
 }
 
-impl Sandbox {
+/// Unified-diff apply on a [`Sandbox`].
+pub trait PatchOps {
+    /// Apply a unified diff. Rejects hunks whose context does not match.
+    fn apply_patch(&self, patch_text: &str) -> Result<String>;
+}
+
+impl PatchOps for Sandbox {
     /// Apply a unified diff patch to files in the workspace.
     ///
     /// Supports multiple hunks and files. Rejects if context lines don't match.
-    pub fn apply_patch(&self, patch_text: &str) -> Result<String> {
+    fn apply_patch(&self, patch_text: &str) -> Result<String> {
         let hunks = parse_unified_diff(patch_text);
         if hunks.is_empty() {
             return Ok("Error: no valid hunks found in patch".into());

@@ -5,6 +5,7 @@
 
 use super::super::core::{Agent, CompletionSource};
 use crate::config::{Mode, Provider, Scope, Settings};
+use crate::tools::GitOps;
 use raven_proto::AgentEvent;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;

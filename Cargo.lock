@@ -2534,7 +2534,6 @@ dependencies = [
 name = "raven"
 version = "0.6.9"
 dependencies = [
- "anydoc",
  "anyhow",
  "base64 0.23.1",
  "clap",
@@ -2542,23 +2541,19 @@ dependencies = [
  "crossterm",
  "dirs",
  "futures-util",
- "ignore",
- "landlock",
  "libc",
  "pulldown-cmark",
  "ratatui",
  "raven-config",
  "raven-persist",
  "raven-proto",
+ "raven-sandbox",
  "raven-tokenizer",
- "regex",
+ "raven-tools",
  "reqwest",
  "ring",
- "rustix",
- "seccompiler",
  "serde",
  "serde_json",
- "shlex",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
@@ -2567,8 +2562,6 @@ dependencies = [
  "tracing-subscriber",
  "unicode-segmentation",
  "unicode-width",
- "walkdir",
- "zip",
 ]
 
 [[package]]
@@ -2615,6 +2608,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "raven-sandbox"
+version = "0.6.9"
+dependencies = [
+ "anyhow",
+ "landlock",
+ "libc",
+ "raven-proto",
+ "regex",
+ "rustix",
+ "seccompiler",
+ "shlex",
+ "tempfile",
+ "tracing",
+ "walkdir",
+]
+
+[[package]]
 name = "raven-tokenizer"
 version = "0.6.9"
 dependencies = [
@@ -2622,6 +2632,28 @@ dependencies = [
  "regex",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "raven-tools"
+version = "0.6.9"
+dependencies = [
+ "anydoc",
+ "anyhow",
+ "dirs",
+ "ignore",
+ "libc",
+ "raven-config",
+ "raven-persist",
+ "raven-proto",
+ "raven-sandbox",
+ "regex",
+ "reqwest",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "zip",
 ]
 
 [[package]]

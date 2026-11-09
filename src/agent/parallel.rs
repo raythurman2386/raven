@@ -6,7 +6,7 @@ use std::path::Path;
 use tokio::sync::mpsc;
 
 use crate::config::Settings;
-use crate::tools::Sandbox;
+use crate::tools::{GitOps, Sandbox};
 
 use super::core::Agent;
 use raven_proto::AgentEvent;

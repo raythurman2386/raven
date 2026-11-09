@@ -1,7 +1,7 @@
 //! Stdio JSON-RPC MCP session: spawn, initialize, tools/list, tools/call.
 
 use super::{advertised_name, McpServerSpec, McpTool};
-use crate::error::ToolError;
+use raven_proto::ToolError;
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Write};

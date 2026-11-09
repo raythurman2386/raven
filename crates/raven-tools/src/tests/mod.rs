@@ -10,7 +10,7 @@
 //! - [`patch`] — unified-diff parsing and `apply_patch`
 //! - [`verify`] — `run_tests`/`run_lint` and the verification-gate matcher
 
-use crate::tools::Sandbox;
+use crate::Sandbox;
 
 mod dispatch;
 mod git;

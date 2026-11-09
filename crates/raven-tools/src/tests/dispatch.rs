@@ -1,8 +1,6 @@
 //! Tests for tool dispatch and the read-only / full / chat toolsets.
 
-use crate::tools::{
-    chat_tool_definitions, dispatch, plan_tool_definitions, tool_definitions, Sandbox,
-};
+use crate::{chat_tool_definitions, dispatch, plan_tool_definitions, tool_definitions, Sandbox};
 
 use super::sandbox;
 
@@ -395,9 +393,9 @@ fn sandbox_raven_dir_system_is_under_home() {
     let home = tempfile::tempdir().unwrap();
     let original_home = std::env::var_os("HOME");
     std::env::set_var("HOME", home.path());
-    let sb = crate::tools::sandbox::Sandbox::with_scope(
+    let sb = crate::sandbox::Sandbox::with_scope(
         std::path::PathBuf::from("/"),
-        crate::config::Scope::System,
+        raven_config::Scope::System,
     );
     let dir = sb.raven_dir();
     match original_home {
@@ -411,9 +409,9 @@ fn sandbox_raven_dir_system_is_under_home() {
 fn sandbox_raven_dir_system_falls_back_without_home() {
     let original_home = std::env::var_os("HOME");
     std::env::remove_var("HOME");
-    let sb = crate::tools::sandbox::Sandbox::with_scope(
+    let sb = crate::sandbox::Sandbox::with_scope(
         std::path::PathBuf::from("/"),
-        crate::config::Scope::System,
+        raven_config::Scope::System,
     );
     let dir = sb.raven_dir();
     match original_home {

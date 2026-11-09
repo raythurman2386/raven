@@ -1,7 +1,8 @@
 //! Tests for unified-diff parsing and `Sandbox::apply_patch`.
 
-use crate::tools::patch::parse_unified_diff;
-use crate::tools::Sandbox;
+use crate::patch::parse_unified_diff;
+use crate::patch::PatchOps;
+use crate::Sandbox;
 
 use super::sandbox;
 

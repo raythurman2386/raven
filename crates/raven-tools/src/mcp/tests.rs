@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 fn fake_mcp_script() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake_mcp.py")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/fake_mcp.py")
 }
 
 fn python() -> Option<&'static str> {

@@ -8,12 +8,48 @@ use std::process::Command;
 
 use super::sandbox::{setup_shell_env, spawn_confined, wait_for_child, Sandbox};
 
-impl Sandbox {
+/// Git and worktree operations on a [`Sandbox`].
+///
+/// Inherent methods cannot be added outside raven-sandbox. Callers import
+/// this trait. The sandbox crate stays free of git policy.
+pub trait GitOps {
+    /// `git status --porcelain=v1`.
+    fn git_status(&self) -> Result<String>;
+    /// `git diff`, staged when `staged` is set.
+    fn git_diff(&self, staged: bool) -> Result<String>;
+    /// `git log --oneline -n`.
+    fn git_log(&self, n: usize) -> Result<String>;
+    /// Resolve `HEAD` to a SHA.
+    fn rev_parse_head(&self) -> Result<String>;
+    /// Diff from `base_rev` to the index, without creating a commit.
+    fn export_diff_from(&self, base_rev: &str) -> Result<String>;
+    /// Apply a git patch in the workspace.
+    fn apply_git_patch(&self, patch: &str) -> Result<String>;
+    /// Add a worktree on `branch_name`.
+    fn create_worktree(&self, branch_name: &str, worktree_path: &std::path::Path) -> Result<()>;
+    /// Remove a worktree.
+    fn remove_worktree(&self, worktree_path: &std::path::Path) -> Result<()>;
+    /// Delete a branch.
+    fn delete_branch(&self, branch_name: &str) -> Result<()>;
+    /// Whether `git status --porcelain` is empty.
+    fn is_working_tree_clean(&self) -> bool;
+    /// Whether this workspace is a git repository.
+    fn is_git_repo(&self) -> Result<bool>;
+    /// Test helper: stage everything and commit.
+    #[cfg(test)]
+    fn test_commit(&self, message: &str) -> Result<String>;
+    /// Run git with the sandbox's extra read-write roots.
+    fn run_git(&self, args: &[&str]) -> Result<String>;
+    /// Run git with additional Landlock write roots.
+    fn run_git_with_extra(&self, args: &[&str], extra_rw: &[std::path::PathBuf]) -> Result<String>;
+}
+
+impl GitOps for Sandbox {
     /// `git status --porcelain=v1` — structured, compact output.
     ///
     /// Routed through [`Sandbox::present_output`] like diffs: status is usually
     /// tiny, but a huge dirty tree still spills instead of blowing the prompt.
-    pub fn git_status(&self) -> Result<String> {
+    fn git_status(&self) -> Result<String> {
         let out = self.run_git(&["status", "--porcelain=v1"])?;
         let body = if git_out_empty(&out) {
             "No changes (working tree clean)".into()
@@ -24,7 +60,7 @@ impl Sandbox {
     }
 
     /// `git diff` — unstaged or staged changes.
-    pub fn git_diff(&self, staged: bool) -> Result<String> {
+    fn git_diff(&self, staged: bool) -> Result<String> {
         let args = if staged {
             &["diff", "--staged"][..]
         } else {
@@ -38,7 +74,7 @@ impl Sandbox {
     ///
     /// Same spill path as [`Self::git_diff`]: `-n` keeps typical output small,
     /// but an oversized log still goes through present_output.
-    pub fn git_log(&self, n: usize) -> Result<String> {
+    fn git_log(&self, n: usize) -> Result<String> {
         let n_str = n.to_string();
         let out = self.run_git(&["log", "--oneline", "-n", &n_str])?;
         Ok(self.present_output("git-log", out))
@@ -46,7 +82,7 @@ impl Sandbox {
 
     /// Resolve `HEAD` to a SHA. Used as the base revision when capturing a
     /// worktree's changes for patch-apply (no commit).
-    pub fn rev_parse_head(&self) -> Result<String> {
+    fn rev_parse_head(&self) -> Result<String> {
         let out = self.run_git(&["rev-parse", "HEAD"])?;
         Ok(out.lines().next().unwrap_or("").trim().to_string())
     }
@@ -55,7 +91,7 @@ impl Sandbox {
     ///
     /// Untracked files are included except `.raven/`, `data/`, `.env`, and
     /// `.env.*`. Does **not** create a commit. The index is restored afterward.
-    pub fn export_diff_from(&self, base_rev: &str) -> Result<String> {
+    fn export_diff_from(&self, base_rev: &str) -> Result<String> {
         let base = base_rev.trim();
         if base.is_empty() || base.contains("fatal") {
             return Ok(String::new());
@@ -79,7 +115,7 @@ impl Sandbox {
     }
 
     /// Apply a unified diff to this workspace's working tree without committing.
-    pub fn apply_git_patch(&self, patch: &str) -> Result<String> {
+    fn apply_git_patch(&self, patch: &str) -> Result<String> {
         let trimmed = patch.trim();
         if trimmed.is_empty() || git_out_empty(trimmed) {
             return Ok("no changes".into());
@@ -118,11 +154,7 @@ impl Sandbox {
     /// based on the current HEAD. The worktree shares the same git repository
     /// but has its own working tree, so parallel sub-agents cannot clobber
     /// each other's uncommitted files.
-    pub fn create_worktree(
-        &self,
-        branch_name: &str,
-        worktree_path: &std::path::Path,
-    ) -> Result<()> {
+    fn create_worktree(&self, branch_name: &str, worktree_path: &std::path::Path) -> Result<()> {
         let path_str = worktree_path.to_string_lossy();
         // Grant RW on the worktree's parent dir so `git worktree add` can
         // create the sibling — without opening up the whole temp dir (which
@@ -144,7 +176,7 @@ impl Sandbox {
     }
 
     /// Remove a git worktree, even if it has uncommitted changes.
-    pub fn remove_worktree(&self, worktree_path: &std::path::Path) -> Result<()> {
+    fn remove_worktree(&self, worktree_path: &std::path::Path) -> Result<()> {
         let path_str = worktree_path.to_string_lossy();
         // Like [`Self::create_worktree`], grant RW on the worktree's parent so
         // git can delete the sibling without opening up the whole temp dir.
@@ -158,7 +190,7 @@ impl Sandbox {
     }
 
     /// Delete a branch (forcefully, even if not merged).
-    pub fn delete_branch(&self, branch_name: &str) -> Result<()> {
+    fn delete_branch(&self, branch_name: &str) -> Result<()> {
         let _ = self.run_git(&["branch", "-D", branch_name])?;
         Ok(())
     }
@@ -168,7 +200,7 @@ impl Sandbox {
     /// Returns `true` when the workspace is not a git repository or when
     /// `git status --porcelain` produces no output. Git failures default
     /// to `true` (fail-open).
-    pub fn is_working_tree_clean(&self) -> bool {
+    fn is_working_tree_clean(&self) -> bool {
         if !self.is_git_repo().unwrap_or(false) {
             return true;
         }
@@ -177,7 +209,7 @@ impl Sandbox {
             .unwrap_or(true)
     }
 
-    pub(crate) fn is_git_repo(&self) -> Result<bool> {
+    fn is_git_repo(&self) -> Result<bool> {
         let mut cmd = Command::new("git");
         cmd.args(["rev-parse", "--is-inside-work-tree"])
             .current_dir(&self.workspace)
@@ -193,13 +225,13 @@ impl Sandbox {
         }
     }
 
-    pub(crate) fn run_git(&self, args: &[&str]) -> Result<String> {
+    fn run_git(&self, args: &[&str]) -> Result<String> {
         self.run_git_with_extra(args, &self.extra_rw)
     }
 
     /// Seed a commit in tests without exposing a model-facing commit tool.
     #[cfg(test)]
-    pub(crate) fn test_commit(&self, message: &str) -> Result<String> {
+    fn test_commit(&self, message: &str) -> Result<String> {
         let _ = self.run_git(&["add", "-A"])?;
         self.run_git(&["commit", "-m", message])
     }

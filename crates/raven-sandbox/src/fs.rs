@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
 use walkdir::WalkDir;
 
-use crate::tools::{document, glob_matches};
+use crate::glob_matches;
 
 use super::{
     normalize_path, OpenFlags, Sandbox, MAX_LINE_LENGTH, MAX_TOOL_OUTPUT,
@@ -18,7 +18,7 @@ use super::{
 /// `{:5}| text` for numbered lines. Sparse mode numbers the first line of the
 /// range and every 10th absolute line; other lines keep the column so the
 /// text still lines up.
-fn render_numbered_line(line_no: usize, text: &str, sparse: bool, first: bool) -> String {
+pub fn render_numbered_line(line_no: usize, text: &str, sparse: bool, first: bool) -> String {
     if !sparse || first || line_no.is_multiple_of(10) {
         format!("{line_no:5}| {text}\n")
     } else {
@@ -31,12 +31,12 @@ impl Sandbox {
     /// symlink escapes.
     ///
     /// Two defenses:
-    /// 1. Lexical `..` traversal is rejected via [`normalize_path`].
+    /// 1. Lexical `..` traversal is rejected via `normalize_path`.
     /// 2. The nearest existing ancestor is canonicalized (resolving symlinks)
     ///    and must remain inside the canonicalized workspace. This blocks
     ///    `workspace/link -> /etc` from escaping on both read and write
     ///    (including writes whose parent directory is a symlink pointing out).
-    pub(crate) fn safe_resolve(&self, path: &str) -> Result<PathBuf> {
+    pub fn safe_resolve(&self, path: &str) -> Result<PathBuf> {
         let joined = self.workspace.join(path);
         let normalized = normalize_path(&joined);
         if !normalized.starts_with(&self.workspace) {
@@ -92,7 +92,7 @@ impl Sandbox {
     /// [`Self::safe_resolve`] + `std::fs::File::open`.
     ///
     /// `path` must be relative to the workspace root (e.g. `src/main.rs`).
-    pub(crate) fn open_beneath(
+    pub fn open_beneath(
         &self,
         path: &str,
         flags: OpenFlags,
@@ -172,9 +172,8 @@ impl Sandbox {
     /// Read a file, returning a numbered line range (1-based `start_line`, up to `max_lines`).
     /// Lines longer than 2000 chars are truncated.
     ///
-    /// Non-text documents (`.docx`, `.pdf`, `.xlsx`, `.odt`, `.epub`, ...) are
-    /// converted to Markdown via `document` so the model can read them.
-    /// Known binary files (images, audio, video, archives) are rejected.
+    /// Document extraction and the binary-extension guard live in raven-tools,
+    /// which calls this text path after those checks.
     pub fn read_file(&self, path: &str, start_line: usize, max_lines: usize) -> Result<String> {
         let p = self.safe_resolve(path)?;
         if !p.exists() {
@@ -186,56 +185,6 @@ impl Sandbox {
         if !p.is_file() {
             return Ok(format!(
                 "Error: {} is not a file. Use list_dir to see available files. Paths are relative to the workspace root, e.g. 'README.md' not '.README.md'.",
-                path
-            ));
-        }
-
-        // Structured-document extraction: try before the binary guard so
-        // .docx/.xlsx/.pdf render as text. Malformed documents fall through
-        // to the normal text/binary handling.
-        if document::is_extractable_document(path) {
-            match document::extract_document_text(&p.to_string_lossy()) {
-                Ok(markdown) => {
-                    let lines: Vec<&str> = markdown.lines().collect();
-                    let start = start_line.saturating_sub(1);
-                    let end = (start + max_lines).min(lines.len());
-                    let mut out = format!(
-                        "--- {} (extracted document, lines {}-{} of {}) ---\n",
-                        path,
-                        start + 1,
-                        end,
-                        lines.len()
-                    );
-                    let mut used = out.chars().count();
-                    for (i, line) in lines[start..end].iter().enumerate() {
-                        let truncated: String = line.chars().take(MAX_LINE_LENGTH).collect();
-                        let rendered = render_numbered_line(
-                            start + i + 1,
-                            &truncated,
-                            self.sparse_lines,
-                            i == 0,
-                        );
-                        let rendered_len = rendered.chars().count();
-                        if used + rendered_len > MAX_TOOL_OUTPUT {
-                            out.push_str(&format!("…[truncated at {} chars]", MAX_TOOL_OUTPUT));
-                            break;
-                        }
-                        out.push_str(&rendered);
-                        used += rendered_len;
-                    }
-                    return Ok(out);
-                }
-                Err(e) => {
-                    // Fall through to the binary guard / text read below.
-                    tracing::debug!("document extraction failed for {}: {e}", path);
-                }
-            }
-        }
-
-        // Binary file guard: block known binary extensions (no I/O).
-        if document::has_binary_extension(path) {
-            return Ok(format!(
-                "Error: {} is a binary file. Use list_dir to see available files, or run_shell to inspect it.",
                 path
             ));
         }
@@ -534,11 +483,7 @@ impl Sandbox {
 }
 
 /// Literal case-insensitive search (kept for compatibility).
-pub(crate) fn sandbox_search_code(
-    sandbox: &Sandbox,
-    query: &str,
-    max_results: usize,
-) -> Result<String> {
+pub fn sandbox_search_code(sandbox: &Sandbox, query: &str, max_results: usize) -> Result<String> {
     let q = query.to_lowercase();
     let exts = [
         "py", "js", "ts", "tsx", "jsx", "rs", "go", "java", "cpp", "c", "h", "md", "txt", "toml",

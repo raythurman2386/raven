@@ -71,6 +71,75 @@ pub fn extract_document_text(path: &str) -> Result<String> {
     Ok(markdown)
 }
 
+/// Read a workspace file for the model.
+///
+/// Extractable documents become Markdown. Known binary extensions are
+/// rejected. Everything else uses the sandbox text path.
+pub fn read_file(
+    sandbox: &raven_sandbox::Sandbox,
+    path: &str,
+    start_line: usize,
+    max_lines: usize,
+) -> Result<String> {
+    let p = sandbox.safe_resolve(path)?;
+    if p.exists() && p.is_file() {
+        // Structured-document extraction: try before the binary guard so
+        // .docx/.xlsx/.pdf render as text. Malformed documents fall through
+        // to the normal text/binary handling.
+        if is_extractable_document(path) {
+            match extract_document_text(&p.to_string_lossy()) {
+                Ok(markdown) => {
+                    let lines: Vec<&str> = markdown.lines().collect();
+                    let start = start_line.saturating_sub(1);
+                    let end = (start + max_lines).min(lines.len());
+                    let mut out = format!(
+                        "--- {} (extracted document, lines {}-{} of {}) ---\n",
+                        path,
+                        start + 1,
+                        end,
+                        lines.len()
+                    );
+                    let mut used = out.chars().count();
+                    for (i, line) in lines[start..end].iter().enumerate() {
+                        let truncated: String =
+                            line.chars().take(raven_sandbox::MAX_LINE_LENGTH).collect();
+                        let rendered = raven_sandbox::render_numbered_line(
+                            start + i + 1,
+                            &truncated,
+                            sandbox.sparse_lines,
+                            i == 0,
+                        );
+                        let rendered_len = rendered.chars().count();
+                        if used + rendered_len > raven_sandbox::MAX_TOOL_OUTPUT {
+                            out.push_str(&format!(
+                                "…[truncated at {} chars]",
+                                raven_sandbox::MAX_TOOL_OUTPUT
+                            ));
+                            break;
+                        }
+                        out.push_str(&rendered);
+                        used += rendered_len;
+                    }
+                    return Ok(out);
+                }
+                Err(e) => {
+                    // Fall through to the binary guard / text read below.
+                    tracing::debug!("document extraction failed for {}: {e}", path);
+                }
+            }
+        }
+
+        // Binary file guard: block known binary extensions (no I/O).
+        if has_binary_extension(path) {
+            return Ok(format!(
+                "Error: {} is a binary file. Use list_dir to see available files, or run_shell to inspect it.",
+                path
+            ));
+        }
+    }
+    sandbox.read_file(path, start_line, max_lines)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

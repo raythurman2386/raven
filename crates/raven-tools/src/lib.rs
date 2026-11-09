@@ -12,52 +12,33 @@ mod dispatch;
 mod document;
 mod git;
 mod patch;
-mod sandbox;
 mod validate;
+
+pub mod mcp;
+pub mod plugins;
+pub mod repomap;
+pub mod skills;
+pub mod web;
+
+pub mod sandbox {
+    pub use raven_sandbox::*;
+}
+
+pub use git::GitOps;
+pub use patch::PatchOps;
 
 use std::path::Path;
 
-pub use crate::state::TodoItem;
 pub use definitions::{
     chat_tool_definitions, offloaded_tool_catalog, offloaded_tool_definitions,
     plan_tool_definitions, tool_definitions, tool_schema_text,
 };
 pub use dispatch::dispatch;
-pub use sandbox::{safe_command_re, system_command_autonomous, system_safe_command_re, Sandbox};
+pub use raven_proto::TodoItem;
+pub use raven_sandbox::{
+    glob_segment_match, safe_command_re, system_command_autonomous, system_safe_command_re, Sandbox,
+};
 pub use validate::{validate_tool_call, MAX_ARGUMENTS_BYTES};
-
-/// Minimal glob matcher: supports `*` and `?` against the file name.
-pub(crate) fn glob_matches(path: &Path, pattern: &str) -> bool {
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    glob_segment_match(name, pattern)
-}
-
-pub fn glob_segment_match(text: &str, pat: &str) -> bool {
-    let t = text.as_bytes();
-    let p = pat.as_bytes();
-    let (mut ti, mut pi) = (0, 0);
-    let (mut star_t, mut star_p): (Option<usize>, Option<usize>) = (None, None);
-    while ti < t.len() {
-        if pi < p.len() && (p[pi] == b'?' || p[pi] == t[ti]) {
-            ti += 1;
-            pi += 1;
-        } else if pi < p.len() && p[pi] == b'*' {
-            star_p = Some(pi);
-            star_t = Some(ti);
-            pi += 1;
-        } else if let (Some(sp), Some(st)) = (star_p, star_t) {
-            pi = sp + 1;
-            ti = st + 1;
-            star_t = Some(ti);
-        } else {
-            return false;
-        }
-    }
-    while pi < p.len() && p[pi] == b'*' {
-        pi += 1;
-    }
-    pi == p.len()
-}
 
 // ── Todo state ────────────────────────────────────────────────────────
 
@@ -72,10 +53,10 @@ pub fn todo_write(state_dir: Option<&Path>, todos: Vec<TodoItem>) -> anyhow::Res
                 .into(),
         );
     };
-    let goal = crate::state::load_goal_from_dir(state_dir);
-    let (todos, auto_completed) = crate::state::gate_residue_todos(goal.as_ref(), todos);
-    crate::state::save_todos(state_dir, &todos)?;
-    let mut out = crate::state::format_todos(&todos);
+    let goal = raven_persist::state::load_goal_from_dir(state_dir);
+    let (todos, auto_completed) = raven_persist::state::gate_residue_todos(goal.as_ref(), todos);
+    raven_persist::state::save_todos(state_dir, &todos)?;
+    let mut out = raven_persist::state::format_todos(&todos);
     if !auto_completed.is_empty() {
         out.push_str(
             "\n\n[residue auto-completed: primary work already met; \
@@ -87,6 +68,10 @@ pub fn todo_write(state_dir: Option<&Path>, todos: Vec<TodoItem>) -> anyhow::Res
     }
     Ok(out.trim_end().to_string())
 }
+
+#[cfg(test)]
+#[path = "../../../src/testutil.rs"]
+mod testutil;
 
 #[cfg(test)]
 mod tests;

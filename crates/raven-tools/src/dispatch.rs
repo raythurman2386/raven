@@ -1,7 +1,9 @@
 //! Tool dispatch: match on tool name and route to the appropriate handler.
 
-use crate::error::ToolError;
+use raven_proto::ToolError;
 
+use super::git::GitOps;
+use super::patch::PatchOps;
 use super::sandbox::{sandbox_search_code, Sandbox};
 use super::TodoItem;
 
@@ -68,7 +70,7 @@ pub fn dispatch(
                 .get("max_lines")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(400) as usize;
-            sandbox.read_file(path, start, max)
+            super::document::read_file(sandbox, path, start, max)
         }
         "tool_schema" => {
             let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
@@ -161,22 +163,23 @@ pub fn dispatch(
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            let status = crate::state::normalize_status(
+            let status = raven_persist::state::normalize_status(
                 args.get("status")
                     .and_then(|v| v.as_str())
                     .unwrap_or("in_progress"),
             )
             .to_string();
-            let goal = crate::state::Goal {
+            let goal = raven_persist::state::Goal {
                 description,
                 status,
-                updated_at: crate::session::now_iso_public(),
+                updated_at: raven_persist::session::now_iso_public(),
             };
             // Gate residue on goal_set too (not only todo_write) so completing
             // the goal cannot leave open residue as the re-anchor target.
-            crate::state::save_goal(state_dir, &goal).map(|_| {
-                let auto = crate::state::apply_residue_gate_to_dir(state_dir).unwrap_or_default();
-                let mut out = crate::state::format_goal(&goal);
+            raven_persist::state::save_goal(state_dir, &goal).map(|_| {
+                let auto =
+                    raven_persist::state::apply_residue_gate_to_dir(state_dir).unwrap_or_default();
+                let mut out = raven_persist::state::format_goal(&goal);
                 if !auto.is_empty() {
                     out.push_str(
                         "\n\n[residue auto-completed: primary work already met; \
@@ -195,9 +198,9 @@ pub fn dispatch(
             // System scope reads memory from ~/.raven/system/MEMORY.md, so
             // writes must land there too (read/write symmetry).
             if sandbox.scope.is_system() {
-                crate::memory::update_system_memory(section, content)
+                raven_persist::memory::update_system_memory(section, content)
             } else {
-                crate::memory::update_memory(&sandbox.workspace, section, content)
+                raven_persist::memory::update_memory(&sandbox.workspace, section, content)
             }
         }
         "git_status" => sandbox.git_status(),
@@ -228,7 +231,10 @@ pub fn dispatch(
         }
         "memory_search" => {
             let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
-            Ok(crate::memory::search_memory(&sandbox.workspace, query))
+            Ok(raven_persist::memory::search_memory(
+                &sandbox.workspace,
+                query,
+            ))
         }
         other => return Ok(format!("Unknown tool: {}", other)),
     };

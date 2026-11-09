@@ -27,13 +27,12 @@
 //! The `--yolo` flag disables confirmation entirely, but the denylist still
 //! applies as a last-resort filter. These shell-level guards are complemented
 //! by OS-level sandboxing (Landlock, seccomp, rlimits, openat2) applied to
-//! every subprocess — see [`confinement`] and
-//! [`docs/security.md`](../docs/security.md).
+//! every subprocess — see the confinement module and docs/security.md.
 //!
 //! # Layout
 //!
-//! The file-tool methods ([`fs`]), shell execution ([`shell`]), and
-//! verification/lint ([`verify`]) each live in their own submodule; this
+//! The file-tool methods (fs), shell execution (shell), and
+//! verification/lint (verify) each live in their own submodule; this
 //! module holds the shared [`Sandbox`] type, the open-flag/limit constants,
 //! and the free helpers they all use.
 
@@ -47,10 +46,9 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
-pub(crate) use confinement::{setup_shell_env, spawn_confined, wait_for_child};
-pub(crate) use fs::sandbox_search_code;
-#[cfg(test)]
-pub(crate) use shell::is_direct_exec_command;
+pub use confinement::{setup_shell_env, spawn_confined, wait_for_child};
+pub use fs::{render_numbered_line, sandbox_search_code};
+pub use shell::is_direct_exec_command;
 
 /// Cross-platform open flags for [`Sandbox::open_beneath`].
 ///
@@ -58,7 +56,7 @@ pub(crate) use shell::is_direct_exec_command;
 /// Linux maps these onto `rustix::fs::OFlags` for `openat2`; other platforms
 /// map them onto `std::fs::OpenOptions`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct OpenFlags(u32);
+pub struct OpenFlags(u32);
 
 impl std::ops::BitOr for OpenFlags {
     type Output = Self;
@@ -68,12 +66,12 @@ impl std::ops::BitOr for OpenFlags {
 }
 
 impl OpenFlags {
-    pub(crate) const RDONLY: Self = Self(1 << 0);
-    pub(crate) const WRONLY: Self = Self(1 << 1);
-    pub(crate) const CREATE: Self = Self(1 << 2);
-    pub(crate) const TRUNC: Self = Self(1 << 3);
-    pub(crate) const APPEND: Self = Self(1 << 4);
-    pub(crate) const CLOEXEC: Self = Self(1 << 5);
+    pub const RDONLY: Self = Self(1 << 0);
+    pub const WRONLY: Self = Self(1 << 1);
+    pub const CREATE: Self = Self(1 << 2);
+    pub const TRUNC: Self = Self(1 << 3);
+    pub const APPEND: Self = Self(1 << 4);
+    pub const CLOEXEC: Self = Self(1 << 5);
 
     fn contains(self, other: Self) -> bool {
         self.0 & other.0 != 0
@@ -104,8 +102,8 @@ impl OpenFlags {
     }
 }
 
-pub(crate) const MAX_TOOL_OUTPUT: usize = 12_000;
-const MAX_LINE_LENGTH: usize = 2000;
+pub const MAX_TOOL_OUTPUT: usize = 12_000;
+pub const MAX_LINE_LENGTH: usize = 2000;
 const REPLACE_ALL_WARN_THRESHOLD: usize = 20;
 
 /// Best-effort denylist for obviously destructive shell commands.
@@ -116,7 +114,7 @@ const REPLACE_ALL_WARN_THRESHOLD: usize = 20;
 /// devices, `chmod 777` on root, and `curl`/`wget` piped to a shell) as a
 /// first-pass filter. The `--yolo` flag and `confirm_shell` setting provide
 /// the real safety net.
-pub(crate) fn dangerous_re() -> &'static Regex {
+pub fn dangerous_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
@@ -221,7 +219,7 @@ pub fn system_safe_command_re() -> &'static Regex {
 ///
 /// This gate never *blocks*: anything it does not auto-approve still goes
 /// through the normal confirmation prompt (or runs under `--yolo`).
-pub fn system_command_autonomous(command: &str, scope: crate::config::Scope) -> bool {
+pub fn system_command_autonomous(command: &str, scope: raven_proto::Scope) -> bool {
     if !scope.is_system() {
         return false;
     }
@@ -291,7 +289,7 @@ pub struct Sandbox {
     pub extra_rw: Vec<PathBuf>,
     /// The operational scope. System scope (workspace `/`) redirects
     /// `.raven` scratch/state dirs to `~/.raven` via [`Sandbox::raven_dir`].
-    pub scope: crate::config::Scope,
+    pub scope: raven_proto::Scope,
     /// When true, `read_file` numbers every 10th line (and the first line of
     /// the range) instead of every line.
     pub sparse_lines: bool,
@@ -303,7 +301,7 @@ impl Sandbox {
         Self {
             workspace,
             extra_rw: Vec::new(),
-            scope: crate::config::Scope::Repo,
+            scope: raven_proto::Scope::Repo,
             sparse_lines: false,
         }
     }
@@ -315,7 +313,7 @@ impl Sandbox {
         Self {
             workspace,
             extra_rw,
-            scope: crate::config::Scope::Repo,
+            scope: raven_proto::Scope::Repo,
             sparse_lines: false,
         }
     }
@@ -336,7 +334,7 @@ impl Sandbox {
     }
 
     /// Create a sandbox rooted at `workspace` with an explicit scope.
-    pub fn with_scope(workspace: PathBuf, scope: crate::config::Scope) -> Self {
+    pub fn with_scope(workspace: PathBuf, scope: raven_proto::Scope) -> Self {
         Self {
             workspace,
             extra_rw: Vec::new(),
@@ -352,7 +350,7 @@ impl Sandbox {
 /// panics on a byte-slice boundary. Production tool results use
 /// [`Sandbox::present_output`] instead of dropping the middle of the output.
 #[allow(dead_code)]
-pub(crate) fn truncate_output(s: &str, max: usize) -> String {
+pub fn truncate_output(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()
     } else {
@@ -367,7 +365,7 @@ impl Sandbox {
     ///
     /// Truncating drops data the model may need later and the tail-only form
     /// stays small in every subsequent request.
-    pub(crate) fn present_output(&self, label: &str, body: String) -> String {
+    pub fn present_output(&self, label: &str, body: String) -> String {
         if body.chars().count() <= MAX_TOOL_OUTPUT {
             return body;
         }
@@ -442,3 +440,36 @@ fn output_tail(body: &str, max_lines: usize, max_chars: usize) -> String {
 }
 
 static SPILL_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Minimal glob matcher: supports `*` and `?` against the file name.
+pub fn glob_matches(path: &Path, pattern: &str) -> bool {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    glob_segment_match(name, pattern)
+}
+
+pub fn glob_segment_match(text: &str, pat: &str) -> bool {
+    let t = text.as_bytes();
+    let p = pat.as_bytes();
+    let (mut ti, mut pi) = (0, 0);
+    let (mut star_t, mut star_p): (Option<usize>, Option<usize>) = (None, None);
+    while ti < t.len() {
+        if pi < p.len() && (p[pi] == b'?' || p[pi] == t[ti]) {
+            ti += 1;
+            pi += 1;
+        } else if pi < p.len() && p[pi] == b'*' {
+            star_p = Some(pi);
+            star_t = Some(ti);
+            pi += 1;
+        } else if let (Some(sp), Some(st)) = (star_p, star_t) {
+            pi = sp + 1;
+            ti = st + 1;
+            star_t = Some(ti);
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && p[pi] == b'*' {
+        pi += 1;
+    }
+    pi == p.len()
+}
