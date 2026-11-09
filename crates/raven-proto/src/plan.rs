@@ -46,9 +46,36 @@ pub enum PlanStepStatus {
     Skipped,
 }
 
+/// The user's decision at a plan-approval prompt.
+///
+/// Headless and the TUI both classify through [`classify_approval`], so
+/// "no" cannot execute on one surface and become a revision on the other.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Approval {
+    /// Execute the plan as proposed.
+    Yes,
+    /// Leave the plan unexecuted.
+    No,
+    /// Send `feedback` back and propose again.
+    Revise(String),
+}
+
+/// Classify a raw approval line.
+///
+/// Empty input is yes: headless "press enter" accepts the plan. The TUI
+/// drops empty input before calling this, so a bare Enter there does not
+/// execute. `go` and `execute` are yes. Anything that is not an explicit
+/// yes or no is revision feedback, with surrounding whitespace removed.
+pub fn classify_approval(line: &str) -> Approval {
+    match line.trim().to_lowercase().as_str() {
+        "" | "y" | "yes" | "ok" | "approve" | "go" | "execute" => Approval::Yes,
+        "n" | "no" | "abort" | "q" | "quit" => Approval::No,
+        other => Approval::Revise(other.to_string()),
+    }
+}
+
 /// The agent's current state in the plan flow.
 #[derive(Debug, Clone, PartialEq)]
-
 pub enum AgentState {
     /// No task active.
     Idle,
@@ -430,5 +457,25 @@ Done."#;
         assert!(out.contains("2. Second"));
         assert!(out.contains("3. Third"));
         assert!(out.contains("4. Fourth"));
+    }
+
+    #[test]
+    fn classify_approval_agrees_on_yes_no_and_revise() {
+        for s in ["", "y", "yes", "ok", "approve", "go", "execute", "  Y  "] {
+            assert!(
+                matches!(classify_approval(s), Approval::Yes),
+                "expected Yes for {s:?}"
+            );
+        }
+        for s in ["n", "no", "abort", "q", "quit", "NO"] {
+            assert!(
+                matches!(classify_approval(s), Approval::No),
+                "expected No for {s:?}"
+            );
+        }
+        match classify_approval("  break this into two steps ") {
+            Approval::Revise(fb) => assert_eq!(fb, "break this into two steps"),
+            other => panic!("expected Revise, got {other:?}"),
+        }
     }
 }

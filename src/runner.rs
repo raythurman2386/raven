@@ -287,23 +287,7 @@ pub fn save_session_messages(
 }
 
 pub use crate::config::{read_line_if_tty, stdin_is_tty};
-
-/// The outcome of an interactive approval prompt.
-#[derive(Debug)]
-pub enum Approval {
-    Yes,
-    No,
-    Revise(String),
-}
-
-/// Classify a raw input line into an [`Approval`]. Pure — no I/O.
-pub fn classify_approval(line: &str) -> Approval {
-    match line.trim().to_lowercase().as_str() {
-        "" | "y" | "yes" | "ok" | "approve" => Approval::Yes,
-        "n" | "no" | "abort" | "q" | "quit" => Approval::No,
-        other => Approval::Revise(other.to_string()),
-    }
-}
+pub use crate::plan::{classify_approval, Approval};
 
 /// Resolve an interactive yes/no/revise answer to an approval decision.
 ///
@@ -325,7 +309,9 @@ mod tests {
 
     #[test]
     fn classify_accepts_common_yes_forms() {
-        for s in ["", "y", "Y", "yes", "ok", "approve", "  y  ", "YES\n"] {
+        for s in [
+            "", "y", "Y", "yes", "ok", "approve", "go", "execute", "  y  ", "YES\n",
+        ] {
             assert!(
                 matches!(classify_approval(s), Approval::Yes),
                 "expected Yes for {s:?}"

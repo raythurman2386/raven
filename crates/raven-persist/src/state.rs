@@ -16,7 +16,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub use raven_proto::{Goal, TodoItem};
+pub use raven_proto::{Goal, TodoItem, WorkStatus};
 
 const STATE_DIR_NAME: &str = "state";
 const TODOS_FILE: &str = "todos.json";
@@ -104,12 +104,19 @@ pub fn load_todos_from_dir(state_dir: &Path) -> Vec<TodoItem> {
 const MAX_INJECTED_TODOS: usize = 20;
 
 /// Normalize a free-form status into the supported set.
+///
+/// Delegates to [`WorkStatus::parse`] so the status strip, compaction, and
+/// the model-facing reminder share one vocabulary.
 pub fn normalize_status(status: &str) -> &'static str {
-    match status {
-        "completed" | "complete" | "done" => "completed",
-        "pending" | "todo" => "pending",
-        _ => "in_progress",
-    }
+    WorkStatus::parse(status).as_str()
+}
+
+/// Whether a goal or todo still needs work.
+///
+/// Completed and cancelled items are closed. Unknown text stays open so a
+/// typo cannot hide a task from the model or the status strip.
+pub fn status_is_open(status: &str) -> bool {
+    WorkStatus::parse(status).is_open()
 }
 
 /// Render the todo list as a compact block for system-prompt injection.
@@ -120,10 +127,11 @@ pub fn format_todos(todos: &[TodoItem]) -> String {
     let shown = todos.len().min(MAX_INJECTED_TODOS);
     let mut out = String::new();
     for (i, t) in todos.iter().take(shown).enumerate() {
-        let mark = match normalize_status(&t.status) {
-            "completed" => "[completed]",
-            "in_progress" => "[in_progress]",
-            _ => "[pending]",
+        let mark = match WorkStatus::parse(&t.status) {
+            WorkStatus::Completed => "[completed]",
+            WorkStatus::Cancelled => "[cancelled]",
+            WorkStatus::InProgress => "[in_progress]",
+            WorkStatus::Pending => "[pending]",
         };
         out.push_str(&format!("{} {}: {}\n", mark, i + 1, t.content));
     }
@@ -135,7 +143,7 @@ pub fn format_todos(todos: &[TodoItem]) -> String {
 
 /// Render the goal as a compact block for system-prompt injection.
 pub fn format_goal(goal: &Goal) -> String {
-    format!("[{}] {}", goal.status, goal.description)
+    format!("[{}] {}", normalize_status(&goal.status), goal.description)
 }
 
 /// Atomic write via a unique temp name + rename, so a reader sees either the
@@ -247,8 +255,11 @@ pub fn looks_like_residue_todo(content: &str) -> bool {
     lower.contains("dated") && lower.contains("memory")
 }
 
-/// Whether primary live work is already done (goal completed, or every
-/// non-residue todo is completed).
+/// Whether primary live work is already done.
+///
+/// True when the goal is completed, or every non-residue todo is closed
+/// (completed or cancelled). A cancelled live todo does not keep residue
+/// housekeeping open.
 pub fn primary_work_satisfied(goal: Option<&Goal>, todos: &[TodoItem]) -> bool {
     if let Some(g) = goal {
         if normalize_status(&g.status) == "completed" {
@@ -259,10 +270,7 @@ pub fn primary_work_satisfied(goal: Option<&Goal>, todos: &[TodoItem]) -> bool {
         .iter()
         .filter(|t| !looks_like_residue_todo(&t.content))
         .collect();
-    !live.is_empty()
-        && live
-            .iter()
-            .all(|t| normalize_status(&t.status) == "completed")
+    !live.is_empty() && live.iter().all(|t| !status_is_open(&t.status))
 }
 
 /// When primary work is satisfied, auto-complete open residue todos so the
@@ -279,7 +287,7 @@ pub fn gate_residue_todos(
     }
     let mut auto = Vec::new();
     for t in &mut todos {
-        if normalize_status(&t.status) != "completed" && looks_like_residue_todo(&t.content) {
+        if status_is_open(&t.status) && looks_like_residue_todo(&t.content) {
             t.status = "completed".into();
             auto.push(t.content.clone());
         }
@@ -524,8 +532,44 @@ mod tests {
     #[test]
     fn normalize_status_aliases() {
         assert_eq!(normalize_status("done"), "completed");
+        assert_eq!(normalize_status("DONE"), "completed");
         assert_eq!(normalize_status("todo"), "pending");
+        assert_eq!(normalize_status("cancelled"), "cancelled");
+        assert_eq!(normalize_status("Canceled"), "cancelled");
         assert_eq!(normalize_status("weird"), "in_progress");
+        assert!(!status_is_open("done"));
+        assert!(!status_is_open("cancelled"));
+        assert!(status_is_open("weird"));
+    }
+
+    #[test]
+    fn format_goal_canonicalizes_aliases() {
+        let goal = Goal {
+            description: "Ship it".into(),
+            status: "done".into(),
+            updated_at: "".into(),
+        };
+        assert_eq!(format_goal(&goal), "[completed] Ship it");
+    }
+
+    #[test]
+    fn cancelled_live_todo_does_not_keep_residue_open() {
+        let todos = vec![
+            TodoItem {
+                content: "Live fix".into(),
+                status: "cancelled".into(),
+                priority: "high".into(),
+            },
+            TodoItem {
+                content: "Chase dated memory-plan residue".into(),
+                status: "pending".into(),
+                priority: "low".into(),
+            },
+        ];
+        assert!(primary_work_satisfied(None, &todos));
+        let (gated, auto) = gate_residue_todos(None, todos);
+        assert_eq!(auto, vec!["Chase dated memory-plan residue".to_string()]);
+        assert_eq!(normalize_status(&gated[1].status), "completed");
     }
 
     #[test]

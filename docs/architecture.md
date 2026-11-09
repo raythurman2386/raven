@@ -251,7 +251,7 @@ returned in order.
 
 The TUI (`raven-tui`) is intentionally minimal:
 
-- **Plan approval is human-gated**: plan mode always waits for the user to approve/revise/abort before executing. The TUI sets `plan_pending` and waits for `yes`/`y`/`approve`/`go`/`execute`/`ok` to execute, or any other text to revise.
+- **Plan approval is human-gated**: plan mode always waits for the user to approve, revise, or dismiss before executing. Headless and the TUI share one classifier: `y`/`yes`/`ok`/`approve`/`go`/`execute` execute, `n`/`no`/`abort`/`q`/`quit` (and Esc in the TUI) dismiss, and any other text revises. A blank Enter executes only in the headless prompt.
 - **No multi-line input**: the input box is single-line only.
 
 Assistant output is rendered as markdown (`crates/raven-tui/src/markdown.rs`, via
