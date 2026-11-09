@@ -50,9 +50,9 @@ cargo llvm-cov
 cargo llvm-cov --html    # opens HTML report in browser
 ```
 
-Target: >=80% line coverage on `config/mod.rs` and `tools/`. Overall coverage
-as high as practical without testing pure glue (main.rs argument parsing,
-tui/ rendering).
+Target: >=80% line coverage on `crates/raven-config` and `crates/raven-tools`. Overall coverage
+as high as practical without testing pure glue (`src/main.rs` argument parsing,
+`crates/raven-tui` rendering).
 
 ## Mutation testing
 

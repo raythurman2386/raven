@@ -347,6 +347,7 @@ crates/
   raven-agent/      # Streaming loop, compaction, parallel sub-agents
   raven-tui/        # ratatui TUI, markdown, slash commands
   raven-acp/        # Agent Client Protocol v1 stdio adapter
+  raven-testutil/   # outer_sandbox_restrictive, home_env_lock
 src/
   main.rs           # clap CLI, one binary named raven
   runner.rs         # Headless runner
