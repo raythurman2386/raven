@@ -129,7 +129,8 @@ raven -p "Refactor the auth module"
 
 # The model proposes a plan, then you approve it:
 #   ── Plan ready. Approve? [Y/n] ──
-# Press Enter (or y/yes/ok) to execute; anything else aborts.
+# Press Enter (or y/yes/ok/approve/go/execute) to execute.
+# n/no/abort/q/quit aborts. Any other text revises the plan.
 
 # Skip planning entirely (full tools, no plan step)
 raven --mode agent -p "Fix the typo in config.rs"
@@ -144,8 +145,10 @@ raven --yolo -p "Write unit tests for auth"
 
 Plan mode always requires your approval before execution. When the plan turn
 finishes, the harness parses and prints the plan, then prompts you to
-approve/revise/abort. Type `y`/`yes`/`ok` (or press Enter) to execute, `n` to
-abort, or any other text to revise the plan.
+approve, revise, or dismiss. Headless and the TUI use the same words:
+`y`/`yes`/`ok`/`approve`/`go`/`execute` execute, `n`/`no`/`abort`/`q`/`quit`
+dismiss, and any other text revises. Pressing Enter on the headless prompt
+executes. A blank Enter in the TUI does nothing; Esc dismisses the plan.
 
 ### Plan-mode tool restriction
 
@@ -418,7 +421,7 @@ produced) instead of dropping it, and quitting (Esc Esc / Ctrl+C Ctrl+C /
 ### TUI limitations
 
 - Each submission spawns a **fresh agent** — conversation history is carried across turns via in-memory session messages and persisted to `.raven/sessions/`.
-- Plan approval is heuristic: type `yes`/`y`/`approve`/`go`/`execute`/`ok` to execute, or any other text to revise.
+- Plan approval uses one word list: `yes`/`y`/`approve`/`go`/`execute`/`ok` execute, `no`/`n`/`abort`/`q`/`quit` or Esc dismiss, and any other text revises. A blank Enter does not execute.
 - Scrollback is limited to the on-screen log window.
 
 ---

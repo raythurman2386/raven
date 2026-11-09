@@ -12,7 +12,7 @@
 //! - System message (index 0) is never dropped.
 //! - Tool-call / tool-result pairs are never split.
 
-use raven_proto::ChatMessage;
+use raven_proto::{ChatMessage, WorkStatus};
 pub use raven_tokenizer::{history_tokens, message_tokens};
 use raven_tokenizer::{TokenUsage, UsageCalibration};
 
@@ -348,7 +348,7 @@ fn json_todos(raw: &str) -> Vec<String> {
                 .get("status")
                 .and_then(|s| s.as_str())
                 .unwrap_or("pending");
-            if status == "completed" || status == "complete" || status == "done" {
+            if !WorkStatus::parse(status).is_open() {
                 return None;
             }
             t.get("content")
@@ -1353,7 +1353,7 @@ mod tests {
                     tool_call(
                         "t1",
                         "todo_write",
-                        r#"{"todos":[{"content":"edit parser","status":"pending"},{"content":"done bit","status":"completed"}]}"#,
+                        r#"{"todos":[{"content":"edit parser","status":"pending"},{"content":"done bit","status":"completed"},{"content":"skip me","status":"cancelled"},{"content":"old","status":"DONE"}]}"#,
                     ),
                     tool_call("r1", "read_file", r#"{"path":"src/parser.rs"}"#),
                     tool_call(

@@ -4,7 +4,7 @@
 use super::render::prewrap_lines;
 use super::*;
 use raven_config::{ConfigFile, Provider, Scope};
-use raven_proto::AgentState;
+use raven_proto::{AgentState, Approval, Goal, TodoItem};
 use serde_json::json;
 use std::path::Path;
 
@@ -1790,6 +1790,86 @@ fn keyhint_reflects_state_layers() {
     state = dummy_state();
     let hint = keyhint(&state);
     assert!(hint.contains("esc esc quit"), "idle hint: {hint}");
+
+    state = dummy_state();
+    state.plan_pending = true;
+    let hint = keyhint(&state);
+    assert!(hint.contains("no dismiss"), "plan hint: {hint}");
+    assert!(hint.contains("esc dismiss"), "plan hint: {hint}");
+}
+
+#[test]
+fn plan_reply_ignores_empty_and_no_dismisses() {
+    assert!(plan_reply("").is_none());
+    assert!(plan_reply("   ").is_none());
+    assert!(matches!(plan_reply("no"), Some(Approval::No)));
+    assert!(matches!(plan_reply("YES"), Some(Approval::Yes)));
+    assert!(matches!(plan_reply("go"), Some(Approval::Yes)));
+    match plan_reply("  split the step ") {
+        Some(Approval::Revise(fb)) => assert_eq!(fb, "split the step"),
+        other => panic!("expected Revise, got {other:?}"),
+    }
+}
+
+#[test]
+fn dismiss_pending_plan_returns_to_ready() {
+    let mut state = TuiState {
+        plan_pending: true,
+        plan_preview: vec!["1. Do X".into()],
+        agent_state: AgentState::AwaitingApproval,
+        status: "awaiting plan approval".into(),
+        running: false,
+        ..dummy_state()
+    };
+    dismiss_pending_plan(&mut state);
+    assert!(!state.plan_pending);
+    assert!(state.plan_preview.is_empty());
+    assert!(state.active_plan.is_none());
+    assert_eq!(state.agent_state, AgentState::Idle);
+    assert_eq!(state.status, "ready");
+    assert!(!state.running);
+}
+
+#[test]
+fn task_hint_line_uses_the_same_status_words_as_the_model() {
+    let done_goal = Goal {
+        description: "Ship it".into(),
+        status: "complete".into(),
+        updated_at: String::new(),
+    };
+    let todos = vec![
+        TodoItem {
+            content: "a".into(),
+            status: "done".into(),
+            priority: "high".into(),
+        },
+        TodoItem {
+            content: "b".into(),
+            status: "cancelled".into(),
+            priority: "low".into(),
+        },
+        TodoItem {
+            content: "c".into(),
+            status: "in_progress".into(),
+            priority: "high".into(),
+        },
+    ];
+    let hint = task_hint_line(Some(&done_goal), &todos);
+    assert!(
+        !hint.contains("Ship it"),
+        "a completed alias must leave the strip: {hint}"
+    );
+    assert!(hint.contains("tasks 1/2"), "{hint}");
+    assert!(hint.contains('c'), "{hint}");
+    assert!(!hint.contains('b'), "{hint}");
+
+    let open_goal = Goal {
+        description: "Ship it".into(),
+        status: "in_progress".into(),
+        updated_at: String::new(),
+    };
+    let hint = task_hint_line(Some(&open_goal), &[]);
+    assert_eq!(hint, "goal Ship it");
 }
 
 #[tokio::test]

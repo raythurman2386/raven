@@ -48,7 +48,7 @@ use raven_agent::mcp::McpHandle;
 use raven_agent::{generate_session_title, is_title_prompt, Agent, AgentEvent, ChatMessage};
 use raven_config::{Mode, Settings};
 use raven_persist::session::{Session, SessionStore};
-use raven_proto::{self as plan, AgentState};
+use raven_proto::{self as plan, AgentState, Approval, WorkStatus};
 
 mod blocks;
 pub mod commands;
@@ -1079,6 +1079,10 @@ pub async fn run_tui(
                                     interrupt_running_turn(&mut state, &store, &mut session);
                                     state.push_system("⏹ interrupted (esc)");
                                     state.log_dirty = true;
+                                } else if state.plan_pending {
+                                    dismiss_pending_plan(&mut state);
+                                    state.push_system("plan dismissed");
+                                    state.log_dirty = true;
                                 } else if state
                                     .quit_armed
                                     .is_some_and(|t| t.elapsed() <= QUIT_CONFIRM_WINDOW)
@@ -1566,7 +1570,7 @@ fn keyhint(state: &TuiState) -> String {
     } else if state.pending_question_text.is_some() {
         "enter answer · esc dismiss".to_string()
     } else if state.plan_pending {
-        "yes approve · type revise · esc dismiss".to_string()
+        "yes approve · no dismiss · type revise · esc dismiss".to_string()
     } else if state.running {
         "esc interrupt · enter steer · ctrl+c interrupt".to_string()
     } else if state.mode == Mode::Chat {
@@ -1600,13 +1604,25 @@ fn task_hint(settings: &Settings) -> String {
         return String::new();
     };
     let todos = raven_persist::state::load_todos_from_dir(dir);
-    let open: Vec<_> = todos
+    let goal = raven_persist::state::load_goal_from_dir(dir);
+    task_hint_line(goal.as_ref(), &todos)
+}
+
+/// Status-strip task line from an already-loaded goal and todo list.
+///
+/// Uses [`WorkStatus`] so `done` / `complete` count as finished here the same
+/// way they do in the prompt, and `cancelled` drops out of the fraction.
+fn task_hint_line(goal: Option<&raven_proto::Goal>, todos: &[raven_proto::TodoItem]) -> String {
+    let goal =
+        goal.filter(|g| !g.description.trim().is_empty() && WorkStatus::parse(&g.status).is_open());
+    let tracked: Vec<_> = todos
         .iter()
-        .filter(|t| t.status != "completed" && t.status != "cancelled")
+        .filter(|t| !matches!(WorkStatus::parse(&t.status), WorkStatus::Cancelled))
         .collect();
-    let goal = raven_persist::state::load_goal_from_dir(dir).filter(|g| {
-        !g.description.trim().is_empty() && g.status != "done" && g.status != "completed"
-    });
+    let open: Vec<_> = tracked
+        .iter()
+        .filter(|t| WorkStatus::parse(&t.status).is_open())
+        .collect();
     if open.is_empty() && goal.is_none() {
         return String::new();
     }
@@ -1617,17 +1633,20 @@ fn task_hint(settings: &Settings) -> String {
         parts.push(format!("goal {desc}"));
     }
     if !open.is_empty() {
-        let done = todos.iter().filter(|t| t.status == "completed").count();
+        let done = tracked
+            .iter()
+            .filter(|t| WorkStatus::parse(&t.status).is_completed())
+            .count();
         let current = open
             .iter()
-            .find(|t| t.status == "in_progress")
+            .find(|t| matches!(WorkStatus::parse(&t.status), WorkStatus::InProgress))
             .or_else(|| open.first())
             .map(|t| {
                 let c = t.content.trim().replace('\n', " ");
                 c.chars().take(36).collect::<String>()
             })
             .unwrap_or_default();
-        parts.push(format!("tasks {done}/{} · {current}", todos.len()));
+        parts.push(format!("tasks {done}/{} · {current}", tracked.len()));
     }
     parts.join("  ·  ")
 }
@@ -1804,7 +1823,7 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &mut TuiSt
             .collect();
         if state.plan_pending || state.agent_state == AgentState::AwaitingApproval {
             lines.push(Line::from(Span::styled(
-                "yes to execute · or type revisions",
+                "yes to execute · no to dismiss · or type revisions",
                 Style::default().fg(theme.dim),
             )));
         }
@@ -2566,6 +2585,29 @@ fn start_task(
     Ok(())
 }
 
+/// Classify a plan-approval reply.
+///
+/// Bare Enter is `None`: the TUI must not execute a plan on an empty submit
+/// (headless enter-to-accept stays in [`plan::classify_approval`]). `no`
+/// dismisses. Any other non-yes text is revision feedback.
+fn plan_reply(text: &str) -> Option<Approval> {
+    if text.trim().is_empty() {
+        None
+    } else {
+        Some(plan::classify_approval(text))
+    }
+}
+
+/// Leave plan approval without starting a turn.
+fn dismiss_pending_plan(state: &mut TuiState) {
+    state.plan_pending = false;
+    state.plan_preview.clear();
+    state.active_plan = None;
+    state.agent_state = AgentState::Idle;
+    state.status = "ready".into();
+    state.input_dirty = true;
+}
+
 fn handle_plan_response(
     state: &mut TuiState,
     text: &str,
@@ -2573,11 +2615,31 @@ fn handle_plan_response(
     store: &SessionStore,
     session: &raven_persist::session::Session,
 ) -> Result<()> {
-    let low = text.to_lowercase();
-    let approve = matches!(
-        low.as_str(),
-        "yes" | "y" | "approve" | "go" | "execute" | "ok"
-    );
+    let Some(decision) = plan_reply(text) else {
+        return Ok(());
+    };
+    let (prompt, approved_plan) = match decision {
+        Approval::No => {
+            dismiss_pending_plan(state);
+            state.push_user(text.to_string());
+            state.push_system("plan dismissed");
+            state.log_dirty = true;
+            return Ok(());
+        }
+        Approval::Yes => {
+            state.agent_state = AgentState::Executing;
+            state.status = "executing plan…".into();
+            (plan::EXECUTE_PROMPT.to_string(), state.active_plan.take())
+        }
+        Approval::Revise(feedback) => {
+            state.agent_state = AgentState::Planning;
+            state.status = "revising plan…".into();
+            (
+                format!("Revise the plan based on this feedback:\n{feedback}"),
+                None,
+            )
+        }
+    };
 
     state.plan_pending = false;
     // Keep the plan preview visible during execution so the live step updates
@@ -2586,16 +2648,6 @@ fn handle_plan_response(
     state.push_user(text.to_string());
     state.log_dirty = true;
 
-    let prompt = if approve {
-        state.agent_state = AgentState::Executing;
-        state.status = "executing plan…".into();
-        plan::EXECUTE_PROMPT.to_string()
-    } else {
-        state.agent_state = AgentState::Planning;
-        state.status = "revising plan…".into();
-        format!("Revise the plan based on this feedback:\n{text}")
-    };
-
     let user_msg = ChatMessage::plain("user", Some(prompt.clone()));
     let _ = store.append_message(session, &user_msg);
     let preload = state.session_messages.clone();
@@ -2603,13 +2655,8 @@ fn handle_plan_response(
     state.messages_dirty = true;
 
     state.assistant_text.clear();
-    let plan = if approve {
-        state.active_plan.take()
-    } else {
-        None
-    };
     begin_agent_turn(state, settings.clone(), preload, prompt, move |agent| {
-        if let Some(plan) = plan {
+        if let Some(plan) = approved_plan {
             agent.with_plan(plan)
         } else {
             agent.plan_only()

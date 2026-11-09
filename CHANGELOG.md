@@ -12,6 +12,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+## [0.6.11] - 2026-11-09
+
+### Changed
+
+- Plan approval is one classifier for the headless runner and the TUI. `y`/`yes`/`ok`/`approve`/`go`/`execute` execute the plan. `n`/`no`/`abort`/`q`/`quit` dismiss it. Esc dismisses a plan that is waiting in the TUI. A blank Enter still executes only on the headless prompt.
+- Goals and todos share one status vocabulary. `done` and `complete` count as completed. `cancelled`, `canceled`, and `skipped` are closed and are not counted as finished work. Any other text stays in progress, so a typo cannot hide a task from the model or the status strip.
+
+### Fixed
+
+- Typing `no` at a TUI plan prompt started a revision turn. It now dismisses the plan, and that refusal is not written into the session.
+- Esc while a plan was waiting armed quit. It now dismisses the plan, matching the footer.
+- The status strip, compaction summary, and model reminders disagreed on `done`, `complete`, and `cancelled`.
+
 ## [0.6.10] - 2026-11-09
 
 ### Changed

@@ -304,13 +304,13 @@ pub(crate) fn compute_reminders(
     if iter >= 4 && (iter - 4).is_multiple_of(8) {
         let mut anchor = String::new();
         if let Some(goal) = goal {
-            if raven_persist::state::normalize_status(&goal.status) != "completed" {
+            if raven_persist::state::status_is_open(&goal.status) {
                 anchor.push_str(&format!("Your goal: {}\n", goal.description));
             }
         }
         let next_pending = todos
             .iter()
-            .find(|t| raven_persist::state::normalize_status(&t.status) != "completed")
+            .find(|t| raven_persist::state::status_is_open(&t.status))
             .map(|t| t.content.clone());
         if let Some(next) = next_pending {
             anchor.push_str(&format!("Next pending task: {next}\n"));
@@ -426,7 +426,7 @@ fn only_residue_or_primary_met(
     // Every incomplete todo is residue-style; any live todo is already completed.
     todos.iter().all(|t| {
         raven_persist::state::looks_like_residue_todo(&t.content)
-            || raven_persist::state::normalize_status(&t.status) == "completed"
+            || !raven_persist::state::status_is_open(&t.status)
     }) && todos
         .iter()
         .any(|t| raven_persist::state::looks_like_residue_todo(&t.content))
