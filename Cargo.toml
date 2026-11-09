@@ -4,7 +4,7 @@ members = [".", "crates/raven-proto", "crates/raven-tokenizer", "crates/raven-co
 default-members = [".", "crates/raven-proto", "crates/raven-tokenizer", "crates/raven-config", "crates/raven-persist", "crates/raven-sandbox", "crates/raven-tools", "crates/raven-agent", "crates/raven-tui", "crates/raven-acp", "crates/raven-testutil"]
 
 [workspace.package]
-version = "0.6.9"
+version = "0.6.10"
 edition = "2021"
 license = "MIT"
 rust-version = "1.88"
@@ -41,16 +41,16 @@ landlock = "0.4.7"
 seccompiler = "0.5.0"
 criterion = "0.8"
 zip = "9.5"
-raven-proto = { path = "crates/raven-proto", version = "0.6.9" }
-raven-tokenizer = { path = "crates/raven-tokenizer", version = "0.6.9" }
-raven-config = { path = "crates/raven-config", version = "0.6.9" }
-raven-persist = { path = "crates/raven-persist", version = "0.6.9" }
-raven-sandbox = { path = "crates/raven-sandbox", version = "0.6.9" }
-raven-tools = { path = "crates/raven-tools", version = "0.6.9" }
-raven-agent = { path = "crates/raven-agent", version = "0.6.9" }
-raven-tui = { path = "crates/raven-tui", version = "0.6.9" }
-raven-acp = { path = "crates/raven-acp", version = "0.6.9" }
-raven-testutil = { path = "crates/raven-testutil", version = "0.6.9" }
+raven-proto = { path = "crates/raven-proto", version = "0.6.10" }
+raven-tokenizer = { path = "crates/raven-tokenizer", version = "0.6.10" }
+raven-config = { path = "crates/raven-config", version = "0.6.10" }
+raven-persist = { path = "crates/raven-persist", version = "0.6.10" }
+raven-sandbox = { path = "crates/raven-sandbox", version = "0.6.10" }
+raven-tools = { path = "crates/raven-tools", version = "0.6.10" }
+raven-agent = { path = "crates/raven-agent", version = "0.6.10" }
+raven-tui = { path = "crates/raven-tui", version = "0.6.10" }
+raven-acp = { path = "crates/raven-acp", version = "0.6.10" }
+raven-testutil = { path = "crates/raven-testutil", version = "0.6.10" }
 
 [package]
 name = "raven"

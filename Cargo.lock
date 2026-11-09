@@ -2537,7 +2537,7 @@ dependencies = [
 
 [[package]]
 name = "raven"
-version = "0.6.9"
+version = "0.6.10"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -2565,7 +2565,7 @@ dependencies = [
 
 [[package]]
 name = "raven-acp"
-version = "0.6.9"
+version = "0.6.10"
 dependencies = [
  "anyhow",
  "raven-agent",
@@ -2582,7 +2582,7 @@ dependencies = [
 
 [[package]]
 name = "raven-agent"
-version = "0.6.9"
+version = "0.6.10"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -2601,7 +2601,7 @@ dependencies = [
 
 [[package]]
 name = "raven-config"
-version = "0.6.9"
+version = "0.6.10"
 dependencies = [
  "anyhow",
  "dirs",
@@ -2620,7 +2620,7 @@ dependencies = [
 
 [[package]]
 name = "raven-persist"
-version = "0.6.9"
+version = "0.6.10"
 dependencies = [
  "anyhow",
  "dirs",
@@ -2635,7 +2635,7 @@ dependencies = [
 
 [[package]]
 name = "raven-proto"
-version = "0.6.9"
+version = "0.6.10"
 dependencies = [
  "serde",
  "serde_json",
@@ -2645,7 +2645,7 @@ dependencies = [
 
 [[package]]
 name = "raven-sandbox"
-version = "0.6.9"
+version = "0.6.10"
 dependencies = [
  "anyhow",
  "landlock",
@@ -2662,14 +2662,14 @@ dependencies = [
 
 [[package]]
 name = "raven-testutil"
-version = "0.6.9"
+version = "0.6.10"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "raven-tokenizer"
-version = "0.6.9"
+version = "0.6.10"
 dependencies = [
  "raven-proto",
  "regex",
@@ -2679,7 +2679,7 @@ dependencies = [
 
 [[package]]
 name = "raven-tools"
-version = "0.6.9"
+version = "0.6.10"
 dependencies = [
  "anydoc",
  "anyhow",
@@ -2701,7 +2701,7 @@ dependencies = [
 
 [[package]]
 name = "raven-tui"
-version = "0.6.9"
+version = "0.6.10"
 dependencies = [
  "anyhow",
  "crossterm",
