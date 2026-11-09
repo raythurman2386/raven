@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = [".", "crates/raven-proto", "crates/raven-tokenizer"]
+members = [".", "crates/raven-proto", "crates/raven-tokenizer", "crates/raven-config", "crates/raven-persist"]
 
 [workspace.package]
 version = "0.6.9"
@@ -42,6 +42,8 @@ criterion = "0.8"
 zip = "8.6"
 raven-proto = { path = "crates/raven-proto", version = "0.6.9" }
 raven-tokenizer = { path = "crates/raven-tokenizer", version = "0.6.9" }
+raven-config = { path = "crates/raven-config", version = "0.6.9" }
+raven-persist = { path = "crates/raven-persist", version = "0.6.9" }
 
 [package]
 name = "raven"
@@ -58,6 +60,8 @@ path = "src/main.rs"
 [dependencies]
 raven-proto = { workspace = true }
 raven-tokenizer = { workspace = true }
+raven-config = { workspace = true }
+raven-persist = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }
 reqwest = { workspace = true }

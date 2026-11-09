@@ -105,66 +105,7 @@ fn provider_model_candidates(provider: &crate::config::Provider) -> Vec<String> 
     fetched
 }
 
-pub(crate) fn fetch_live_provider_models(provider: &crate::config::Provider) -> Vec<String> {
-    let base = provider.base_url.trim_end_matches('/');
-    let urls = if base.contains("/v1") {
-        vec![
-            format!("{}/models", base),
-            format!("{}/api/tags", base.trim_end_matches("/v1")),
-        ]
-    } else {
-        vec![format!("{}/models", base), format!("{}/api/tags", base)]
-    };
-
-    let client = match reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(2))
-        .build()
-    {
-        Ok(client) => client,
-        Err(_) => return Vec::new(),
-    };
-
-    for url in urls {
-        let req = provider.apply_auth_blocking(client.get(&url));
-
-        let Ok(resp) = req.send() else {
-            continue;
-        };
-        if !resp.status().is_success() {
-            continue;
-        }
-
-        let Ok(body) = resp.json::<serde_json::Value>() else {
-            continue;
-        };
-
-        let mut names = Vec::new();
-        if let Some(data) = body.get("data").and_then(serde_json::Value::as_array) {
-            for entry in data {
-                if let Some(id) = entry.get("id").and_then(serde_json::Value::as_str) {
-                    names.push(id.to_string());
-                } else if let Some(name) = entry.get("name").and_then(serde_json::Value::as_str) {
-                    names.push(name.to_string());
-                }
-            }
-        }
-        if let Some(models) = body.get("models").and_then(serde_json::Value::as_array) {
-            for entry in models {
-                if let Some(name) = entry.get("name").and_then(serde_json::Value::as_str) {
-                    names.push(name.to_string());
-                }
-            }
-        }
-
-        if !names.is_empty() {
-            names.sort();
-            names.dedup();
-            return names;
-        }
-    }
-
-    Vec::new()
-}
+pub(crate) use crate::config::fetch_live_provider_models;
 
 /// Argument completion candidates for slash commands that accept a value.
 pub fn completion_arg_candidates(

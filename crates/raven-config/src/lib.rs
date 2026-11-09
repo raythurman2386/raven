@@ -23,13 +23,18 @@ use serde::Deserialize;
 use std::path::PathBuf;
 
 pub use grok_auth::{auth_path as grok_auth_path, DEFAULT_PROXY_BASE_URL as GROK_PROXY_BASE_URL};
-pub use onboarding::{config_paths, fallback_models, needs_onboarding, run_onboarding};
+pub use mcp::{merge_specs, McpConfig, McpServerConfig, McpServerSpec};
+pub use onboarding::{
+    config_paths, fallback_models, needs_onboarding, read_line_if_tty, run_onboarding, stdin_is_tty,
+};
 pub use provider::{
-    is_known_provider, known_provider_names, resolve_provider, Provider, ProviderConfig,
+    fetch_live_provider_models, is_known_provider, known_provider_names, resolve_provider,
+    Provider, ProviderConfig,
 };
 pub use raven_proto::Scope;
 
 pub mod grok_auth;
+mod mcp;
 mod onboarding;
 mod provider;
 
@@ -153,7 +158,7 @@ pub fn resolve_scope(
     Ok(Scope::System)
 }
 
-/// Runtime configuration for an [`crate::agent::Agent`].
+/// Runtime configuration for the agent.
 ///
 /// Constructed from CLI flags + environment variables in `crate::main`.
 /// All fields are public so callers (TUI, headless runner, sub-agents) can
@@ -198,7 +203,7 @@ pub struct Settings {
     /// (via the same ask_user channel). Off with `--yolo`.
     pub confirm_shell: bool,
     /// The active color theme name (e.g. `ravenwood`, `nord`). Resolved to a
-    /// [`crate::tui::Theme`] at TUI startup; unknown names fall back to the
+    /// TUI theme at startup; unknown names fall back to the
     /// default.
     pub theme: String,
     /// Optional self-hosted SearXNG base URL (e.g. `http://127.0.0.1:8080`).
@@ -547,7 +552,7 @@ pub struct ConfigFile {
     /// Native MCP servers (`[mcp.servers.<name>]`). Workspace overlay wins
     /// per server name over the global file.
     #[serde(default)]
-    pub mcp: crate::mcp::McpConfig,
+    pub mcp: McpConfig,
     /// Shorter system prompt. See [`EfficiencyFlags`].
     pub lean_prompt: Option<bool>,
     /// Core tools only; other schemas load through `tool_schema`.
@@ -621,6 +626,50 @@ fn load_toml_file(path: &std::path::Path) -> ConfigFile {
             ConfigFile::default()
         }),
         Err(_) => ConfigFile::default(),
+    }
+}
+
+/// Infer a model's context window from its name (fallback when API is unreachable).
+///
+/// Heuristics:
+///   - glm-5.3-flash:cloud, deepseek-v4:cloud (flash and pro) → 1_000_000
+///   - qwen3.5                                              → 262_144
+///   - gemma4 / gemma3 / qwen2.5 / qwen3 / deepseek / llama3.1 / llama3.2 / codestral → 128_000
+///   - llama3 / codellama / "32k" in name                   → 32_768
+///   - mistral / "8k" in name                               → 8_192
+///   - fallback                                             → 32_768
+pub fn infer_context_window(model: &str) -> usize {
+    let m = model.to_lowercase();
+    // Grok Build catalog (grok-4.5 / 4.6 / 4.7) is 500k on the CLI chat proxy.
+    if m.contains("grok-4") {
+        return 500_000;
+    }
+    // Cloud glm (via Ollama) has a 1M-token context.
+    if m.contains("glm") && m.contains("cloud") {
+        1_000_000
+    } else if m.contains("deepseek-v4") && m.contains("cloud") {
+        // deepseek-v4-flash:cloud and deepseek-v4-pro:cloud → 1M (verified via /api/show).
+        1_000_000
+    } else if m.contains("qwen3.5") {
+        // Qwen 3.5 family is 256K; check before the broader `qwen3` match.
+        262_144
+    } else if m.contains("gemma4")
+        || m.contains("gemma3")
+        || m.contains("qwen2.5")
+        || m.contains("qwen3")
+        || m.contains("llama3.1")
+        || m.contains("llama3.2")
+        || m.contains("deepseek")
+        || m.contains("codestral")
+        || m.contains("glm")
+    {
+        128_000
+    } else if m.contains("llama3") || m.contains("codellama") || m.contains("32k") {
+        32_768
+    } else if m.contains("mistral") || m.contains("8k") {
+        8_192
+    } else {
+        32_768
     }
 }
 

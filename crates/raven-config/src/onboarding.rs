@@ -178,7 +178,7 @@ pub async fn run_onboarding() -> anyhow::Result<ConfigFile> {
     println!("Welcome to Raven — first-run setup\n");
 
     // 1. Provider menu: known providers + a trailing "custom" entry.
-    let mut known = crate::config::known_provider_names(&super::ConfigFile::default());
+    let mut known = crate::known_provider_names(&super::ConfigFile::default());
     known.sort();
     let mut options: Vec<String> = known.clone();
     options.push("custom (any OpenAI-compatible base URL)".to_string());
@@ -191,7 +191,7 @@ pub async fn run_onboarding() -> anyhow::Result<ConfigFile> {
     let (provider_name, base_url) = if let Some(idx) = provider_choice {
         if idx < known.len() {
             let name = known[idx].clone();
-            let base = crate::config::Provider::builtin(&name)
+            let base = crate::Provider::builtin(&name)
                 .map(|p| p.base_url)
                 .unwrap_or_else(|| "http://localhost:11434/v1".to_string());
             (name, base)
@@ -223,8 +223,8 @@ pub async fn run_onboarding() -> anyhow::Result<ConfigFile> {
     };
 
     // 3. Model selection: live list when reachable, else curated fallback.
-    let builtin = crate::config::Provider::builtin(&provider_name);
-    let mut provider = crate::config::Provider {
+    let builtin = crate::Provider::builtin(&provider_name);
+    let mut provider = crate::Provider {
         name: provider_name.clone(),
         base_url: base_url.clone(),
         api_key: api_key.clone(),
@@ -235,7 +235,7 @@ pub async fn run_onboarding() -> anyhow::Result<ConfigFile> {
     // Fill the Grok session (or a provider API key) before listing models,
     // or the proxy answers 401 and the wizard falls back to the curated list.
     provider = provider.resolve_key();
-    let live = crate::tui::fetch_live_provider_models(&provider);
+    let live = crate::fetch_live_provider_models(&provider);
     let candidates = if live.is_empty() {
         fallback_models(&provider_name)
     } else {
@@ -293,16 +293,37 @@ pub async fn run_onboarding() -> anyhow::Result<ConfigFile> {
     Ok(cfg)
 }
 
+/// Whether stdin is an interactive terminal.
+pub fn stdin_is_tty() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdin().is_terminal()
+}
+
+/// Read one line of user input, or return `None` immediately when stdin is not
+/// interactive (cron / piped / closed). Never blocks on a non-TTY stdin.
+pub fn read_line_if_tty() -> Option<String> {
+    if !stdin_is_tty() {
+        return None;
+    }
+    let mut line = String::new();
+    let n = std::io::stdin().read_line(&mut line).unwrap_or(0);
+    if n == 0 {
+        None
+    } else {
+        Some(line)
+    }
+}
+
 /// Read one trimmed line from stdin, erroring if stdin is not interactive.
 fn read_line() -> anyhow::Result<String> {
-    crate::runner::read_line_if_tty()
+    read_line_if_tty()
         .map(|l| l.trim().to_string())
         .ok_or_else(|| anyhow::anyhow!("stdin is not interactive"))
 }
 
 /// Read one trimmed line, or None if stdin is not interactive.
 fn read_line_trimmed() -> Option<String> {
-    crate::runner::read_line_if_tty().map(|l| l.trim().to_string())
+    read_line_if_tty().map(|l| l.trim().to_string())
 }
 
 /// Read a 1-based menu choice into a 0-based index. When `allow_zero` is true,

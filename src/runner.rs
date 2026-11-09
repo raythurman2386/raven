@@ -286,26 +286,7 @@ pub fn save_session_messages(
     Ok(())
 }
 
-/// Whether stdin is an interactive terminal.
-pub fn stdin_is_tty() -> bool {
-    use std::io::IsTerminal;
-    std::io::stdin().is_terminal()
-}
-
-/// Read one line of user input, or return `None` immediately when stdin is not
-/// interactive (cron / piped / closed). Never blocks on a non-TTY stdin.
-pub fn read_line_if_tty() -> Option<String> {
-    if !stdin_is_tty() {
-        return None;
-    }
-    let mut line = String::new();
-    let n = std::io::stdin().read_line(&mut line).unwrap_or(0);
-    if n == 0 {
-        None
-    } else {
-        Some(line)
-    }
-}
+pub use crate::config::{read_line_if_tty, stdin_is_tty};
 
 /// The outcome of an interactive approval prompt.
 #[derive(Debug)]

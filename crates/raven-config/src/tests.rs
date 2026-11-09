@@ -3,8 +3,6 @@
 //! `provider.rs` where they can reach the private helpers.
 
 use super::*;
-use crate::config::parse_reasoning_effort;
-use crate::context::infer_context_window;
 
 #[test]
 fn resolve_scope_repo_when_not_system() {
@@ -506,7 +504,7 @@ fn load_global_dotenv_reads_home_env() {
     )
     .unwrap();
 
-    let n = crate::config::load_global_dotenv();
+    let n = crate::load_global_dotenv();
     assert_eq!(n, 1);
     assert_eq!(
         std::env::var("OLLAMA_API_KEY").unwrap(),

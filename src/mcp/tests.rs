@@ -1,5 +1,6 @@
 use super::*;
 use serde_json::json;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 fn fake_mcp_script() -> PathBuf {

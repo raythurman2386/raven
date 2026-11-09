@@ -2547,6 +2547,8 @@ dependencies = [
  "libc",
  "pulldown-cmark",
  "ratatui",
+ "raven-config",
+ "raven-persist",
  "raven-proto",
  "raven-tokenizer",
  "regex",
@@ -2567,6 +2569,39 @@ dependencies = [
  "unicode-width",
  "walkdir",
  "zip",
+]
+
+[[package]]
+name = "raven-config"
+version = "0.6.9"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "libc",
+ "raven-proto",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "toml",
+ "tracing",
+]
+
+[[package]]
+name = "raven-persist"
+version = "0.6.9"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "libc",
+ "raven-config",
+ "raven-proto",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]

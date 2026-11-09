@@ -85,49 +85,7 @@ pub fn fold_usage(messages: &[ChatMessage]) -> Option<TokenUsage> {
     })
 }
 
-/// Infer a model's context window from its name (fallback when API is unreachable).
-///
-/// Heuristics:
-///   - glm-5.3-flash:cloud, deepseek-v4:cloud (flash and pro) → 1_000_000
-///   - qwen3.5                                              → 262_144
-///   - gemma4 / gemma3 / qwen2.5 / qwen3 / deepseek / llama3.1 / llama3.2 / codestral → 128_000
-///   - llama3 / codellama / "32k" in name                   → 32_768
-///   - mistral / "8k" in name                               → 8_192
-///   - fallback                                             → 32_768
-pub fn infer_context_window(model: &str) -> usize {
-    let m = model.to_lowercase();
-    // Grok Build catalog (grok-4.5 / 4.6 / 4.7) is 500k on the CLI chat proxy.
-    if m.contains("grok-4") {
-        return 500_000;
-    }
-    // Cloud glm (via Ollama) has a 1M-token context.
-    if m.contains("glm") && m.contains("cloud") {
-        1_000_000
-    } else if m.contains("deepseek-v4") && m.contains("cloud") {
-        // deepseek-v4-flash:cloud and deepseek-v4-pro:cloud → 1M (verified via /api/show).
-        1_000_000
-    } else if m.contains("qwen3.5") {
-        // Qwen 3.5 family is 256K; check before the broader `qwen3` match.
-        262_144
-    } else if m.contains("gemma4")
-        || m.contains("gemma3")
-        || m.contains("qwen2.5")
-        || m.contains("qwen3")
-        || m.contains("llama3.1")
-        || m.contains("llama3.2")
-        || m.contains("deepseek")
-        || m.contains("codestral")
-        || m.contains("glm")
-    {
-        128_000
-    } else if m.contains("llama3") || m.contains("codellama") || m.contains("32k") {
-        32_768
-    } else if m.contains("mistral") || m.contains("8k") {
-        8_192
-    } else {
-        32_768
-    }
-}
+pub use raven_config::infer_context_window;
 
 /// Fetch the actual context window from the provider's API.
 ///
