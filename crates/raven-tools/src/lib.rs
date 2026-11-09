@@ -70,8 +70,4 @@ pub fn todo_write(state_dir: Option<&Path>, todos: Vec<TodoItem>) -> anyhow::Res
 }
 
 #[cfg(test)]
-#[path = "../../../src/testutil.rs"]
-mod testutil;
-
-#[cfg(test)]
 mod tests;

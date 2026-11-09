@@ -2744,9 +2744,4 @@ pub(crate) fn theme_name(theme: Theme) -> &'static str {
 }
 
 #[cfg(test)]
-#[allow(dead_code)]
-#[path = "../../../src/testutil.rs"]
-mod testutil;
-
-#[cfg(test)]
 mod tests;

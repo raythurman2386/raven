@@ -2546,6 +2546,7 @@ dependencies = [
  "raven-persist",
  "raven-proto",
  "raven-sandbox",
+ "raven-testutil",
  "raven-tokenizer",
  "raven-tools",
  "raven-tui",
@@ -2562,11 +2563,11 @@ name = "raven-acp"
 version = "0.6.9"
 dependencies = [
  "anyhow",
- "libc",
  "raven-agent",
  "raven-config",
  "raven-persist",
  "raven-proto",
+ "raven-testutil",
  "serde",
  "serde_json",
  "tempfile",
@@ -2580,10 +2581,10 @@ version = "0.6.9"
 dependencies = [
  "anyhow",
  "futures-util",
- "libc",
  "raven-config",
  "raven-persist",
  "raven-proto",
+ "raven-testutil",
  "raven-tokenizer",
  "raven-tools",
  "reqwest",
@@ -2617,9 +2618,9 @@ version = "0.6.9"
 dependencies = [
  "anyhow",
  "dirs",
- "libc",
  "raven-config",
  "raven-proto",
+ "raven-testutil",
  "serde",
  "serde_json",
  "tempfile",
@@ -2654,6 +2655,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "raven-testutil"
+version = "0.6.9"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "raven-tokenizer"
 version = "0.6.9"
 dependencies = [
@@ -2671,11 +2679,11 @@ dependencies = [
  "anyhow",
  "dirs",
  "ignore",
- "libc",
  "raven-config",
  "raven-persist",
  "raven-proto",
  "raven-sandbox",
+ "raven-testutil",
  "regex",
  "reqwest",
  "serde_json",
@@ -2692,13 +2700,13 @@ dependencies = [
  "anyhow",
  "crossterm",
  "dirs",
- "libc",
  "pulldown-cmark",
  "ratatui",
  "raven-agent",
  "raven-config",
  "raven-persist",
  "raven-proto",
+ "raven-testutil",
  "serde",
  "serde_json",
  "tempfile",

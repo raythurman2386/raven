@@ -53,9 +53,3 @@ pub mod mcp {
 pub mod plugins {
     pub use raven_tools::plugins::mcp_specs;
 }
-
-// The shared helpers also serve crates that do not call every function.
-#[cfg(test)]
-#[allow(dead_code)]
-#[path = "../../../src/testutil.rs"]
-mod testutil;

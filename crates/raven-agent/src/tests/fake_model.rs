@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 /// spawns a confined child, when running under a restrictive outer sandbox
 /// that kills the child. Returns `true` when the test should skip.
 fn skip_if_outer_sandbox() -> bool {
-    if crate::testutil::outer_sandbox_restrictive() {
+    if raven_testutil::outer_sandbox_restrictive() {
         eprintln!("outer sandbox restrictive; skipping fake-model test that invokes a real tool");
         true
     } else {

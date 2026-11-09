@@ -10,11 +10,6 @@ pub mod protocol;
 pub mod server;
 
 #[cfg(test)]
-#[allow(dead_code)]
-#[path = "../../../src/testutil.rs"]
-mod testutil;
-
-#[cfg(test)]
 mod tests;
 
 pub use server::{run_stdio, AcpServer, FrameWrite};

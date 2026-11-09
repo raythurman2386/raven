@@ -598,7 +598,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn for_settings_system_roots_store_under_home() {
-        let _guard = crate::testutil::home_env_lock();
+        let _guard = raven_testutil::home_env_lock();
         let home = tempfile::tempdir().unwrap();
         let original_home = std::env::var_os("HOME");
         std::env::set_var("HOME", home.path());
@@ -619,7 +619,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn for_settings_system_round_trips_sessions() {
-        let _guard = crate::testutil::home_env_lock();
+        let _guard = raven_testutil::home_env_lock();
         let home = tempfile::tempdir().unwrap();
         let original_home = std::env::var_os("HOME");
         std::env::set_var("HOME", home.path());
@@ -655,7 +655,7 @@ mod tests {
 
         // System scope: exports land under ~/.raven/system/exports, next to
         // the system sessions dir (not directly under ~/.raven).
-        let _guard = crate::testutil::home_env_lock();
+        let _guard = raven_testutil::home_env_lock();
         let home = tempfile::tempdir().unwrap();
         let original_home = std::env::var_os("HOME");
         std::env::set_var("HOME", home.path());

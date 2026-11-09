@@ -102,7 +102,7 @@ fn confined_child_oversized_write_capped_by_fsize() {
 #[test]
 #[cfg(unix)]
 fn run_shell_runs_node_under_confinement() {
-    let _home_guard = crate::testutil::home_env_lock();
+    let _home_guard = raven_testutil::home_env_lock();
     // Regression: the sandbox's RLIMIT_AS cap (virtual address space) and
     // RLIMIT_NPROC cap (per-user thread ceiling) both made Node/V8 abort
     // at startup (CodeRange OOM / uv_thread_create failure). Neither cap
@@ -292,7 +292,7 @@ fn confined_child_cannot_read_outside_workspace() {
 #[test]
 #[cfg(target_os = "linux")]
 fn confined_child_cannot_read_home_secrets() {
-    let _home_guard = crate::testutil::home_env_lock();
+    let _home_guard = raven_testutil::home_env_lock();
     // Regression: the sandbox used to grant read on all of `$HOME`, so a
     // confined child could read `~/.ssh`, `~/.env`, `~/.aws`, sibling
     // workspaces, documents, etc. Now `$HOME` is Execute-only (traversal);
@@ -329,7 +329,7 @@ fn confined_child_cannot_read_home_secrets() {
 #[test]
 #[cfg(target_os = "linux")]
 fn confined_child_can_exec_toolchain_from_home() {
-    let _home_guard = crate::testutil::home_env_lock();
+    let _home_guard = raven_testutil::home_env_lock();
     // The narrowed grant must still let a confined child exec toolchain
     // binaries under `$HOME` (`~/.cargo/bin/cargo`, `~/.rustup`, `~/.local`).
     // If the traversal/read grants are too tight, cargo won't run.
@@ -345,7 +345,7 @@ fn confined_child_can_exec_toolchain_from_home() {
 #[test]
 #[cfg(target_os = "linux")]
 fn run_shell_verification_command_skips_seccomp_network_block() {
-    let _home_guard = crate::testutil::home_env_lock();
+    let _home_guard = raven_testutil::home_env_lock();
     // Regression for #155: `run_shell` hardcoded `skip_network_block = false`,
     // so a sanctioned test runner (vitest/v8) that opens an AF_INET socket for
     // coverage/worker IPC was SIGSYS-killed (exit 159). `run_tests` already
@@ -423,7 +423,7 @@ fn run_shell_network_kill_explains_sigsys() {
 #[test]
 #[cfg(target_os = "linux")]
 fn run_shell_verification_command_skips_rlimits() {
-    let _home_guard = crate::testutil::home_env_lock();
+    let _home_guard = raven_testutil::home_env_lock();
     // Regression: `run_shell` applied RLIMIT_FSIZE to every command,
     // including sanctioned verification commands like `cargo test`. A test
     // that writes a large file (or a linker emitting a >248 MiB binary) was

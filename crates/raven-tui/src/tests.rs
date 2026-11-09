@@ -12,7 +12,7 @@ use std::path::Path;
 /// context-window probe) when running under a restrictive outer sandbox that
 /// SIGSYS-kills AF_INET sockets. Returns `true` when the test should skip.
 fn skip_if_outer_sandbox() -> bool {
-    if crate::testutil::outer_sandbox_restrictive() {
+    if raven_testutil::outer_sandbox_restrictive() {
         eprintln!("outer sandbox blocks AF_INET sockets; skipping network-dependent TUI test");
         true
     } else {

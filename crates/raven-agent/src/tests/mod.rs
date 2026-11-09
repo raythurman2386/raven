@@ -23,7 +23,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 /// under a restrictive outer sandbox that SIGSYS-kills sockets. Returns `true`
 /// when the test should skip.
 fn skip_if_outer_sandbox() -> bool {
-    if crate::testutil::outer_sandbox_restrictive() {
+    if raven_testutil::outer_sandbox_restrictive() {
         eprintln!("outer sandbox blocks AF_INET sockets; skipping mock-server agent test");
         true
     } else {

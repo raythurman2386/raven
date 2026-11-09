@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = [".", "crates/raven-proto", "crates/raven-tokenizer", "crates/raven-config", "crates/raven-persist", "crates/raven-sandbox", "crates/raven-tools", "crates/raven-agent", "crates/raven-tui", "crates/raven-acp"]
+members = [".", "crates/raven-proto", "crates/raven-tokenizer", "crates/raven-config", "crates/raven-persist", "crates/raven-sandbox", "crates/raven-tools", "crates/raven-agent", "crates/raven-tui", "crates/raven-acp", "crates/raven-testutil"]
 
 [workspace.package]
 version = "0.6.9"
@@ -49,6 +49,7 @@ raven-tools = { path = "crates/raven-tools", version = "0.6.9" }
 raven-agent = { path = "crates/raven-agent", version = "0.6.9" }
 raven-tui = { path = "crates/raven-tui", version = "0.6.9" }
 raven-acp = { path = "crates/raven-acp", version = "0.6.9" }
+raven-testutil = { path = "crates/raven-testutil", version = "0.6.9" }
 
 [package]
 name = "raven"
@@ -72,6 +73,7 @@ raven-tools = { workspace = true }
 raven-agent = { workspace = true }
 raven-tui = { workspace = true }
 raven-acp = { workspace = true }
+raven-testutil = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }
 reqwest = { workspace = true }
@@ -80,12 +82,12 @@ dirs = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tempfile = { workspace = true }
-libc = { workspace = true }
 ring = { workspace = true }
 base64 = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+libc = { workspace = true }
 
 [[bench]]
 name = "tokenizer"
