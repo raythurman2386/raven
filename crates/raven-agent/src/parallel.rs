@@ -5,8 +5,8 @@ use anyhow::{Context, Result};
 use std::path::Path;
 use tokio::sync::mpsc;
 
-use crate::config::Settings;
-use crate::tools::{GitOps, Sandbox};
+use raven_config::Settings;
+use raven_tools::{GitOps, Sandbox};
 
 use super::core::Agent;
 use raven_proto::AgentEvent;

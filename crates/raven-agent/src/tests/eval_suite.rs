@@ -4,9 +4,9 @@
 //! model endpoint. Run with: `cargo test eval_suite`
 
 use super::super::core::{Agent, CompletionSource};
-use crate::config::{Mode, Provider, Scope, Settings};
-use crate::tools::GitOps;
+use raven_config::{Mode, Provider, Scope, Settings};
 use raven_proto::AgentEvent;
+use raven_tools::GitOps;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
@@ -36,7 +36,7 @@ fn settings_for(workspace: &std::path::Path) -> Settings {
         // Eval agents model a persisted session: goal/todo state goes to
         // this dir, so a fresh dir means fresh state (issue #185).
         session_state_dir: Some(workspace.join(".raven/sessions/eval-default/state")),
-        efficiency: crate::config::EfficiencyFlags::default(),
+        efficiency: raven_config::EfficiencyFlags::default(),
     }
 }
 
@@ -474,7 +474,7 @@ async fn eval_suite_goal_set_persists_and_injects() {
     let state_dir = settings.session_state_dir.clone().expect("state dir set");
     let goal_path = state_dir.join("goal.json");
     assert!(goal_path.exists(), "session goal.json should be written");
-    let goal = crate::state::load_goal_from_dir(&state_dir).expect("goal should load");
+    let goal = raven_persist::state::load_goal_from_dir(&state_dir).expect("goal should load");
     assert_eq!(goal.description, "Ship the feature");
     assert_eq!(goal.status, "in_progress");
     // The legacy workspace-global file must stay untouched.
@@ -522,7 +522,7 @@ async fn eval_suite_todo_write_persists_and_injects() {
     let _ = drain(&mut rx).await;
 
     let state_dir = settings.session_state_dir.clone().expect("state dir set");
-    let todos = crate::state::load_todos_from_dir(&state_dir);
+    let todos = raven_persist::state::load_todos_from_dir(&state_dir);
     assert_eq!(todos.len(), 2);
     assert_eq!(todos[0].content, "Do A");
     assert_eq!(todos[0].status, "in_progress");

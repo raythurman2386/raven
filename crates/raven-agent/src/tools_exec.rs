@@ -12,11 +12,11 @@ use anyhow::Result;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
-use crate::tools::{
+use raven_proto::ToolError;
+use raven_tools::{
     dispatch, safe_command_re, system_command_autonomous, validate_tool_call, Sandbox,
     MAX_ARGUMENTS_BYTES,
 };
-use raven_proto::ToolError;
 
 use super::core::Agent;
 use raven_proto::{AgentEvent, ChatMessage, ToolCall};
@@ -249,7 +249,7 @@ impl Agent {
                     super::parallel::delegate_task(sub_settings, description, tx.clone()).await;
                 let result = match result {
                     Ok(out) => {
-                        let sandbox = crate::tools::Sandbox::new(self.settings.workspace.clone());
+                        let sandbox = raven_tools::Sandbox::new(self.settings.workspace.clone());
                         let presented = sandbox.present_output("subagent", out);
                         format!("Sub-agent result:\n{presented}")
                     }
@@ -283,18 +283,18 @@ impl Agent {
                         .unwrap_or("")
                         .to_string();
                     let page = args.get("page").and_then(|v| v.as_u64()).map(|p| p as u32);
-                    let searxng = crate::web::SearxngConfig {
+                    let searxng = raven_tools::web::SearxngConfig {
                         base_url: self.settings.searxng_url.clone(),
                         engines: self.settings.searxng_engines.clone(),
                     };
-                    crate::web::search(&query, page, Some(&searxng)).await
+                    raven_tools::web::search(&query, page, Some(&searxng)).await
                 } else {
                     let url = args
                         .get("url")
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string();
-                    crate::web::fetch_text(&url).await
+                    raven_tools::web::fetch_text(&url).await
                 };
                 tracing::info!(
                     tool = tc.function.name.as_str(),
@@ -803,7 +803,7 @@ pub(crate) fn is_mcp_verify_cacheable(name: &str) -> bool {
 /// Includes built-in read-only tools, MCP tools annotated `readOnlyHint: true`,
 /// and exact doc_drift verifies. Mutating tools are never cacheable; a
 /// successful mutate clears the cache via [`should_invalidate_tool_cache`].
-pub(crate) fn is_cacheable_tool(name: &str, mcp: Option<&crate::mcp::McpHandle>) -> bool {
+pub(crate) fn is_cacheable_tool(name: &str, mcp: Option<&raven_tools::mcp::McpHandle>) -> bool {
     if is_builtin_read_only(name) {
         return true;
     }
@@ -824,7 +824,7 @@ pub(crate) fn is_cacheable_tool(name: &str, mcp: Option<&crate::mcp::McpHandle>)
 /// non-read-only MCP tools also clear so verify-cache hits cannot go stale.
 pub(crate) fn should_invalidate_tool_cache(
     name: &str,
-    mcp: Option<&crate::mcp::McpHandle>,
+    mcp: Option<&raven_tools::mcp::McpHandle>,
 ) -> bool {
     if matches!(
         name,

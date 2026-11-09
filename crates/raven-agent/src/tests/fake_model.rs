@@ -7,9 +7,9 @@
 //! finish logic all run against deterministic scripted completions.
 
 use super::super::core::{clamp_max_tokens, Agent, CompletionSource};
-use crate::config::{Mode, Provider, Scope, Settings};
-use crate::tools::GitOps;
+use raven_config::{Mode, Provider, Scope, Settings};
 use raven_proto::AgentEvent;
+use raven_tools::GitOps;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
@@ -51,7 +51,7 @@ fn settings_for(workspace: &std::path::Path) -> Settings {
         sandbox_extra_rw: Vec::new(),
         allow_delegate: true,
         session_state_dir: None,
-        efficiency: crate::config::EfficiencyFlags::default(),
+        efficiency: raven_config::EfficiencyFlags::default(),
     }
 }
 
@@ -872,7 +872,10 @@ fn tool_names(tools: &Value) -> Vec<String> {
 
 #[test]
 fn prompt_section_estimates_for_this_repo() {
-    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("repo root");
     let mut settings = settings_for(&root);
     settings.model = "grok-4.7".into();
     let agent = Agent::new(settings.clone()).unwrap();

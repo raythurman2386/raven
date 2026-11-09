@@ -13,7 +13,7 @@ use super::loop_control::{
     VERIFY_PLATEAU_K,
 };
 use super::stream::args_to_string;
-use crate::config::{Mode, Scope};
+use raven_config::{Mode, Scope};
 use raven_proto::{AgentEvent, ChatMessage, FunctionCall, ToolCall};
 use serde_json::{json, Value};
 use std::net::TcpListener as StdTcpListener;
@@ -188,10 +188,10 @@ async fn spawn_mock_status(
 
 /// Returns a `Settings` configured for tests against a mock server.
 #[allow(dead_code)]
-fn settings_for(workspace: &std::path::Path, base_url: &str) -> crate::config::Settings {
-    let mut provider = crate::config::Provider::builtin("ollama").expect("ollama builtin");
+fn settings_for(workspace: &std::path::Path, base_url: &str) -> raven_config::Settings {
+    let mut provider = raven_config::Provider::builtin("ollama").expect("ollama builtin");
     provider.base_url = base_url.into();
-    crate::config::Settings {
+    raven_config::Settings {
         model: "mock-model".into(),
         provider,
         workspace: workspace.to_path_buf(),
@@ -214,7 +214,7 @@ fn settings_for(workspace: &std::path::Path, base_url: &str) -> crate::config::S
         sandbox_extra_rw: Vec::new(),
         allow_delegate: true,
         session_state_dir: None,
-        efficiency: crate::config::EfficiencyFlags::default(),
+        efficiency: raven_config::EfficiencyFlags::default(),
     }
 }
 
@@ -415,18 +415,18 @@ fn iteration_5_nudge_removed() {
 #[test]
 fn goal_aware_reminder_anchors_goal_and_next_task() {
     let msgs = vec![plain("system")];
-    let goal = crate::state::Goal {
+    let goal = raven_persist::state::Goal {
         description: "Ship the feature".into(),
         status: "in_progress".into(),
         updated_at: "".into(),
     };
     let todos = vec![
-        crate::state::TodoItem {
+        raven_persist::state::TodoItem {
             content: "Done task".into(),
             status: "completed".into(),
             priority: "high".into(),
         },
-        crate::state::TodoItem {
+        raven_persist::state::TodoItem {
             content: "Next task".into(),
             status: "pending".into(),
             priority: "medium".into(),
@@ -445,7 +445,7 @@ fn goal_aware_reminder_anchors_goal_and_next_task() {
 
 #[test]
 fn goal_aware_reminder_fires_once_then_every_8th() {
-    let goal = crate::state::Goal {
+    let goal = raven_persist::state::Goal {
         description: "Ship it".into(),
         status: "in_progress".into(),
         updated_at: "".into(),
@@ -468,7 +468,7 @@ fn goal_aware_reminder_fires_once_then_every_8th() {
 #[test]
 fn goal_aware_reminder_skips_completed_goal() {
     let msgs = vec![plain("system")];
-    let goal = crate::state::Goal {
+    let goal = raven_persist::state::Goal {
         description: "Done goal".into(),
         status: "completed".into(),
         updated_at: "".into(),
@@ -491,18 +491,18 @@ fn verify_plateau_stops_when_primary_met_and_verify_repeats() {
             "live drift=0",
         ));
     }
-    let goal = crate::state::Goal {
+    let goal = raven_persist::state::Goal {
         description: "Fix live doc_drift".into(),
         status: "completed".into(),
         updated_at: "2026-09-25".into(),
     };
     let todos = vec![
-        crate::state::TodoItem {
+        raven_persist::state::TodoItem {
             content: "Live verify".into(),
             status: "completed".into(),
             priority: "high".into(),
         },
-        crate::state::TodoItem {
+        raven_persist::state::TodoItem {
             content: "Chase dated memory-plan residue".into(),
             status: "pending".into(),
             priority: "low".into(),
@@ -543,7 +543,7 @@ fn verify_plateau_does_not_stop_with_live_work_open() {
             "live drift=0",
         ));
     }
-    let todos = vec![crate::state::TodoItem {
+    let todos = vec![raven_persist::state::TodoItem {
         content: "Fix live doc_drift verify".into(),
         status: "pending".into(),
         priority: "high".into(),
@@ -563,7 +563,7 @@ fn verify_plateau_does_not_stop_before_k() {
         "call_0",
         "live drift=0",
     ));
-    let goal = crate::state::Goal {
+    let goal = raven_persist::state::Goal {
         description: "done".into(),
         status: "completed".into(),
         updated_at: "".into(),
@@ -590,7 +590,7 @@ fn verify_plateau_hard_stop_error_does_not_count_as_hit() {
         "call_1",
         "Error: HARD STOP — `ripwire__doc_drift` already succeeded 3 times with the same arguments. Further identical calls are refused.",
     ));
-    let goal = crate::state::Goal {
+    let goal = raven_persist::state::Goal {
         description: "done".into(),
         status: "completed".into(),
         updated_at: "".into(),
@@ -616,7 +616,7 @@ fn verify_plateau_different_args_same_body_still_stops() {
         "call_1",
         "live drift=0",
     ));
-    let goal = crate::state::Goal {
+    let goal = raven_persist::state::Goal {
         description: "Fix live doc_drift".into(),
         status: "completed".into(),
         updated_at: "2026-09-25".into(),

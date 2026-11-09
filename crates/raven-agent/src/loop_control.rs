@@ -261,8 +261,8 @@ impl Agent {
 pub(crate) fn compute_reminders(
     messages: &[ChatMessage],
     iter: usize,
-    goal: Option<&crate::state::Goal>,
-    todos: &[crate::state::TodoItem],
+    goal: Option<&raven_persist::state::Goal>,
+    todos: &[raven_persist::state::TodoItem],
 ) -> Vec<String> {
     let mut reminders = Vec::new();
 
@@ -304,13 +304,13 @@ pub(crate) fn compute_reminders(
     if iter >= 4 && (iter - 4).is_multiple_of(8) {
         let mut anchor = String::new();
         if let Some(goal) = goal {
-            if crate::state::normalize_status(&goal.status) != "completed" {
+            if raven_persist::state::normalize_status(&goal.status) != "completed" {
                 anchor.push_str(&format!("Your goal: {}\n", goal.description));
             }
         }
         let next_pending = todos
             .iter()
-            .find(|t| crate::state::normalize_status(&t.status) != "completed")
+            .find(|t| raven_persist::state::normalize_status(&t.status) != "completed")
             .map(|t| t.content.clone());
         if let Some(next) = next_pending {
             anchor.push_str(&format!("Next pending task: {next}\n"));
@@ -414,10 +414,10 @@ pub(crate) const VERIFY_PLATEAU_K: usize = 2;
 
 /// Whether open work is only non-blocking residue (or primary work is already met).
 fn only_residue_or_primary_met(
-    goal: Option<&crate::state::Goal>,
-    todos: &[crate::state::TodoItem],
+    goal: Option<&raven_persist::state::Goal>,
+    todos: &[raven_persist::state::TodoItem],
 ) -> bool {
-    if crate::state::primary_work_satisfied(goal, todos) {
+    if raven_persist::state::primary_work_satisfied(goal, todos) {
         return true;
     }
     if todos.is_empty() {
@@ -425,11 +425,11 @@ fn only_residue_or_primary_met(
     }
     // Every incomplete todo is residue-style; any live todo is already completed.
     todos.iter().all(|t| {
-        crate::state::looks_like_residue_todo(&t.content)
-            || crate::state::normalize_status(&t.status) == "completed"
+        raven_persist::state::looks_like_residue_todo(&t.content)
+            || raven_persist::state::normalize_status(&t.status) == "completed"
     }) && todos
         .iter()
-        .any(|t| crate::state::looks_like_residue_todo(&t.content))
+        .any(|t| raven_persist::state::looks_like_residue_todo(&t.content))
 }
 
 /// Detect a verify-style success plateau that should end the turn.
@@ -440,8 +440,8 @@ fn only_residue_or_primary_met(
 /// refuse: after the primary metric is met, stop burning iterations.
 pub(crate) fn verify_plateau_should_stop(
     messages: &[ChatMessage],
-    goal: Option<&crate::state::Goal>,
-    todos: &[crate::state::TodoItem],
+    goal: Option<&raven_persist::state::Goal>,
+    todos: &[raven_persist::state::TodoItem],
 ) -> Option<(String, usize)> {
     if !only_residue_or_primary_met(goal, todos) {
         return None;

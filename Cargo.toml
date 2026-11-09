@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = [".", "crates/raven-proto", "crates/raven-tokenizer", "crates/raven-config", "crates/raven-persist", "crates/raven-sandbox", "crates/raven-tools"]
+members = [".", "crates/raven-proto", "crates/raven-tokenizer", "crates/raven-config", "crates/raven-persist", "crates/raven-sandbox", "crates/raven-tools", "crates/raven-agent"]
 
 [workspace.package]
 version = "0.6.9"
@@ -46,6 +46,7 @@ raven-config = { path = "crates/raven-config", version = "0.6.9" }
 raven-persist = { path = "crates/raven-persist", version = "0.6.9" }
 raven-sandbox = { path = "crates/raven-sandbox", version = "0.6.9" }
 raven-tools = { path = "crates/raven-tools", version = "0.6.9" }
+raven-agent = { path = "crates/raven-agent", version = "0.6.9" }
 
 [package]
 name = "raven"
@@ -66,10 +67,10 @@ raven-config = { workspace = true }
 raven-persist = { workspace = true }
 raven-sandbox = { workspace = true }
 raven-tools = { workspace = true }
+raven-agent = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }
 reqwest = { workspace = true }
-futures-util = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }

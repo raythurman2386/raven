@@ -8,7 +8,7 @@
 
 use serde_json::json;
 
-use crate::config::Settings;
+use raven_config::Settings;
 
 const TITLE_SYSTEM: &str = "You name coding sessions. Reply with ONLY a concise 3-5 word title \
      in Title Case. No quotes, no punctuation, no extra text.";
@@ -116,7 +116,7 @@ pub fn title_request_body(
 }
 
 /// Fire-and-forget title completion used by the TUI/ACP on the first real
-/// user prompt. Never constructs an [`crate::agent::Agent`] (no repo map,
+/// user prompt. Never constructs an [`crate::Agent`] (no repo map,
 /// no tools, no session messages). Fail-open: `None` on any error.
 pub async fn generate_session_title(settings: &Settings, user_text: &str) -> Option<String> {
     let client = reqwest::Client::builder()

@@ -2540,10 +2540,10 @@ dependencies = [
  "criterion",
  "crossterm",
  "dirs",
- "futures-util",
  "libc",
  "pulldown-cmark",
  "ratatui",
+ "raven-agent",
  "raven-config",
  "raven-persist",
  "raven-proto",
@@ -2562,6 +2562,25 @@ dependencies = [
  "tracing-subscriber",
  "unicode-segmentation",
  "unicode-width",
+]
+
+[[package]]
+name = "raven-agent"
+version = "0.6.9"
+dependencies = [
+ "anyhow",
+ "futures-util",
+ "libc",
+ "raven-config",
+ "raven-persist",
+ "raven-proto",
+ "raven-tokenizer",
+ "raven-tools",
+ "reqwest",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

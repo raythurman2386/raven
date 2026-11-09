@@ -13,14 +13,14 @@ use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use tokio::sync::mpsc;
 
-use crate::config::{load_agents_md, Mode, Settings};
 use crate::context::{compact_if_needed_llm, history_tokens};
-use crate::mcp::McpHandle;
-use crate::memory;
-use crate::tools::{tool_definitions, GitOps, Sandbox};
+use raven_config::{load_agents_md, Mode, Settings};
+use raven_persist::memory;
 use raven_proto::Plan;
 use raven_proto::{cap_http_body, AgentError};
 use raven_tokenizer::{append_usage_jsonl, count_tokens, UsageCalibration, MSG_OVERHEAD};
+use raven_tools::mcp::McpHandle;
+use raven_tools::{tool_definitions, GitOps, Sandbox};
 
 use super::loop_control::{compute_reminders, summarize_request, verify_plateau_should_stop};
 use super::stream::ParsedCompletion;
@@ -244,13 +244,13 @@ const SYSTEM_YOLO_APPENDIX: &str = r#"
 
 /// Load the goal from a session state directory, or `None` when the file is
 /// absent/corrupt (state lives in `state/goal.json`).
-fn load_goal_dir(state_dir: &std::path::Path) -> Option<crate::state::Goal> {
-    crate::state::load_goal_from_dir(state_dir)
+fn load_goal_dir(state_dir: &std::path::Path) -> Option<raven_persist::state::Goal> {
+    raven_persist::state::load_goal_from_dir(state_dir)
 }
 
 /// Load todos from a session state directory, or an empty list.
-fn load_todos_dir(state_dir: &std::path::Path) -> Vec<crate::state::TodoItem> {
-    crate::state::load_todos_from_dir(state_dir)
+fn load_todos_dir(state_dir: &std::path::Path) -> Vec<raven_persist::state::TodoItem> {
+    raven_persist::state::load_todos_from_dir(state_dir)
 }
 
 fn mode_text(settings: &Settings) -> &'static str {
@@ -331,7 +331,7 @@ fn setup_body(settings: &Settings) -> String {
             "Workspace root: {}\n",
             settings.workspace.display()
         ));
-        if let Some(map) = crate::repomap::build_map(&settings.workspace) {
+        if let Some(map) = raven_tools::repomap::build_map(&settings.workspace) {
             body.push('\n');
             body.push_str(&map);
             body.push('\n');
@@ -348,7 +348,7 @@ fn setup_body(settings: &Settings) -> String {
         let constraint_text = settings
             .session_state_dir
             .as_deref()
-            .and_then(crate::state::load_user_constraint_from_dir)
+            .and_then(raven_persist::state::load_user_constraint_from_dir)
             .map(|c| c.text);
         let lean = settings.efficiency.lean_prompt
             || constraint_text
@@ -373,26 +373,26 @@ fn setup_body(settings: &Settings) -> String {
             // When primary work is already met, auto-complete open residue
             // todos on prompt load (not only on todo_write) so they cannot
             // re-anchor until the next explicit todo_write.
-            if let Err(e) = crate::state::apply_residue_gate_to_dir(state_dir) {
+            if let Err(e) = raven_persist::state::apply_residue_gate_to_dir(state_dir) {
                 tracing::warn!("residue gate on setup_body failed: {e}");
             }
             // Order: constraint → goal → todos (pinned ask stays above
             // agent-written goal/todos so re-goal_set cannot erase it).
-            crate::state::append_user_constraint_section(&mut body, state_dir);
+            raven_persist::state::append_user_constraint_section(&mut body, state_dir);
             if let Some(goal) = load_goal_dir(state_dir) {
                 body.push_str("\n--- Current goal ---\n");
-                body.push_str(&crate::state::format_goal(&goal));
+                body.push_str(&raven_persist::state::format_goal(&goal));
                 body.push('\n');
             }
             let todos = load_todos_dir(state_dir);
             if !todos.is_empty() {
                 body.push_str("\n--- Task list ---\n");
-                body.push_str(&crate::state::format_todos(&todos));
+                body.push_str(&raven_persist::state::format_todos(&todos));
                 body.push('\n');
             }
         }
     } else {
-        let mem = crate::memory::load_system_memory();
+        let mem = raven_persist::memory::load_system_memory();
         if !mem.is_empty() {
             body.push_str("\n--- System memory ---\n");
             body.push_str(&mem);
@@ -405,7 +405,7 @@ fn setup_body(settings: &Settings) -> String {
         body.push('\n');
     }
     if settings.efficiency.tool_offload {
-        let catalog = crate::tools::offloaded_tool_catalog();
+        let catalog = raven_tools::offloaded_tool_catalog();
         if !catalog.is_empty() {
             body.push_str("\n--- Tools available on request ---\n");
             body.push_str(&catalog);
@@ -759,11 +759,11 @@ impl Agent {
     /// run shell.
     pub(crate) fn tools_value(&self) -> serde_json::Value {
         let tools = if self.settings.efficiency.tool_offload {
-            crate::tools::offloaded_tool_definitions(self.plan_only, self.settings.mode)
+            raven_tools::offloaded_tool_definitions(self.plan_only, self.settings.mode)
         } else if self.plan_only {
             match self.settings.mode {
-                Mode::Chat => crate::tools::chat_tool_definitions(),
-                _ => crate::tools::plan_tool_definitions(),
+                Mode::Chat => raven_tools::chat_tool_definitions(),
+                _ => raven_tools::plan_tool_definitions(),
             }
         } else {
             cached_tool_definitions().clone()
@@ -789,7 +789,7 @@ impl Agent {
             serde_json::Value::Array(filtered)
         };
         match &self.mcp {
-            Some(mcp) => crate::mcp::merge_tool_defs(tools, mcp, self.plan_only),
+            Some(mcp) => raven_tools::mcp::merge_tool_defs(tools, mcp, self.plan_only),
             None => tools,
         }
     }
@@ -810,7 +810,7 @@ impl Agent {
 
         // Pin the first user ask so later goal_set/todo rewrites cannot erase it.
         if let Some(dir) = self.settings.session_state_dir.clone() {
-            if let Err(e) = crate::state::pin_user_constraint_once(&dir, user_text) {
+            if let Err(e) = raven_persist::state::pin_user_constraint_once(&dir, user_text) {
                 tracing::warn!("failed to pin user constraint: {e}");
             }
         }
@@ -829,7 +829,7 @@ impl Agent {
         // pinned user constraint, and working-tree status stay current.
         // Invalidate the repo map first when a previous turn edited files.
         if self.repo_map_stale {
-            crate::repomap::invalidate(&self.settings.workspace);
+            raven_tools::repomap::invalidate(&self.settings.workspace);
             self.repo_map_stale = false;
         }
         self.install_pinned_prompt();
@@ -1403,7 +1403,7 @@ impl Agent {
                     if status == 401 && self.settings.provider.name == "grok" && !grok_refreshed {
                         let _ = resp.text().await;
                         grok_refreshed = true;
-                        match tokio::task::spawn_blocking(crate::config::grok_auth::force_refresh)
+                        match tokio::task::spawn_blocking(raven_config::grok_auth::force_refresh)
                             .await
                         {
                             Ok(Ok(token)) => {
@@ -1705,14 +1705,14 @@ pub(crate) fn request_messages_json(messages: &[ChatMessage]) -> Value {
 #[cfg(test)]
 mod setup_body_tests {
     use super::setup_body;
-    use crate::config::{Mode, Scope, Settings};
-    use crate::state::{
+    use raven_config::{Mode, Scope, Settings};
+    use raven_persist::state::{
         pin_user_constraint_once, save_goal, save_todos, session_state_dir, Goal, TodoItem,
     };
     use std::path::PathBuf;
 
     fn settings_with_state(workspace: PathBuf, state_dir: PathBuf) -> Settings {
-        let mut provider = crate::config::Provider::builtin("ollama").expect("ollama builtin");
+        let mut provider = raven_config::Provider::builtin("ollama").expect("ollama builtin");
         provider.base_url = "http://127.0.0.1:9".into();
         Settings {
             model: "mock-model".into(),
@@ -1737,7 +1737,7 @@ mod setup_body_tests {
             sandbox_extra_rw: Vec::new(),
             allow_delegate: true,
             session_state_dir: Some(state_dir),
-            efficiency: crate::config::EfficiencyFlags::default(),
+            efficiency: raven_config::EfficiencyFlags::default(),
         }
     }
 

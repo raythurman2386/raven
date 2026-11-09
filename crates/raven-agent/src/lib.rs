@@ -1,6 +1,6 @@
 //! Streaming agent loop + lightweight parallel sub-agents.
 //!
-//! The [`Agent`] owns the conversation history (`messages`), a [`crate::tools::Sandbox`],
+//! The [`Agent`] owns the conversation history (`messages`), a [`raven_tools::Sandbox`],
 //! and a `reqwest::Client`. [`Agent::run`] appends a user message, then loops:
 //!
 //! 1. Estimate history tokens and compact if over the soft limit.
@@ -25,6 +25,8 @@
 //!   `tool_calls[]` order.
 //! - Blank empty turns are stalls (capped retries), not clean finishes.
 
+pub mod context;
+
 mod core;
 mod loop_control;
 mod parallel;
@@ -38,3 +40,9 @@ pub use core::Agent;
 pub use parallel::{delegate_task, run_parallel, SubAgentReport};
 pub use raven_proto::{AgentEvent, ChatMessage, FunctionCall, ToolCall};
 pub use title::{generate_session_title, is_title_prompt, sanitize_title};
+
+// The shared helpers also serve crates that do not call every function.
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../../../src/testutil.rs"]
+mod testutil;
