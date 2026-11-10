@@ -30,6 +30,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - Prompt tags are `<huginn_reminder>`, `<huginn_setup>`, and `<huginn_context>`.
   - Subagent branches are `huginn-sub-*`, and the git author is `huginn@local`.
   - The session export header is `# Huginn session`.
+- MCP: the client identifies itself to MCP servers as `clientInfo.name` `huginn` (with the package version).
+- OpenRouter: the `HTTP-Referer` header is now `https://github.com/raythurman2386/huginn` (sent with `X-Title: Huginn`).
+- TUI branding: the top bar tag reads ` huginn `, the session banner reads `huginn v<version> · <model> · <provider>`, and assistant replies are tagged `Huginn`.
 - Release artifacts are `huginn-{version}-{triple}` and `huginn-{version}-{triple}.tar.gz`, with `huginn` inside the archive, listed in `checksums.txt`. The pinned public key file is `huginn-signing-key.pub`. It has the same bytes as the old `raven-signing-key.pub`, so signatures on earlier releases still verify.
 - Repository: `raythurman2386/huginn`. The installer, self-update, signing scripts, user agent, and docs point there.
 - Docs, README, the agent skill (`.agents/skills/huginn`), the issue templates, and the eval harness use the Huginn name. The brand mark is `assets/huginn.svg`. Theme names are unchanged.
@@ -41,8 +44,8 @@ There is no automatic migration. On a machine that ran raven, do this once:
 1. Back up `~/.raven`, including `signing/` if it is there.
 2. Reinstall with the install script: `curl -fsSL https://raw.githubusercontent.com/raythurman2386/huginn/master/install.sh | sh`. `raven self update` in 0.6.x cannot reach 0.7.0, because it looks for `raven-*` artifacts.
 3. Delete the old `raven` binary: `cargo uninstall raven`, or remove `~/.cargo/bin/raven` and `~/.cargo/bin/raven.old`.
-4. Move `~/.raven` to `~/.huginn`, and rename `~/.huginn/raven.log` to `huginn.log` (or delete it).
-5. Rename each project's `.raven` folder to `.huginn`, and add `.huginn/` to that repo's `.gitignore`.
+4. Move `~/.raven` into `~/.huginn`. Usually `~/.huginn` already exists by now: running `huginn` once (for example after step 2) creates it, and so does putting `signing/` there first. A plain `mv` would then nest the old folder as `~/.huginn/.raven`. If `~/.huginn` does not exist, run `mv ~/.raven ~/.huginn`. Otherwise run `cp -an ~/.raven/. ~/.huginn/`, which never overwrites files already in `~/.huginn`. Then check the result (for example `diff -r ~/.raven ~/.huginn`, and compare any `config.toml` or `.env` that Huginn already wrote), and only then remove `~/.raven`. The old log comes along as `~/.huginn/raven.log`. Huginn writes `huginn.log` and never reads `raven.log`, so delete it or keep it for reference.
+5. For each project, move its `.raven` folder to `.huginn` the same way. Running `huginn` in a project creates `.huginn` there, so if `.huginn` already exists, use `cp -an .raven/. .huginn/`, check, then remove `.raven`; otherwise use `mv .raven .huginn`. Add `.huginn/` to that repo's `.gitignore`.
 6. Rename `RAVEN_*` environment variables to `HUGINN_*` everywhere they are set, including `~/.huginn/.env`, project `.env` files, and shell profiles.
 7. Use the new repository URL, `https://github.com/raythurman2386/huginn`. The old `raythurman2386/raven` URLs redirect, but you can point existing clones at it with `git remote set-url origin git@github.com:raythurman2386/huginn.git`.
 8. Update editor and desktop integrations that launch `raven`, such as a Zed `agent_servers` entry (`"command": "huginn"`) and Omarchy agent wrappers.
