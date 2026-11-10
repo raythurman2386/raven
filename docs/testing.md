@@ -11,16 +11,16 @@ cargo test --workspace
 ## Test structure
 
 - **Unit tests** (`#[cfg(test)] mod tests` in each source file):
-  - `crates/raven-config` — context window inference, max_tokens derivation, AGENTS.md loading, config.toml parsing; `resolve_scope` flag-combination matrix (`--system` × `--yolo`/`--acp`/`--parallel`/`--workspace`)
-  - `crates/raven-agent` — ephemeral reminder computation (loop-breaker, iteration nudge, goal-aware re-anchor); compaction in `context.rs` (preserves system message, reduces tokens, keeps tool-call/result pairs), tool-result pruning, thrashing protection; **mock-server integration tests** for the full `Agent::run` loop (streaming text, tool-call dispatch, 5xx retry, non-streaming JSON, model-not-found fails-fast) against a fake `/chat/completions` endpoint; **offline fake-model tests** (`tests/fake_model.rs`) that drive the loop via a scripted `CompletionSource` with no HTTP (finish, blank-stall recovery + cap, tool round-trip, same-file serial edits, max_tokens clamp, budget exhaustion leaves work uncommitted); **eval-suite tests** (`tests/eval_suite.rs`) covering goal_set/todo_write persistence + injection, delegate_task, think, large tool-output caps, same-file serial edits, and compaction thrashing
-  - `crates/raven-tui` (`commands.rs`) — slash-command parsing, alias resolution, registry uniqueness, help rendering
-  - `crates/raven-persist` (`state.rs`, `session.rs`) — persistent todo/goal load/save round-trips, atomic writes, system-prompt formatting; scope-aware store roots (`for_settings`: repo vs `~/.raven/system/sessions`), export-dir derivation
-  - `crates/raven-sandbox` and `crates/raven-tools` — sandbox path confinement (including symlink-escape rejection and `openat2`/`open_beneath` traversal rejection), list_dir, read_file, write_file, search_replace, grep, run_shell (dangerous command blocking, API key stripping, direct-exec classification, confined-child behavior incl. Landlock/network-block/RLIMIT_FSIZE; grep/search_code walk caps + truncation notes), system-scope shell allowlist (read-only diagnostics auto-run vs mutations prompt, 70+ case matrix), worktree isolation between branches, dispatch routing, glob matching, unified diff parsing, apply_patch, document extraction
-  - `crates/raven-proto` (`plan.rs`) — plan parsing (JSON, numbered list, bullet list, code block), plan formatting
-  - `crates/raven-tokenizer` — token counting behavior
-  - `crates/raven-tui` (`render.rs`, `markdown.rs`) — markdown rendering (headings, bold/italic, inline code, fenced code blocks, ordered/unordered lists, blockquotes, links, tables, unclosed-token degradation), scrollback pre-wrapping, tool-call glimmer/fade
+  - `crates/huginn-config` — context window inference, max_tokens derivation, AGENTS.md loading, config.toml parsing; `resolve_scope` flag-combination matrix (`--system` × `--yolo`/`--acp`/`--parallel`/`--workspace`)
+  - `crates/huginn-agent` — ephemeral reminder computation (loop-breaker, iteration nudge, goal-aware re-anchor); compaction in `context.rs` (preserves system message, reduces tokens, keeps tool-call/result pairs), tool-result pruning, thrashing protection; **mock-server integration tests** for the full `Agent::run` loop (streaming text, tool-call dispatch, 5xx retry, non-streaming JSON, model-not-found fails-fast) against a fake `/chat/completions` endpoint; **offline fake-model tests** (`tests/fake_model.rs`) that drive the loop via a scripted `CompletionSource` with no HTTP (finish, blank-stall recovery + cap, tool round-trip, same-file serial edits, max_tokens clamp, budget exhaustion leaves work uncommitted); **eval-suite tests** (`tests/eval_suite.rs`) covering goal_set/todo_write persistence + injection, delegate_task, think, large tool-output caps, same-file serial edits, and compaction thrashing
+  - `crates/huginn-tui` (`commands.rs`) — slash-command parsing, alias resolution, registry uniqueness, help rendering
+  - `crates/huginn-persist` (`state.rs`, `session.rs`) — persistent todo/goal load/save round-trips, atomic writes, system-prompt formatting; scope-aware store roots (`for_settings`: repo vs `~/.huginn/system/sessions`), export-dir derivation
+  - `crates/huginn-sandbox` and `crates/huginn-tools` — sandbox path confinement (including symlink-escape rejection and `openat2`/`open_beneath` traversal rejection), list_dir, read_file, write_file, search_replace, grep, run_shell (dangerous command blocking, API key stripping, direct-exec classification, confined-child behavior incl. Landlock/network-block/RLIMIT_FSIZE; grep/search_code walk caps + truncation notes), system-scope shell allowlist (read-only diagnostics auto-run vs mutations prompt, 70+ case matrix), worktree isolation between branches, dispatch routing, glob matching, unified diff parsing, apply_patch, document extraction
+  - `crates/huginn-proto` (`plan.rs`) — plan parsing (JSON, numbered list, bullet list, code block), plan formatting
+  - `crates/huginn-tokenizer` — token counting behavior
+  - `crates/huginn-tui` (`render.rs`, `markdown.rs`) — markdown rendering (headings, bold/italic, inline code, fenced code blocks, ordered/unordered lists, blockquotes, links, tables, unclosed-token degradation), scrollback pre-wrapping, tool-call glimmer/fade
 - **Integration tests** (`tests/`):
-  - `tests/cli_smoke.rs` — black-box tests of the compiled binary (`CARGO_BIN_EXE_raven`): `--help`/`--version` output, no-task error, and session persistence round-trip
+  - `tests/cli_smoke.rs` — black-box tests of the compiled binary (`CARGO_BIN_EXE_huginn`): `--help`/`--version` output, no-task error, and session persistence round-trip
   - `tests/update.rs` — signed self-update over a local TCP listener (manifest verify, bad signature refuse, install path)
 
 ## Bugs found by tests
@@ -50,9 +50,9 @@ cargo llvm-cov
 cargo llvm-cov --html    # opens HTML report in browser
 ```
 
-Target: >=80% line coverage on `crates/raven-config` and `crates/raven-tools`. Overall coverage
+Target: >=80% line coverage on `crates/huginn-config` and `crates/huginn-tools`. Overall coverage
 as high as practical without testing pure glue (`src/main.rs` argument parsing,
-`crates/raven-tui` rendering).
+`crates/huginn-tui` rendering).
 
 ## Mutation testing
 
@@ -63,7 +63,7 @@ cargo install cargo-mutants
 ```
 
 Run mutation tests (focuses on logic-heavy modules; `mutants.toml`
-excludes `src/main.rs` and `crates/raven-tui/**`):
+excludes `src/main.rs` and `crates/huginn-tui/**`):
 
 ```bash
 cargo mutants --config mutants.toml --jobs 2
@@ -83,7 +83,7 @@ Task-level agent strength is measured by the opt-in suite under [`evals/`](../ev
 | C — arena | full suite × multiple models | Yes |
 
 Live runs copy each `evals/cases/<id>/repo` to a temp workspace, invoke headless
-`raven`, then grade with deterministic `checks.sh` (not LLM-as-judge). Reports
+`huginn`, then grade with deterministic `checks.sh` (not LLM-as-judge). Reports
 go to `evals/out/`; update `evals/baselines/default.md` only after a deliberate
 pinned run.
 
@@ -97,7 +97,7 @@ nightly when an endpoint is available.
   `python3 evals/run.py` for live task evals. The HTTP/streaming loop *is*
   covered by mock-server integration tests (see above).
 - **TUI rendering** — the markdown renderer and scrollback pre-wrapping logic
-  *are* unit-tested (see `crates/raven-tui/src/render.rs` and `markdown.rs`), but the
+  *are* unit-tested (see `crates/huginn-tui/src/render.rs` and `markdown.rs`), but the
   ratatui/crossterm event loop and interactive layout are not; those are
   exercised manually.
 - **Network retries against a real host** — the retry-with-backoff logic is

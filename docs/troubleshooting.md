@@ -1,38 +1,38 @@
 # Troubleshooting
 
 Operational notes for the common failure modes. If your issue isn't here, open
-an issue with the `RUST_LOG=raven=debug` output from a repro.
+an issue with the `RUST_LOG=huginn=debug` output from a repro.
 
 ---
 
 ## Stream decode / "stream interrupted" errors
 
-Raven streams SSE from the model endpoint. A mid-stream failure (connection
+Huginn streams SSE from the model endpoint. A mid-stream failure (connection
 reset, provider hiccup, proxy timeout) surfaces as:
 
 ```
 [stream interrupted — retry or use --no-stream]
 ```
 
-- **Partial text is preserved.** Raven keeps whatever the model produced before
+- **Partial text is preserved.** Huginn keeps whatever the model produced before
   the stream broke and appends the interruption hint, so you don't lose the
   turn.
 - **Retry the same prompt** — transient stream failures usually succeed on a
   second attempt.
 - **Use `--no-stream`** for endpoints/proxies that don't reliably support SSE:
   ```bash
-  raven --no-stream -p "Your task"
+  huginn --no-stream -p "Your task"
   ```
   This makes a single non-streaming request per turn instead of a stream.
-- **UTF-8 decode.** Raven decodes SSE only at line boundaries, so a multi-byte
+- **UTF-8 decode.** Huginn decodes SSE only at line boundaries, so a multi-byte
   character split across TCP chunks is never lossy-decoded. If you see garbled
-  text, it's the endpoint emitting malformed UTF-8, not a Raven bug.
+  text, it's the endpoint emitting malformed UTF-8, not a Huginn bug.
 
 ---
 
 ## Sandbox denies a command / dangerous-command denylist
 
-Raven confines subprocesses with several layers. A denial usually shows one of:
+Huginn confines subprocesses with several layers. A denial usually shows one of:
 
 - **`Error: command blocked by the dangerous-command denylist`** — the command
   matched the destructive-command denylist (`rm -rf /`, `mkfs`, `curl | sh`,
@@ -45,8 +45,8 @@ Raven confines subprocesses with several layers. A denial usually shows one of:
   the workspace (Landlock / `openat2`). Use paths relative to the workspace.
 
 **Escape hatches** (all documented in `docs/security.md`):
-- `RAVEN_SANDBOX_LANDLOCK=0` — skip Landlock filesystem confinement.
-- `RAVEN_SANDBOX_NETWORK_BLOCK=0` — skip the seccomp network block (e.g. a
+- `HUGINN_SANDBOX_LANDLOCK=0` — skip Landlock filesystem confinement.
+- `HUGINN_SANDBOX_NETWORK_BLOCK=0` — skip the seccomp network block (e.g. a
   legitimate tool needs network access).
 
 These are for recovery/testing — they weaken the sandbox. Prefer rephrasing the
@@ -56,7 +56,7 @@ command.
 
 ## `web_search` returns DuckDuckGo results when SearXNG is configured
 
-This is **by design**, not a bug. When `RAVEN_SEARXNG_URL` (or the
+This is **by design**, not a bug. When `HUGINN_SEARXNG_URL` (or the
 `searxng_url` config key) is set, `web_search` queries your SearXNG instance
 first and **falls back to DuckDuckGo** on any failure — HTTP error, empty
 results, or unparseable JSON — so search keeps working when the local instance
@@ -71,20 +71,20 @@ To confirm SearXNG is actually being used:
 3. If SearXNG returns empty results for a query, DDG may have hits SearXNG's
    engine set didn't — that's the intended fallback.
 
-SearXNG is an opt-in enhancement, never a requirement. Unset `RAVEN_SEARXNG_URL`
+SearXNG is an opt-in enhancement, never a requirement. Unset `HUGINN_SEARXNG_URL`
 to use DuckDuckGo directly.
 
 ---
 
-## ACP: editor won't connect / "raven --acp" does nothing
+## ACP: editor won't connect / "huginn --acp" does nothing
 
-`raven --acp` speaks [Agent Client Protocol](https://agentclientprotocol.com/) v1
+`huginn --acp` speaks [Agent Client Protocol](https://agentclientprotocol.com/) v1
 on **stdin/stdout** — it is not a server you point a browser at. Point an
-ACP-capable editor at the `raven` binary with the `acp` flag, e.g. Zed's custom
+ACP-capable editor at the `huginn` binary with the `acp` flag, e.g. Zed's custom
 agent command:
 
 ```
-raven --acp
+huginn --acp
 ```
 
 - **Supported methods:** `initialize`, `authenticate`, `session/new`,
@@ -99,12 +99,12 @@ raven --acp
   `mcpServers` the editor sends on `session/new`. HTTP/SSE MCP is not
   advertised. A missing binary is logged and skipped (the session still
   starts). Tools show up as `{server}__{tool}`.
-- **Not advertised:** images/audio, client `fs/*`/`terminal/*`. Raven keeps
+- **Not advertised:** images/audio, client `fs/*`/`terminal/*`. Huginn keeps
   its own sandbox.
 - **Other CLI flags still apply** to the ACP process: `--provider`, `--model`,
   `--workspace`, `--yolo`, `--mode`.
 
-If the editor shows nothing, run `raven --acp` in a terminal and type a JSON-RPC
+If the editor shows nothing, run `huginn --acp` in a terminal and type a JSON-RPC
 `initialize` frame to confirm it responds on stdin/stdout.
 
 ---
@@ -116,7 +116,7 @@ If the editor shows nothing, run `raven --acp` in a terminal and type a JSON-RPC
 - **`Model '<model>' not found on ollama. Pull it with: ollama pull <model>`**
   — the model isn't installed locally. Run the suggested `ollama pull`.
 - **`HTTP 401/403 from <provider>`** — bad or missing API key. Set
-  `RAVEN_API_KEY` (universal) or the provider-scoped var
+  `HUGINN_API_KEY` (universal) or the provider-scoped var
   (`OPENROUTER_API_KEY` / `OLLAMA_API_KEY`), or `api_key`/`api_key_env` in
   `[providers.<name>]` in `config.toml`. See `docs/configuration.md`.
 
@@ -124,8 +124,8 @@ If the editor shows nothing, run `raven --acp` in a terminal and type a JSON-RPC
 
 ## Omarchy Agents panel / default agent
 
-On Omarchy Linux, Raven is wired in with local wrappers and a cloned
-`omarchy.agents` plugin (not stock). Setup, Raven-only providers, bar
+On Omarchy Linux, Huginn is wired in with local wrappers and a cloned
+`omarchy.agents` plugin (not stock). Setup, Huginn-only providers, bar
 placement, and collector quirks are documented in
 [`docs/omarchy.md`](omarchy.md).
 
@@ -139,8 +139,8 @@ tool block. They should **not** paint into the `❯` input box.
 
 If you still see a one-frame flash of `Tool error: …` over the chat bar on an
 older build, that was tracing writing to the shared TTY while the cursor sat
-in the input field. Current Raven appends tracing to `~/.raven/raven.log`
+in the input field. Current Huginn appends tracing to `~/.huginn/huginn.log`
 whenever **stdout is a TTY** (interactive TUI and terminal-attached headless
-alike). When stdout is piped (CI, `raven … | …`), tracing still goes to
-stderr. `RUST_LOG` only sets verbosity (e.g. `warn`, `raven=debug`); it does
+alike). When stdout is piped (CI, `huginn … | …`), tracing still goes to
+stderr. `RUST_LOG` only sets verbosity (e.g. `warn`, `huginn=debug`); it does
 not change the log path.

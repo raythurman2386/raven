@@ -1,18 +1,18 @@
 ---
-name: raven
-description: "Use when developing the Raven coding-agent harness — an opinionated personal coding-agent CLI in Rust for Linux/Pi (Ollama / OpenAI-compatible endpoints). Provides architecture, module map, conventions, verify commands, and the enforced-verification gate."
+name: huginn
+description: "Use when developing the Huginn coding-agent harness — an opinionated personal coding-agent CLI in Rust for Linux/Pi (Ollama / OpenAI-compatible endpoints). Provides architecture, module map, conventions, verify commands, and the enforced-verification gate."
 version: 1.1.0
 author: Hermes Agent
 license: MIT
 metadata:
   hermes:
-    tags: [rust, cli, agent, ollama, coding-agent, raven]
+    tags: [rust, cli, agent, ollama, coding-agent, huginn]
     related_skills: []
 ---
 
-# Raven — Development Skill
+# Huginn — Development Skill
 
-Raven is an opinionated, personal coding-agent harness written in Rust for
+Huginn is an opinionated, personal coding-agent harness written in Rust for
 Linux and Raspberry Pi. It runs a streaming agent loop against a local (or
 cloud) Ollama / OpenAI-compatible `/v1/chat/completions` endpoint, with tools,
 plan mode, context compaction, and parallel sub-agents. This skill gives you
@@ -20,8 +20,8 @@ the full context to work on it correctly.
 
 ## When to Use
 
-- Implementing or fixing issues in the raven repo
-- Adding or modifying tools in `crates/raven-tools/` or confinement in `crates/raven-sandbox/`
+- Implementing or fixing issues in the huginn repo
+- Adding or modifying tools in `crates/huginn-tools/` or confinement in `crates/huginn-sandbox/`
 - Changing the agent loop, compaction, or context management
 - Modifying the TUI, session persistence, or CLI
 - Reviewing PRs to the repo
@@ -33,37 +33,37 @@ Don't use for: porting the Ravenwood palette to other apps — use the
 
 ```
 CLI (src/main.rs)
-  └─ Settings (raven-config) ── named providers, context-window inference
-  └─ Agent (raven-agent)
+  └─ Settings (huginn-config) ── named providers, context-window inference
+  └─ Agent (huginn-agent)
        ├─ system prompt (stable instructions + mode) and a following setup message
        ├─ streaming loop ── POST /v1/chat/completions (Ollama / OpenRouter / …)
-       ├─ compaction (raven-agent context) ── estimate tokens, summarize middle
-       ├─ tool dispatch (raven-tools) ── mutators serial; others spawn_blocking
+       ├─ compaction (huginn-agent context) ── estimate tokens, summarize middle
+       ├─ tool dispatch (huginn-tools) ── mutators serial; others spawn_blocking
        └─ events (mpsc) ── TextDelta, ToolStart/End, Iteration, Compacted,
                            VerifyRequired, AskUser, PlanProgress, Done, Error
-  └─ TUI (raven-tui)  ── ratatui event loop, drains agent events
+  └─ TUI (huginn-tui)  ── ratatui event loop, drains agent events
   └─ run_parallel ── N independent Agent tasks on git worktrees
 ```
 
-One binary, `raven`. Dependencies point only downward. Do not add a crate. `delegate_task` runs in `raven-agent` (`tools_exec.rs`), not in `raven-tools`.
+One binary, `huginn`. Dependencies point only downward. Do not add a crate. `delegate_task` runs in `huginn-agent` (`tools_exec.rs`), not in `huginn-tools`.
 
 ### Module Layout
 
 | Crate | Owns |
 |------|------|
-| `crates/raven-proto` | `ChatMessage`, `ToolCall`, `FunctionCall`, `AgentEvent`, `AgentError` / `ToolError`, plan types, `TodoItem`, `Goal`. Depends on serde, thiserror, tokio, serde_json. |
-| `crates/raven-tokenizer` | Estimator, usage meters, pricing. Depends on proto. |
-| `crates/raven-config` | `Settings`, named providers, onboarding, Grok auth, MCP server specs. Depends on proto. |
-| `crates/raven-persist` | Session JSONL (atomic writes), session-scoped goal/todos, memory. Depends on proto, config. |
-| `crates/raven-sandbox` | Path confinement, shell, Landlock, seccomp, rlimits. Depends on proto. `landlock` and `seccompiler` are Linux target-cfg deps of this crate only. |
-| `crates/raven-tools` | Definitions, dispatch, git, patch, documents, validate, web, skills, repomap, plugins, stdio MCP client. Depends on proto, config, persist, sandbox. |
-| `crates/raven-agent` | Streaming loop (`core`, `stream`, `tools_exec`, `loop_control`, `parallel`), compaction (`context.rs`). Depends on proto, tokenizer, config, persist, tools. Re-exports the MCP client and plugin specs the TUI and ACP call. |
-| `crates/raven-tui` | Ratatui UI, markdown, slash commands. Depends on proto, config, persist, agent. ratatui, crossterm, and pulldown-cmark stay here. |
-| `crates/raven-acp` | ACP v1 stdio adapter (`raven --acp`). Depends on proto, config, persist, agent. |
-| `crates/raven-testutil` | `outer_sandbox_restrictive`, `home_env_lock`. Depends only on libc. |
-| root `raven` | `src/main.rs` (clap), `src/runner.rs`, `src/update.rs`, and `src/lib.rs` facade re-exports. |
+| `crates/huginn-proto` | `ChatMessage`, `ToolCall`, `FunctionCall`, `AgentEvent`, `AgentError` / `ToolError`, plan types, `TodoItem`, `Goal`. Depends on serde, thiserror, tokio, serde_json. |
+| `crates/huginn-tokenizer` | Estimator, usage meters, pricing. Depends on proto. |
+| `crates/huginn-config` | `Settings`, named providers, onboarding, Grok auth, MCP server specs. Depends on proto. |
+| `crates/huginn-persist` | Session JSONL (atomic writes), session-scoped goal/todos, memory. Depends on proto, config. |
+| `crates/huginn-sandbox` | Path confinement, shell, Landlock, seccomp, rlimits. Depends on proto. `landlock` and `seccompiler` are Linux target-cfg deps of this crate only. |
+| `crates/huginn-tools` | Definitions, dispatch, git, patch, documents, validate, web, skills, repomap, plugins, stdio MCP client. Depends on proto, config, persist, sandbox. |
+| `crates/huginn-agent` | Streaming loop (`core`, `stream`, `tools_exec`, `loop_control`, `parallel`), compaction (`context.rs`). Depends on proto, tokenizer, config, persist, tools. Re-exports the MCP client and plugin specs the TUI and ACP call. |
+| `crates/huginn-tui` | Ratatui UI, markdown, slash commands. Depends on proto, config, persist, agent. ratatui, crossterm, and pulldown-cmark stay here. |
+| `crates/huginn-acp` | ACP v1 stdio adapter (`huginn --acp`). Depends on proto, config, persist, agent. |
+| `crates/huginn-testutil` | `outer_sandbox_restrictive`, `home_env_lock`. Depends only on libc. |
+| root `huginn` | `src/main.rs` (clap), `src/runner.rs`, `src/update.rs`, and `src/lib.rs` facade re-exports. |
 
-Root `src/<module>.rs` files other than `main.rs`, `runner.rs`, and `update.rs` are `pub use` facades. Public paths that benches and integration tests use stay: `raven::agent::ChatMessage`, `raven::tokenizer`, `raven::context`, `raven::repomap`, `raven::testutil`. Session store: repo → `{workspace}/.raven/sessions`, system → `~/.raven/system/sessions`. Goal and todos: `.raven/sessions/<id>/state/`; legacy `.raven/state/` is read-only.
+Root `src/<module>.rs` files other than `main.rs`, `runner.rs`, and `update.rs` are `pub use` facades. Public paths that benches and integration tests use stay: `huginn::agent::ChatMessage`, `huginn::tokenizer`, `huginn::context`, `huginn::repomap`, `huginn::testutil`. Session store: repo → `{workspace}/.huginn/sessions`, system → `~/.huginn/system/sessions`. Goal and todos: `.huginn/sessions/<id>/state/`; legacy `.huginn/state/` is read-only.
 
 ## Conventions
 
@@ -84,7 +84,7 @@ Root `src/<module>.rs` files other than `main.rs`, `runner.rs`, and `update.rs` 
 - The root `src/lib.rs` declares the facade modules. Implementation lives in
   `crates/<name>/src`. Benches stay at the repo root and call the facades.
 - Tests live in `#[cfg(test)]` modules next to the code they cover (agent
-  tests under `crates/raven-agent/src/tests/`), plus black-box tests in `tests/`.
+  tests under `crates/huginn-agent/src/tests/`), plus black-box tests in `tests/`.
 
 ## Build, Lint, Test
 
@@ -125,11 +125,11 @@ When implementing a fix, **always run the real verification commands**
 ## Common Pitfalls
 
 1. **Tools and sandbox are separate crates** — definitions and dispatch live
-   in `crates/raven-tools` (`definitions.rs`, `dispatch.rs`). OS confinement
-   (Landlock / seccomp / rlimits) lives in `crates/raven-sandbox`
+   in `crates/huginn-tools` (`definitions.rs`, `dispatch.rs`). OS confinement
+   (Landlock / seccomp / rlimits) lives in `crates/huginn-sandbox`
    (`confinement.rs`). `landlock` and `seccompiler` stay on that crate.
-   `raven-tokenizer` does not depend on the sandbox. `delegate_task` stays
-   in `raven-agent`'s `tools_exec.rs`.
+   `huginn-tokenizer` does not depend on the sandbox. `delegate_task` stays
+   in `huginn-agent`'s `tools_exec.rs`.
 2. **Tokenizer is a fast estimator, not exact** — it over-estimates tiktoken counts by roughly 10–35% (mean ~28%), biased slightly high so compaction triggers early. It treats non-newline whitespace as free and applies a ~12% structural-overhead factor. Don't "fix" it to be exact without a real tokenizer to validate against.
 3. **Compaction invariants** — `messages[0]` is always the system message;
    tool-call/tool-result pairs are never split. Don't break these.
@@ -137,7 +137,7 @@ When implementing a fix, **always run the real verification commands**
    to it. `run_shell` blocks dangerous patterns and strips known secret env
    vars. The blocklist is a denylist (best-effort), not an allowlist (issue #14).
    Landlock write roots are workspace + explicit extras + `/dev` — never the
-   process temp dir. `TMPDIR` is pinned under `.raven/tmp`.
+   process temp dir. `TMPDIR` is pinned under `.huginn/tmp`.
 5. **Session IDs** — `{iso}-{pid}-{counter}` (issue #10 is fixed). Still
    don't invent a different scheme without updating `generate_session_id`.
 6. **Repo map is cached** per workspace path until `repomap::invalidate`
@@ -156,15 +156,15 @@ When implementing a fix, **always run the real verification commands**
    drop `event_rx`) so a leftover `Done` cannot join the next handle. Do not
    share one session-long channel.
 9. **Named providers** — `Provider` bundles endpoint + auth + default model.
-   Resolution: `--provider` > `RAVEN_PROVIDER` > config `provider` > builtin
+   Resolution: `--provider` > `HUGINN_PROVIDER` > config `provider` > builtin
    `ollama`. `/provider` with no args lists names; unknown names must not
    silently become ollama. Session summary stores `model` only — resume can
    pair a stored OpenRouter model with the default Ollama provider.
 10. **Headless plan revise** — after `[r]evise` + approve, execute the
     *revised* plan and *revised* message list (`run_plan_flow`), not the first
     proposal.
-11. **Persistent state** — todos/goal live under `.raven/sessions/<id>/state/`
-    (`crates/raven-persist/src/state.rs`); legacy `.raven/state/` is read-only.
+11. **Persistent state** — todos/goal live under `.huginn/sessions/<id>/state/`
+    (`crates/huginn-persist/src/state.rs`); legacy `.huginn/state/` is read-only.
     Not a `static`. `todo_write`/`goal_set` persist; rebuild the system
     message at the start of every turn *and* after those tools. Nested
     `delegate_task` is depth-1 (`allow_delegate = false` on the child; no

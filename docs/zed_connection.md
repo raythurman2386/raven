@@ -1,43 +1,43 @@
-# Connecting Zed / Hearth to Raven via ACP
+# Connecting Zed / Hearth to Huginn via ACP
 
-Raven speaks **Agent Client Protocol (ACP) v1** over stdio, so you can run it
+Huginn speaks **Agent Client Protocol (ACP) v1** over stdio, so you can run it
 directly inside [Zed](https://zed.dev) or
 [Hearth](https://github.com/raythurman2386/hearth) as an *external agent*. The
-editor hosts the thread; Raven owns its own runtime, model selection, provider
-auth, and tools. All the usual Raven features work from the editor — plan
-mode, verification gates, workspace isolation, `.raven/MEMORY.md`, skills, and
+editor hosts the thread; Huginn owns its own runtime, model selection, provider
+auth, and tools. All the usual Huginn features work from the editor — plan
+mode, verification gates, workspace isolation, `.huginn/MEMORY.md`, skills, and
 the full tool set. The examples below use Zed's config surface; Hearth
-discovers ACP agents on its own — point it at the same `raven --acp` command.
+discovers ACP agents on its own — point it at the same `huginn --acp` command.
 
-> **ACP registry install (when available).** Raven is not yet in the official
+> **ACP registry install (when available).** Huginn is not yet in the official
 > [ACP registry](https://agentclientprotocol.com/registry) — the config below
-> wires it up as a *custom* agent, which works today. Once Raven is merged into
+> wires it up as a *custom* agent, which works today. Once Huginn is merged into
 > the registry you can install it directly from Zed's agent list instead:
 > open **Agent Settings** (`agent: open settings`) → **External Agents** →
-> **Add Agent** → **Install from Registry**, then pick **Raven** from the
+> **Add Agent** → **Install from Registry**, then pick **Huginn** from the
 > new-thread menu. The custom `agent_servers` entry then becomes optional.
 
 ## Prerequisites
 
 - **Zed 1.14+** (external agents require a recent Zed)
-- **Raven** installed and on your `PATH` (see the root [README](../README.md#install));
-  verify with `raven --version` → should print `raven 0.5.17` or newer.
+- **Huginn** installed and on your `PATH` (see the root [README](../README.md#install));
+  verify with `huginn --version` → should print `huginn 0.5.17` or newer.
 - A reachable model endpoint. The default provider is `grok` (`grok-4.7`).
-  On a new machine run `raven login` once before the first Zed thread.
+  On a new machine run `huginn login` once before the first Zed thread.
   Zed's ACP process is not a terminal, so the first-run wizard does not run
   there. Ollama and OpenRouter still work if you pin `--provider`.
 
-## 1. Add Raven as a custom agent
+## 1. Add Huginn as a custom agent
 
 Zed registers external agents in `~/.config/zed/settings.json` under the
-`agent_servers` key. Add a `Raven` entry:
+`agent_servers` key. Add a `Huginn` entry:
 
 ```jsonc
 {
   "agent_servers": {
-    "Raven": {
+    "Huginn": {
       "type": "custom",
-      "command": "raven",
+      "command": "huginn",
       "args": ["--acp"],
       "env": {}
     }
@@ -47,13 +47,13 @@ Zed registers external agents in `~/.config/zed/settings.json` under the
 
 Notes:
 
-- The **key** (`"Raven"`) is the display name in Zed's thread menu.
-- `--acp` is required — it puts Raven in ACP stdio mode.
-- `--provider` and `--model` are **optional** but recommended to pin what Raven
-  uses. If omitted, Raven falls back to the active provider and default model in
-  `~/.raven/config.toml`.
-- `env` lets you pass provider credentials to the Raven process, e.g.
-  `"OLLAMA_API_KEY": "..."`. Otherwise Raven reads them from its own
+- The **key** (`"Huginn"`) is the display name in Zed's thread menu.
+- `--acp` is required — it puts Huginn in ACP stdio mode.
+- `--provider` and `--model` are **optional** but recommended to pin what Huginn
+  uses. If omitted, Huginn falls back to the active provider and default model in
+  `~/.huginn/config.toml`.
+- `env` lets you pass provider credentials to the Huginn process, e.g.
+  `"OLLAMA_API_KEY": "..."`. Otherwise Huginn reads them from its own
   config / `.env` / shell environment.
 - Zed does **not** need a restart — it picks up the `agent_servers` change
   automatically.
@@ -64,65 +64,65 @@ Notes:
 
 ## 2. Verify the connection
 
-The quickest end-to-end check is to replay the ACP handshake Raven sends on
+The quickest end-to-end check is to replay the ACP handshake Huginn sends on
 startup. Run the same `initialize` frame Zed will:
 
 ```bash
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{"fs":{"readTextFile":true,"writeTextFile":true,"listDirectory":true,"editTextFile":true,"getFileInfo":true},"terminal":{"startTerminal":true}},"clientInfo":{"name":"verify","version":"0.0.0"}}}' \
-  | timeout 15 raven --acp
+  | timeout 15 huginn --acp
 ```
 
-You should get back a JSON-RPC `result` advertising `agentInfo.name: "raven"`,
+You should get back a JSON-RPC `result` advertising `agentInfo.name: "huginn"`,
 `agentCapabilities.loadSession: true`, `sessionCapabilities`, and an
 `agent`-type `authMethods` entry. That confirms Zed will connect cleanly.
 
-For live Zed↔Raven traffic, open the Command Palette and run **`dev: open acp
+For live Zed↔Huginn traffic, open the Command Palette and run **`dev: open acp
 logs`**. Include those logs when reporting issues.
 
-## 3. Use Raven from the editor
+## 3. Use Huginn from the editor
 
 1. Open the **Agent Panel** (`cmd-1` / `ctrl-1`) or **Threads Sidebar**.
-2. Open the new-thread / agent selector menu and choose **Raven**.
-3. Start a thread and type your task. Everything runs through Raven's loop —
+2. Open the new-thread / agent selector menu and choose **Huginn**.
+3. Start a thread and type your task. Everything runs through Huginn's loop —
    plan mode, tools, verify-before-done — just as it would in the terminal.
 
 ### Handy Zed actions
 
 | Action | Purpose |
 |---|---|
-| `agent: new external agent thread` | Bind a key to start a Raven thread directly |
-| `dev: open acp logs` | Inspect ACP frames between Zed and Raven |
+| `agent: new external agent thread` | Bind a key to start a Huginn thread directly |
+| `dev: open acp logs` | Inspect ACP frames between Zed and Huginn |
 | `agent: open settings` | View / edit the External Agents config |
 
 ## Configuration boundaries
 
-Because Raven runs as its own process, Zed and Raven config stay separate:
+Because Huginn runs as its own process, Zed and Huginn config stay separate:
 
 | Concern | Owned by |
 |---|---|
-| Model & provider selection | Raven (`~/.raven/config.toml`, `--provider`/`--model`) |
-| Auth / API keys | Raven (provider env vars, `.env`, or `env` in `agent_servers`) |
-| Tools | Raven (its 25 built-in tools) |
-| Skills / instructions | Raven (native `SKILL.md` discovery, `AGENTS.md` auto-load) |
-| Zed Skills | Do **not** apply — Raven does not read Zed skills |
-| MCP servers | Native `[mcp.servers]` in Raven's `config.toml`, plus any servers Zed forwards on `session/new` (stdio only) |
+| Model & provider selection | Huginn (`~/.huginn/config.toml`, `--provider`/`--model`) |
+| Auth / API keys | Huginn (provider env vars, `.env`, or `env` in `agent_servers`) |
+| Tools | Huginn (its 25 built-in tools) |
+| Skills / instructions | Huginn (native `SKILL.md` discovery, `AGENTS.md` auto-load) |
+| Zed Skills | Do **not** apply — Huginn does not read Zed skills |
+| MCP servers | Native `[mcp.servers]` in Huginn's `config.toml`, plus any servers Zed forwards on `session/new` (stdio only) |
 
 ## Provider selection per connection
 
-If you keep several Raven profiles, add one `agent_servers` entry per profile
+If you keep several Huginn profiles, add one `agent_servers` entry per profile
 and give each a distinct key:
 
 ```jsonc
 {
   "agent_servers": {
-    "Raven (Ollama)": {
+    "Huginn (Ollama)": {
       "type": "custom",
-      "command": "raven",
+      "command": "huginn",
       "args": ["--acp", "--provider", "ollama", "--model", "deepseek-v4-flash:cloud"]
     },
-    "Raven (OpenRouter)": {
+    "Huginn (OpenRouter)": {
       "type": "custom",
-      "command": "raven",
+      "command": "huginn",
       "args": ["--acp", "--provider", "openrouter", "--model", "x-ai/grok-4.5"]
     }
   }
@@ -131,7 +131,7 @@ and give each a distinct key:
 
 ## Switching providers / models in the editor
 
-Raven advertises session config options over ACP:
+Huginn advertises session config options over ACP:
 
 - **`mode`** (`plan` / `agent` / `chat`) — editors that support config options
   use this picker instead of the older `modes` field. Without it, a client
@@ -142,7 +142,7 @@ Raven advertises session config options over ACP:
   restarting the thread.
 
 If the editor exposes ACP session config options (e.g. selectors in the
-Agent Panel), picking a model entry switches that Raven session onto the
+Agent Panel), picking a model entry switches that Huginn session onto the
 chosen provider + model:
 
 - Each provider's list comes from its live `/models` endpoint when reachable,
@@ -162,19 +162,19 @@ chosen provider + model:
 
 ## Troubleshooting
 
-- **Raven doesn't appear in the thread menu.** Confirm the settings file is
-  valid JSON, `raven` is on `PATH` (restart Zed if you edited the env), and you
+- **Huginn doesn't appear in the thread menu.** Confirm the settings file is
+  valid JSON, `huginn` is on `PATH` (restart Zed if you edited the env), and you
   saved the `agent_servers` block. Re-open `agent: open settings` to confirm the
   entry is registered.
 - **Thread fails to start.** Run the handshake command above. If it errors,
-  check Raven's config (`~/.raven/config.toml`) and provider auth.
+  check Huginn's config (`~/.huginn/config.toml`) and provider auth.
 - **Credentials not picked up.** Zed doesn't automatically share its LLM keys
-  with Raven. Set the key via `env` in the `agent_servers` entry, an
+  with Huginn. Set the key via `env` in the `agent_servers` entry, an
   `OLLAMA_API_KEY`/`OPENROUTER_API_KEY` env var available to the process, or
-  Raven's own `.env`.
+  Huginn's own `.env`.
 - **MCP tools missing.** Confirm the server is stdio (not HTTP/SSE), the
-  command is on `PATH` for the Raven process, and either `[mcp.servers]` is
-  set in `~/.raven/config.toml` or Zed is forwarding `mcpServers` on
-  `session/new`. A failed spawn is skipped; check stderr / `RUST_LOG=raven=debug`.
+  command is on `PATH` for the Huginn process, and either `[mcp.servers]` is
+  set in `~/.huginn/config.toml` or Zed is forwarding `mcpServers` on
+  `session/new`. A failed spawn is skipped; check stderr / `RUST_LOG=huginn=debug`.
 
 For general ACP failure modes, see [troubleshooting.md](troubleshooting.md).

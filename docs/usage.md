@@ -1,24 +1,24 @@
 # Usage guide
 
-Day-to-day workflows for **Raven**. See the [root README](../README.md) for install and the [configuration guide](configuration.md) for all flags and env vars.
+Day-to-day workflows for **Huginn**. See the [root README](../README.md) for install and the [configuration guide](configuration.md) for all flags and env vars.
 
 ## Modes
 
-**Raven** has three modes, chosen automatically or via flags:
+**Huginn** has three modes, chosen automatically or via flags:
 
 | Mode | When | Flag |
 |---|---|---|
-| TUI | No task given (default), or `--tui` | `raven` |
-| Headless | A task is given (`-p` or positional) | `raven -p "..."` |
-| Parallel | `--parallel` with ≥1 tasks | `raven --parallel "A" "B"` |
+| TUI | No task given (default), or `--tui` | `huginn` |
+| Headless | A task is given (`-p` or positional) | `huginn -p "..."` |
+| Parallel | `--parallel` with ≥1 tasks | `huginn --parallel "A" "B"` |
 
 Force headless with no task using `--headless` (exits with an error if no prompt is given).
 
 ### ACP (editor attachment)
 
-`raven --acp` speaks [Agent Client Protocol](https://agentclientprotocol.com/) v1
-on stdin/stdout. Point an ACP-capable editor at the `raven` binary with the
-`acp` flag (for example Zed's custom agent command: `raven --acp`).
+`huginn --acp` speaks [Agent Client Protocol](https://agentclientprotocol.com/) v1
+on stdin/stdout. Point an ACP-capable editor at the `huginn` binary with the
+`acp` flag (for example Zed's custom agent command: `huginn --acp`).
 
 Supported: `initialize`, `authenticate`, `session/new`, `session/prompt`,
 `session/cancel`, `session/load` (replays history), `session/resume`,
@@ -32,12 +32,12 @@ auth method (`agent-auth`): credentials are already resolved in-process, so
 MCP: stdio servers from native `[mcp.servers]` plus ACP `mcpServers` on
 `session/new` / `session/load` / `session/resume`. HTTP/SSE MCP transports
 are not advertised. Images/audio and client `fs/*` / `terminal/*` are unused;
-Raven keeps its own sandbox. Other CLI flags (`--provider`, `--model`,
+Huginn keeps its own sandbox. Other CLI flags (`--provider`, `--model`,
 `--workspace`, `--yolo`, `--mode`) still apply to the ACP process.
 
 ### Interaction modes
 
-Within a session, Raven runs in one of three **interaction modes**, which control
+Within a session, Huginn runs in one of three **interaction modes**, which control
 whether the model proposes a plan first and which tools it can use:
 
 | Mode | Plan first? | Toolset | Use case |
@@ -50,8 +50,8 @@ Choose the mode with `--mode <plan|agent|chat>` on the CLI, or cycle with
 `Shift+Tab` in the TUI. The default is `agent`.
 
 ```bash
-raven --mode agent -p "Refactor the auth module"   # full tools, no plan
-raven --mode chat -p "Explain the architecture"     # read-only, no plan
+huginn --mode agent -p "Refactor the auth module"   # full tools, no plan
+huginn --mode chat -p "Explain the architecture"     # read-only, no plan
 ```
 
 `--yolo` implies `--mode agent` (no plan step, no confirmations).
@@ -62,13 +62,13 @@ raven --mode chat -p "Explain the architecture"     # read-only, no plan
 
 ```bash
 # Positional task
-raven "Add a README and .gitignore"
+huginn "Add a README and .gitignore"
 
 # -p flag (equivalent)
-raven -p "Add a README and .gitignore"
+huginn -p "Add a README and .gitignore"
 
 # Pick a model and workspace
-raven -m qwen2.5-coder:14b -w ~/projects/myapp -p "Fix the failing tests"
+huginn -m qwen2.5-coder:14b -w ~/projects/myapp -p "Fix the failing tests"
 ```
 
 Output is streamed to stdout: assistant text deltas, tool calls (`→ tool(args)`), tool results, and iteration markers (`[iter N]`) on stderr.
@@ -77,7 +77,7 @@ Output is streamed to stdout: assistant text deltas, tool calls (`→ tool(args)
 
 ## System scope
 
-`raven --system` runs the same TUI/headless harness against the whole machine
+`huginn --system` runs the same TUI/headless harness against the whole machine
 instead of a repo workspace: the sandbox is rooted at `/`, the system prompt is
 an OS-administration frame (prefers `omarchy <group> <action>` commands, backs
 up configs before editing, never touches `/usr/share/omarchy/`), and shell
@@ -87,17 +87,17 @@ opt into full autonomy with `--yolo`.
 
 ```bash
 # Interactive TUI (same interface as the default agent)
-raven --system
+huginn --system
 
 # One-shot task, streamed to stdout
-raven --system -p "show the disk layout and running services"
+huginn --system -p "show the disk layout and running services"
 ```
 
 Behavior differences from the repo-scoped default:
 
-- **Sessions persist** under `~/.raven/system/sessions/` (an audit trail of
+- **Sessions persist** under `~/.huginn/system/sessions/` (an audit trail of
   privileged work); `--list-sessions`, `--export`, and `--resume` operate on
-  that store. Memory lives in `~/.raven/system/MEMORY.md`, written by
+  that store. Memory lives in `~/.huginn/system/MEMORY.md`, written by
   `memory_update` and injected into the system prompt.
 - **No verify gate, no sub-agents** — there is no workspace test runner for
   OS work, and `todo_write` / `goal_set` / `delegate_task` are refused.
@@ -110,7 +110,7 @@ Behavior differences from the repo-scoped default:
   on a trusted single-user machine.
 - **Network in shell commands is blocked by default** (seccomp). Package
   installs and downloads need an explicit opt-out in the environment:
-  `RAVEN_SANDBOX_NETWORK_BLOCK=0` (e.g. in `~/.raven/.env`). The block is a
+  `HUGINN_SANDBOX_NETWORK_BLOCK=0` (e.g. in `~/.huginn/.env`). The block is a
   separate layer from confirmations and applies in both scopes.
 - Incompatible flags error out clearly: `--system --acp`, `--system
   --parallel`, and `--system --workspace <path>`.
@@ -125,7 +125,7 @@ Plan mode asks the model to propose a plan first, then proceeds to execution.
 
 ```bash
 # Plan mode is ON by default
-raven -p "Refactor the auth module"
+huginn -p "Refactor the auth module"
 
 # The model proposes a plan, then you approve it:
 #   ── Plan ready. Approve? [Y/n] ──
@@ -133,10 +133,10 @@ raven -p "Refactor the auth module"
 # n/no/abort/q/quit aborts. Any other text revises the plan.
 
 # Skip planning entirely (full tools, no plan step)
-raven --mode agent -p "Fix the typo in config.rs"
+huginn --mode agent -p "Fix the typo in config.rs"
 
 # Skip ALL confirmations (fully autonomous)
-raven --yolo -p "Write unit tests for auth"
+huginn --yolo -p "Write unit tests for auth"
 ```
 
 `--yolo` implies `--mode agent` (no approval step).
@@ -168,7 +168,7 @@ in a git workspace each also gets an isolated worktree. Results are printed
 in order. Sub-agent diffs are applied to your working tree without committing.
 
 ```bash
-raven --parallel \
+huginn --parallel \
   "Summarize the architecture of src/" \
   "List all TODO comments" \
   "Suggest three error-handling improvements"
@@ -196,8 +196,8 @@ Use cases: codebase exploration, multi-perspective review, independent research 
 ## TUI
 
 ```bash
-raven          # launches TUI if no task given
-raven --tui    # force TUI even with a task
+huginn          # launches TUI if no task given
+huginn --tui    # force TUI even with a task
 ```
 
 | Key | Action |
@@ -222,7 +222,7 @@ spinner while running, then settle to a dim line once finished.
 
 ### Slash commands
 
-Raven uses slash commands (Grok Build-style) to drive the TUI. They work
+Huginn uses slash commands (Grok Build-style) to drive the TUI. They work
 identically in editor-like terminals where `Ctrl+` shortcuts collide with the
 host. Type one and press `Enter`; `/help` lists everything.
 
@@ -236,7 +236,7 @@ host. Type one and press `Enter`; `/help` lists everything.
 | `/stop` | `/s` | Interrupt the running task |
 | `/provider [name]` | `/p` | List providers, or switch the active one |
 | `/export [dir]` | `/x` | Write a local Markdown/JSON bundle of this session |
-| `/quit` | `/q`, `/exit` | Quit Raven |
+| `/quit` | `/q`, `/exit` | Quit Huginn |
 
 ### Interrupting and steering
 
@@ -250,8 +250,8 @@ While a task is running you can keep typing as normal:
 
 ### Modes and where the default comes from
 
-The startup mode is `--mode` > workspace `.raven/config.toml` > global
-`~/.raven/config.toml` > `agent`. A global config with `mode = "Chat"` makes
+The startup mode is `--mode` > workspace `.huginn/config.toml` > global
+`~/.huginn/config.toml` > `agent`. A global config with `mode = "Chat"` makes
 every session start read-only — check the top bar's mode label on launch, or
 `Shift+Tab` to cycle (chat → plan → agent). The cycle updates both the
 displayed mode *and* the mode the model is told about in its system prompt,
@@ -261,7 +261,7 @@ so what you see always matches the toolset the agent actually has.
 - A message typed just as the turn finishes is replayed as a fresh turn, so
   it is never silently dropped.
 
-The command registry lives in `crates/raven-tui/src/commands.rs`; adding a command is one
+The command registry lives in `crates/huginn-tui/src/commands.rs`; adding a command is one
 registry entry plus one TUI dispatch arm, and it auto-appears in `/help`.
 
 ### Tool activity is collapsed
@@ -298,15 +298,15 @@ planning, and their output is capped.
 ### Skills (`skill_search` / `skill_load`)
 
 Skills are reusable instruction files — `SKILL.md` with YAML frontmatter
-(`name`, `description`) and a markdown body. Drop them under `.raven/skills/`
-(project) or `~/.raven/skills/` (global), e.g.:
+(`name`, `description`) and a markdown body. Drop them under `.huginn/skills/`
+(project) or `~/.huginn/skills/` (global), e.g.:
 
 ```text
-.raven/skills/commit/SKILL.md
+.huginn/skills/commit/SKILL.md
 ```
 
-Raven also loads Agent Plugins v1.0.0 packages: a directory with a
-`plugin.json` manifest under `.raven/plugins/` (project) or `~/.raven/plugins/`
+Huginn also loads Agent Plugins v1.0.0 packages: a directory with a
+`plugin.json` manifest under `.huginn/plugins/` (project) or `~/.huginn/plugins/`
 (global). Skills come from each plugin's `skills/` folder. Stdio MCP servers
 come from root `mcp.json` (`${PLUGIN_ROOT}` / `${PLUGIN_DATA}` expanded; HTTP
 and SSE entries skipped). Tool names are `{plugin}__{server}__{tool}`.
@@ -318,7 +318,7 @@ planning.
 
 ### Repo symbol map (`<repo_map>`)
 
-For non-trivial workspaces (≥15 source files, or ≥80 extracted symbols) Raven
+For non-trivial workspaces (≥15 source files, or ≥80 extracted symbols) Huginn
 injects a compact `<repo_map>` into the system prompt: ranked
 `symbol [kind]` declarations grouped by path, extracted via per-language
 regex (`fn` / `struct` / `class` / …). File discovery prefers
@@ -331,7 +331,7 @@ workspaces skip the map; output is capped at ~3.5K chars.
 ### Memory recall (`memory_search`)
 
 The agent can recall past decisions and conventions with `memory_search(query)`,
-which keyword-scans `.raven/MEMORY.md` and returns the matching lines as ranked
+which keyword-scans `.huginn/MEMORY.md` and returns the matching lines as ranked
 `path:line — content` snippets (lines with more query-token hits rank first).
 Grok Build uses indexed keyword + vector search; a mini harness gets the
 high-value subset with a dependency-light keyword scan of the single memory
@@ -346,13 +346,13 @@ the working tree for you to review. Only create a commit if you explicitly
 ask.
 
 If a parallel sub-agent's diff cannot be applied, a recovery patch is
-written to `.raven/recovery-sub-N.patch` and indexed in `.raven/RECOVERY.md`
-(`git apply .raven/recovery-sub-N.patch`). After each TUI turn that produced
-a git diff, a snapshot is saved to `.raven/sessions/<id>/last.patch`.
+written to `.huginn/recovery-sub-N.patch` and indexed in `.huginn/RECOVERY.md`
+(`git apply .huginn/recovery-sub-N.patch`). After each TUI turn that produced
+a git diff, a snapshot is saved to `.huginn/sessions/<id>/last.patch`.
 
 ### Long-horizon task management (`goal_set`, `todo_write`, `delegate_task`, `think`)
 
-For multi-step tasks, Raven keeps the agent on track with persistent state and
+For multi-step tasks, Huginn keeps the agent on track with persistent state and
 context hygiene:
 
 - **`goal_set(description)`** records the current objective to the session's
@@ -373,35 +373,35 @@ context hygiene:
 
 ### Context compaction (LLM-structured)
 
-When history grows past the soft limit, Raven **summarizes the middle turns
+When history grows past the soft limit, Huginn **summarizes the middle turns
 with the model** (a dedicated non-streaming summarization request) and keeps a
 recent tail, so the agent retains more signal per token than the old
 extractive (message-joins) summarizer. The system message is always preserved,
 and tool-call/tool-result pairs are never split. If the summarization request
-fails, Raven falls back to the extractive summarizer so compaction always
+fails, Huginn falls back to the extractive summarizer so compaction always
 proceeds.
 
 ### Auto-lint reflection (`run_lint`)
 
 The agent has a `run_lint` tool (auto-detects `cargo clippy` / `tsc` /
 `eslint` / Python `compileall` and reports problems without fixing them). After
-a turn that edited files (`write_file`/`search_replace`/`apply_patch`), Raven
+a turn that edited files (`write_file`/`search_replace`/`apply_patch`), Huginn
 automatically runs the linter and feeds any errors back to the model as a
 reminder on the *next* request — so the agent self-corrects before you see the
 damage. On a clean lint pass nothing is injected, keeping the loop quiet.
 
 ### Enforced verification (`--no-verify`)
 
-Raven enforces that the agent runs the test suite after editing files before it
+Huginn enforces that the agent runs the test suite after editing files before it
 can finish a turn. When a turn calls `write_file`/`search_replace`/`apply_patch`
-and the model finishes **without** calling `run_tests`, Raven injects a recovery
+and the model finishes **without** calling `run_tests`, Huginn injects a recovery
 reminder and re-runs the turn (capped at 3 attempts) instead of finishing — so
 the agent cannot "forget" to verify its changes. This mirrors Grok Build's
 `CompletionRequirement` (must-call-tool + recovery re-run).
 
 - **On by default** in both the TUI and headless mode.
 - Disable with `--no-verify` on the CLI, or `verify = false` in
-  `.raven/config.toml` / `~/.raven/config.toml`.
+  `.huginn/config.toml` / `~/.huginn/config.toml`.
 - In the TUI, a `⟳ verify required` line appears in the log and the model's
   `run_tests` call shows in the status strip with the spinner. In headless mode,
   a `[verify required]` notice is printed.
@@ -420,7 +420,7 @@ produced) instead of dropping it, and quitting (Esc Esc / Ctrl+C Ctrl+C /
 
 ### TUI limitations
 
-- Each submission spawns a **fresh agent** — conversation history is carried across turns via in-memory session messages and persisted to `.raven/sessions/`.
+- Each submission spawns a **fresh agent** — conversation history is carried across turns via in-memory session messages and persisted to `.huginn/sessions/`.
 - Plan approval uses one word list: `yes`/`y`/`approve`/`go`/`execute`/`ok` execute, `no`/`n`/`abort`/`q`/`quit` or Esc dismiss, and any other text revises. A blank Enter does not execute.
 - Scrollback is limited to the on-screen log window.
 
@@ -431,8 +431,8 @@ produced) instead of dropping it, and quitting (Esc Esc / Ctrl+C Ctrl+C /
 Append rules to the system prompt for a single session without editing files:
 
 ```bash
-raven --rules "Always use TypeScript. Prefer functional components." -p "Add a dark mode toggle"
-raven --rules "Run cargo fmt before considering the task done." -p "Refactor utils"
+huginn --rules "Always use TypeScript. Prefer functional components." -p "Add a dark mode toggle"
+huginn --rules "Run cargo fmt before considering the task done." -p "Refactor utils"
 ```
 
 Rules are appended under a `--- Session rules ---` header, after any `AGENTS.md` content.
@@ -445,17 +445,17 @@ Rules are appended under a `--- Session rules ---` header, after any `AGENTS.md`
 # Point the ollama provider at a GPU box on the LAN (via config.toml)
 #   [providers.ollama]
 #   base_url = "http://gpu-box:11434/v1"
-raven -p "Explain this repo"
+huginn -p "Explain this repo"
 
 # Ollama Cloud (authenticated)
 export OLLAMA_API_KEY="your-key"
 #   [providers.ollama]
 #   base_url = "https://ollama.com/v1"
-raven -m llama3.1 -p "Explain this repo"
+huginn -m llama3.1 -p "Explain this repo"
 
 # Or switch to the openrouter provider entirely
 export OPENROUTER_API_KEY="sk-or-..."
-raven --provider openrouter -p "Explain this repo"
+huginn --provider openrouter -p "Explain this repo"
 ```
 
 See [configuration.md](configuration.md#providers) for the full provider model.
@@ -468,10 +468,10 @@ If the model errors with "context length exceeded", tune compaction:
 
 ```bash
 # Compact earlier (default 0.75)
-raven --compact-threshold 0.5 -p "Refactor the whole codebase"
+huginn --compact-threshold 0.5 -p "Refactor the whole codebase"
 
 # Override the inferred window
-raven --context-window 32768 -p "..."
+huginn --context-window 32768 -p "..."
 ```
 
 See [architecture.md#compaction](architecture.md#compaction) for how it works.

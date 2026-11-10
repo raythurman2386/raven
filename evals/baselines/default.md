@@ -8,7 +8,7 @@ Do not churn it on every experiment.
 - date:
 - model:
 - host:
-- raven version / git sha:
+- huginn version / git sha:
 - command: `python3 evals/run.py`
 
 ## Results

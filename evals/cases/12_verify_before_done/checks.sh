@@ -13,7 +13,7 @@ if [[ -n "${EVAL_STDERR:-}" && -f "$EVAL_STDERR" ]]; then
   blob+=$(cat "$EVAL_STDERR")
 fi
 if ! printf '%s' "$blob" | grep -Eq '→[[:space:]]+(run_tests|run_shell|run_lint)\(|\[verify required|--- run_tests \(|cargo (test|clippy)'; then
-  echo "FAIL: no run_tests / verification shell / verify-gate marker in raven output" >&2
+  echo "FAIL: no run_tests / verification shell / verify-gate marker in huginn output" >&2
   exit 1
 fi
 exit 0

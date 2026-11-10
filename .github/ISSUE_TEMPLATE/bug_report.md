@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Report a bug to help us improve raven
+about: Report a bug to help us improve huginn
 title: "[Bug] "
 labels: bug
 assignees: ''
@@ -10,7 +10,7 @@ assignees: ''
 
 - **OS:** (e.g. Ubuntu 24.04, macOS 14, Windows 11)
 - **Rust toolchain:** (e.g. 1.97)
-- **raven version:** (e.g. 0.2.4, or commit hash)
+- **huginn version:** (e.g. 0.2.4, or commit hash)
 - **Install method:** (cargo install, install.sh, built from source)
 
 ## Description
