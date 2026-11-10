@@ -1,5 +1,5 @@
 //! Stdio MCP client.
 //!
-//! Re-exported from `raven-tools`. Server specs live in `raven-config`.
+//! Re-exported from `huginn-tools`. Server specs live in `huginn-config`.
 
-pub use raven_tools::mcp::*;
+pub use huginn_tools::mcp::*;

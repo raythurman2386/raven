@@ -1,0 +1,28 @@
+[package]
+name = "huginn-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Tool definitions, dispatch, git, documents, web, skills, repo map, plugins, and the stdio MCP client"
+
+[dependencies]
+huginn-proto = { workspace = true }
+huginn-config = { workspace = true }
+huginn-persist = { workspace = true }
+huginn-sandbox = { workspace = true }
+anyhow = { workspace = true }
+dirs = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+reqwest = { workspace = true }
+anydoc = { workspace = true }
+ignore = { workspace = true }
+regex = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+huginn-testutil = { workspace = true }
+zip = { workspace = true }
+tokio = { workspace = true }

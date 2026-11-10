@@ -1,5 +1,5 @@
 //! Pure-Rust token estimator, usage meters, and pricing.
 //!
-//! Re-exported from `raven-tokenizer`.
+//! Re-exported from `huginn-tokenizer`.
 
-pub use raven_tokenizer::*;
+pub use huginn_tokenizer::*;

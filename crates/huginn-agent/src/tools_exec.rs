@@ -1,0 +1,1212 @@
+//! Tool dispatch: serial vs parallel policy, result bookkeeping, and the
+//! auto-lint reflection pass.
+//!
+//! File-mutating tools (`write_file`, `search_replace`, `apply_patch`) run
+//! **serially in call order** so two edits to the same file apply in order
+//! instead of racing. All other tools may run in parallel via `spawn_blocking`.
+//! Results are recorded through [`Agent::record_tool_result`], which shares
+//! identical bookkeeping (consecutive-failure tracking, read-only/MCP caching,
+//! `ToolEnd` event, `tool` message push) across both paths.
+
+use anyhow::Result;
+use serde_json::Value;
+use tokio::sync::mpsc;
+
+use huginn_proto::ToolError;
+use huginn_tools::{
+    dispatch, safe_command_re, system_command_autonomous, validate_tool_call, Sandbox,
+    MAX_ARGUMENTS_BYTES,
+};
+
+use super::core::Agent;
+use huginn_proto::{AgentEvent, ChatMessage, ToolCall};
+
+/// Outcome of a parallel `spawn_blocking` tool dispatch.
+type ParallelToolJoin = (String, String, Result<String, ToolError>, String, bool);
+
+/// Deferred tool outcome held until all calls finish so results can be
+/// appended in original `tool_calls[]` order.
+struct PendingToolResult {
+    id: String,
+    name: String,
+    cache_key: String,
+    result: Result<String, ToolError>,
+    is_verification: bool,
+}
+
+impl PendingToolResult {
+    fn ready(
+        id: String,
+        name: String,
+        cache_key: String,
+        result: Result<String, ToolError>,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            cache_key,
+            result,
+            is_verification: false,
+        }
+    }
+
+    fn with_verification(mut self, v: bool) -> Self {
+        self.is_verification = v;
+        self
+    }
+}
+
+impl Agent {
+    /// Execute a batch of tool calls, applying the serial/parallel policy.
+    ///
+    /// Pushes the assistant message carrying the tool calls, dispatches each
+    /// tool (file-mutating tools serially in call order, others in parallel),
+    /// records results, advances plan progress, and runs the auto-lint
+    /// reflection pass if this iteration edited files.
+    ///
+    /// `edited` is per-iteration state (whether this iteration's tools edited
+    /// files, gating the lint pass); `edited_any` is turn-level state
+    /// (persists across iterations, gating the enforced-verify gate). Both
+    /// are updated in place.
+    pub(crate) async fn execute_tool_calls(
+        &mut self,
+        tx: &mpsc::Sender<AgentEvent>,
+        tcs: Vec<ToolCall>,
+        assistant: ChatMessage,
+        edited: &mut bool,
+        edited_any: &mut bool,
+    ) -> Result<()> {
+        let mut assistant = assistant;
+        assistant.tool_calls = Some(tcs.clone());
+        self.messages.push(assistant);
+
+        // Slot results by original call index so tool messages always follow
+        // `tool_calls[]` order (OpenAI-compatible validators and some cloud
+        // routers reject interleaved / reordered tool results).
+        // File-mutating tools still run serially; other tools may run in
+        // parallel via spawn_blocking. Only *recording* is deferred/ordered.
+        let n = tcs.len();
+        let mut slots: Vec<Option<PendingToolResult>> = (0..n).map(|_| None).collect();
+        let mut handles: Vec<(usize, tokio::task::JoinHandle<ParallelToolJoin>)> = Vec::new();
+
+        for (idx, tc) in tcs.iter().enumerate() {
+            // If the streamed `arguments` JSON is malformed (e.g. a
+            // truncated chunk), surface a clear error to the model instead
+            // of silently dispatching with empty args — a write_file or
+            // run_shell firing on nothing is far worse than a retry.
+            if tc.function.arguments.len() > MAX_ARGUMENTS_BYTES {
+                let result = format!(
+                    "Tool error: arguments for {} exceed {} bytes",
+                    tc.function.name, MAX_ARGUMENTS_BYTES
+                );
+                slots[idx] = Some(PendingToolResult::ready(
+                    tc.id.clone(),
+                    tc.function.name.clone(),
+                    String::new(),
+                    Ok(result),
+                ));
+                continue;
+            }
+            let parsed: Result<Value, serde_json::Error> =
+                serde_json::from_str(&tc.function.arguments);
+            let args = match parsed {
+                Ok(v) => v,
+                Err(e) => {
+                    let result = format!(
+                        "Tool error: arguments for {} are not valid JSON: {}\nRaw: {}",
+                        tc.function.name, e, tc.function.arguments
+                    );
+                    slots[idx] = Some(PendingToolResult::ready(
+                        tc.id.clone(),
+                        tc.function.name.clone(),
+                        String::new(),
+                        Ok(result),
+                    ));
+                    continue;
+                }
+            };
+            if let Err(result) =
+                validate_tool_call(&tc.function.name, &tc.function.arguments, &args)
+            {
+                slots[idx] = Some(PendingToolResult::ready(
+                    tc.id.clone(),
+                    tc.function.name.clone(),
+                    String::new(),
+                    Ok(result),
+                ));
+                continue;
+            }
+            // ask_user is special: it blocks on a user reply over a oneshot
+            // channel rather than dispatching to the (sync) tool sandbox. The
+            // consumer renders the question and sends the answer back. If the
+            // sender is dropped (user dismissed / no consumer), the model sees
+            // that no answer was given.
+            if tc.function.name == "ask_user" {
+                let question = args
+                    .get("question")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<String>();
+                let _ = tx
+                    .send(AgentEvent::AskUser {
+                        question,
+                        reply: reply_tx,
+                    })
+                    .await;
+                let answer = reply_rx
+                    .await
+                    .unwrap_or_else(|_| "The user did not provide an answer.".to_string());
+                let result = format!("User answered: {answer}");
+                slots[idx] = Some(PendingToolResult::ready(
+                    tc.id.clone(),
+                    "ask_user".into(),
+                    String::new(),
+                    Ok(result),
+                ));
+                continue;
+            }
+
+            // Shell permission gate: when confirm_shell is on (not --yolo),
+            // every run_shell command is confirmed with the user first,
+            // reusing the ask_user oneshot path. In system scope,
+            // system_command_autonomous pre-approves read-only diagnostics
+            // per pipe-segment (compound lines with `;`/`|`/`>`/etc. always
+            // prompt — an allowlisted prefix must not approve what follows).
+            // If the user declines, the command is replaced with a no-op
+            // explanation the model can see.
+            if self.settings.confirm_shell && tc.function.name == "run_shell" {
+                let command = args
+                    .get("command")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let pre_approved = if self.settings.scope.is_system() {
+                    system_command_autonomous(&command, self.settings.scope)
+                } else {
+                    safe_command_re().is_match(&command)
+                };
+                if !pre_approved {
+                    let (confirm_tx, confirm_rx) = tokio::sync::oneshot::channel::<String>();
+                    let _ = tx
+                        .send(AgentEvent::AskPermission {
+                            command: command.clone(),
+                            reply: confirm_tx,
+                        })
+                        .await;
+                    let answer = confirm_rx.await.unwrap_or_default();
+                    let allowed = answer.trim().eq_ignore_ascii_case("y")
+                        || answer.trim().eq_ignore_ascii_case("yes");
+                    if !allowed {
+                        let result = "Shell command NOT run: the user declined permission. Do not retry unless you have a safer alternative.".to_string();
+                        slots[idx] = Some(PendingToolResult::ready(
+                            tc.id.clone(),
+                            "run_shell".into(),
+                            String::new(),
+                            Ok(result),
+                        ));
+                        continue;
+                    }
+                }
+            }
+
+            if matches!(
+                tc.function.name.as_str(),
+                "delegate_task" | "goal_set" | "todo_write"
+            ) && !self.settings.allow_delegate
+            {
+                slots[idx] = Some(PendingToolResult::ready(
+                    tc.id.clone(),
+                    tc.function.name.clone(),
+                    String::new(),
+                    Ok(
+                        "This sub-agent cannot nest delegate_task or change the parent goal/todos."
+                            .into(),
+                    ),
+                ));
+                continue;
+            }
+
+            // delegate_task spawns a fresh sub-agent in a new context window
+            // and returns its distilled output — async, so special-case it
+            // like the web tools. ToolStart must pair with the ToolEnd from
+            // record_tool_result, or the TUI shows nothing while the
+            // sub-agent runs.
+            if tc.function.name == "delegate_task" {
+                let _ = tx
+                    .send(AgentEvent::ToolStart {
+                        name: tc.function.name.clone(),
+                        args: args.clone(),
+                    })
+                    .await;
+                let description = args
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let sub_settings = self.settings.clone();
+                let result =
+                    super::parallel::delegate_task(sub_settings, description, tx.clone()).await;
+                let result = match result {
+                    Ok(out) => {
+                        let sandbox = huginn_tools::Sandbox::new(self.settings.workspace.clone());
+                        let presented = sandbox.present_output("subagent", out);
+                        format!("Sub-agent result:\n{presented}")
+                    }
+                    Err(e) => format!("Sub-agent error: {e}"),
+                };
+                slots[idx] = Some(PendingToolResult::ready(
+                    tc.id.clone(),
+                    "delegate_task".into(),
+                    String::new(),
+                    Ok(result),
+                ));
+                continue;
+            }
+
+            // Web tools are async HTTP — special-case them like ask_user.
+            // ToolStart goes out before the await so the TUI shows the call
+            // while it runs instead of a silent multi-second stall; the
+            // paired ToolEnd comes from record_tool_result below.
+            if tc.function.name == "web_search" || tc.function.name == "web_fetch" {
+                let _ = tx
+                    .send(AgentEvent::ToolStart {
+                        name: tc.function.name.clone(),
+                        args: args.clone(),
+                    })
+                    .await;
+                let t_web = std::time::Instant::now();
+                let result = if tc.function.name == "web_search" {
+                    let query = args
+                        .get("query")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let page = args.get("page").and_then(|v| v.as_u64()).map(|p| p as u32);
+                    let searxng = huginn_tools::web::SearxngConfig {
+                        base_url: self.settings.searxng_url.clone(),
+                        engines: self.settings.searxng_engines.clone(),
+                    };
+                    huginn_tools::web::search(&query, page, Some(&searxng)).await
+                } else {
+                    let url = args
+                        .get("url")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    huginn_tools::web::fetch_text(&url).await
+                };
+                tracing::info!(
+                    tool = tc.function.name.as_str(),
+                    duration_ms = t_web.elapsed().as_millis() as u64,
+                    "web tool finished"
+                );
+                slots[idx] = Some(PendingToolResult::ready(
+                    tc.id.clone(),
+                    tc.function.name.clone(),
+                    String::new(),
+                    Ok(result),
+                ));
+                continue;
+            }
+
+            let _ = tx
+                .send(AgentEvent::ToolStart {
+                    name: tc.function.name.clone(),
+                    args: args.clone(),
+                })
+                .await;
+            let sandbox = self.sandbox.clone();
+            let state_dir = self.state_dir.clone();
+            let name = tc.function.name.clone();
+            let id = tc.id.clone();
+            let cache_key = tool_cache_key(&name, &tc.function.arguments);
+            let read_only = self.plan_only;
+
+            // HARD STOP enforcement: after N identical successes, refuse further
+            // identical calls (reminder-only was underselling the name).
+            let streak = identical_success_streak(&self.messages, &name, &tc.function.arguments);
+            if streak >= IDENTICAL_SUCCESS_LOOP_N {
+                slots[idx] = Some(PendingToolResult::ready(
+                    id,
+                    name.clone(),
+                    cache_key,
+                    Ok(hard_stop_refuse_message(&name, streak)),
+                ));
+                continue;
+            }
+
+            if let Some(mcp) = self.mcp.clone() {
+                if mcp.has_tool(&name) {
+                    if read_only && !mcp.is_read_only(&name) {
+                        slots[idx] = Some(PendingToolResult::ready(
+                            id,
+                            name,
+                            cache_key,
+                            Ok("Error: this MCP tool is not available in read-only mode. \
+                                 Use --mode agent to enable it."
+                                .into()),
+                        ));
+                        continue;
+                    }
+                    // Short-circuit identical successful MCP read/verify calls
+                    // (e.g. ripwire__doc_drift) until a mutating tool clears the cache.
+                    if is_cacheable_tool(&name, Some(&mcp)) {
+                        if let Some(cached) = self.tool_cache.get(&cache_key) {
+                            slots[idx] = Some(PendingToolResult::ready(
+                                id,
+                                name,
+                                cache_key,
+                                Ok(cached.clone()),
+                            ));
+                            continue;
+                        }
+                    }
+                    handles.push((
+                        idx,
+                        tokio::task::spawn_blocking(move || {
+                            let result = mcp.call(&name, &args);
+                            (id, name, result, cache_key, false)
+                        }),
+                    ));
+                    continue;
+                }
+            }
+
+            // Track verification intent: the model dispatched run_tests or
+            // ran a test/typecheck/lint command via run_shell this turn.
+            // The actual credit is deferred until the tool result is available
+            // so we can check the exit code and output (fail-closed, issue #136).
+            let is_verification = name == "run_tests"
+                || (name == "run_shell"
+                    && args
+                        .get("command")
+                        .and_then(|v| v.as_str())
+                        .map(Sandbox::is_verification_command)
+                        .unwrap_or(false));
+
+            // Check cache for read-only / verify-style tools (builtin + MCP).
+            if is_cacheable_tool(&name, self.mcp.as_ref()) {
+                if let Some(cached) = self.tool_cache.get(&cache_key) {
+                    slots[idx] = Some(PendingToolResult::ready(
+                        id,
+                        name,
+                        cache_key,
+                        Ok(cached.clone()),
+                    ));
+                    continue;
+                }
+            }
+
+            if matches!(
+                name.as_str(),
+                "write_file" | "search_replace" | "apply_patch"
+            ) {
+                // Serialize file-mutating tools: dispatch and await inline so
+                // two edits to the same file apply in call order instead of
+                // racing (issue #111). Recording still goes through slots.
+                let dispatch_name = name.clone();
+                let tool_offload = self.settings.efficiency.tool_offload;
+                let dispatch_result: Result<String, ToolError> =
+                    tokio::task::spawn_blocking(move || {
+                        dispatch(
+                            &sandbox,
+                            state_dir.as_deref(),
+                            &dispatch_name,
+                            &args,
+                            read_only,
+                            tool_offload,
+                        )
+                    })
+                    .await
+                    .unwrap_or_else(|e| {
+                        Err(ToolError::Other(format!("Tool error: join failed: {e}")))
+                    });
+                if mutating_tool_succeeded(&dispatch_result) {
+                    *edited = true;
+                    *edited_any = true;
+                    self.repo_map_stale = true;
+                    self.tool_cache.clear();
+                }
+                slots[idx] = Some(
+                    PendingToolResult::ready(id, name, cache_key, dispatch_result)
+                        .with_verification(is_verification),
+                );
+            } else {
+                let tool_offload = self.settings.efficiency.tool_offload;
+                handles.push((
+                    idx,
+                    tokio::task::spawn_blocking(move || {
+                        let result = dispatch(
+                            &sandbox,
+                            state_dir.as_deref(),
+                            &name,
+                            &args,
+                            read_only,
+                            tool_offload,
+                        );
+                        (id, name, result, cache_key, is_verification)
+                    }),
+                ));
+            }
+        }
+
+        for (idx, h) in handles {
+            // Preserve the original tool_call id even if the join fails —
+            // empty ids produce provider 400s on the next request.
+            let fallback_id = tcs.get(idx).map(|t| t.id.clone()).unwrap_or_default();
+            let fallback_name = tcs
+                .get(idx)
+                .map(|t| t.function.name.clone())
+                .unwrap_or_else(|| "unknown".into());
+            let (id, name, dispatch_result, cache_key, is_verification) =
+                h.await.unwrap_or_else(|e| {
+                    (
+                        fallback_id,
+                        fallback_name,
+                        Err(ToolError::Other(format!("Tool error: join failed: {e}"))),
+                        String::new(),
+                        false,
+                    )
+                });
+            slots[idx] = Some(
+                PendingToolResult::ready(id, name, cache_key, dispatch_result)
+                    .with_verification(is_verification),
+            );
+        }
+
+        let mut refresh_state = false;
+        for slot in slots.into_iter().flatten() {
+            if matches!(slot.name.as_str(), "goal_set" | "todo_write") {
+                refresh_state = true;
+            }
+            self.record_tool_result(
+                tx,
+                slot.id,
+                slot.name,
+                slot.cache_key,
+                slot.result,
+                slot.is_verification,
+            )
+            .await;
+        }
+        if refresh_state {
+            self.install_pinned_prompt();
+        }
+
+        // Plan progress: mark the current step Completed and advance to
+        // the next step after tool calls finish.
+        if let Some(ref mut plan) = self.plan {
+            huginn_proto::advance_step(plan, &mut self.current_step, true, false);
+            let _ = tx.send(AgentEvent::PlanProgress(plan.clone())).await;
+        }
+
+        // Auto-lint reflection: if this iteration edited files, run the
+        // project's linter (off the blocking pool) and stash the feedback
+        // so the *next* request gets it as an ephemeral reminder — the
+        // model can then self-correct before the user sees the damage.
+        // Once per turn: the linter compiles the whole project (tens of
+        // seconds on Rust), so re-running it every editing iteration can
+        // dominate the turn budget. A stale result is better than a turn
+        // that spends its entire budget linting.
+        if *edited && !self.plan_only && self.lint_ran.is_none() {
+            let sandbox = self.sandbox.clone();
+            let lint = tokio::task::spawn_blocking(move || sandbox.run_lint())
+                .await
+                .map_err(|e| e.to_string())
+                .and_then(|r| r.map_err(|e| e.to_string()))
+                .unwrap_or_else(|e| format!("Error running linter: {e}"));
+            // Only surface as a reflection reminder when lint found problems
+            // (non-zero exit or error text), not on a clean pass.
+            let has_problems =
+                parse_exit_code(&lint).is_some_and(|c| c != 0) || lint.contains("Error");
+            self.lint_ran = Some(has_problems);
+            if has_problems {
+                self.pending_lint = Some(format!(
+                    "Lint found problems after your edits — fix them:\n{lint}"
+                ));
+            }
+        }
+
+        let _ = tx.send(AgentEvent::Checkpoint(self.messages.clone())).await;
+        Ok(())
+    }
+
+    /// Record a single tool-call result: consecutive-failure tracking, read-only
+    /// result caching, the `ToolEnd` event, and the `tool` ChatMessage push.
+    ///
+    /// Called for both serially-dispatched (file-mutating) tools and
+    /// parallel-dispatched (read-only) tools so both paths share identical
+    /// result bookkeeping.
+    ///
+    /// When `is_verification` is true, the result is inspected for exit code
+    /// and failure markers before crediting `self.verified` (fail-closed,
+    /// issue #136).
+    pub(crate) async fn record_tool_result(
+        &mut self,
+        tx: &mpsc::Sender<AgentEvent>,
+        id: String,
+        name: String,
+        cache_key: String,
+        dispatch_result: Result<String, ToolError>,
+        is_verification: bool,
+    ) {
+        let result = match dispatch_result {
+            Ok(s) => {
+                let class = tool_error_class(&s);
+                if class != "ok" {
+                    tracing::info!(tool = %name, class, "tool_result");
+                }
+                if s.starts_with("Error:") || s.starts_with("Tool error:") {
+                    let failure_key = (name.clone(), cache_key.clone());
+                    if self.consecutive_failure_key.as_ref() == Some(&failure_key) {
+                        self.consecutive_failure_count += 1;
+                    } else {
+                        self.consecutive_failure_key = Some(failure_key);
+                        self.consecutive_failure_count = 1;
+                    }
+                    if self.consecutive_failure_count >= 3 {
+                        self.pending_repeated_failure = Some(
+                            "Your last tool call failed with the same error 3+ times in a row. \
+                             Do NOT retry the same call. Try a different approach — read the \
+                             file first, use a different tool, or explain the problem to the user."
+                                .into(),
+                        );
+                    }
+                } else {
+                    self.consecutive_failure_key = None;
+                    self.consecutive_failure_count = 0;
+                }
+                s
+            }
+            Err(e) => {
+                let class = if e.is_transient() {
+                    "timeout"
+                } else {
+                    "unexpected"
+                };
+                tracing::info!(tool = %name, class, error = %e, "tool_result");
+                // Deterministic failures already reach the model/transcript;
+                // keep them at debug under default RUST_LOG=warn.
+                if e.is_transient() {
+                    tracing::warn!("Transient tool error (retryable): {e}");
+                } else {
+                    tracing::debug!("Tool error: {e}");
+                }
+                let retry_hint = if e.is_transient() {
+                    " This may be transient; a single retry is reasonable."
+                } else {
+                    " This is a deterministic error; do not retry the same call — adjust the inputs or use a different approach."
+                };
+                let msg = format!("Tool error: {e}{retry_hint}");
+                let failure_key = (name.clone(), cache_key.clone());
+                if self.consecutive_failure_key.as_ref() == Some(&failure_key) {
+                    self.consecutive_failure_count += 1;
+                } else {
+                    self.consecutive_failure_key = Some(failure_key);
+                    self.consecutive_failure_count = 1;
+                }
+                if self.consecutive_failure_count >= 3 {
+                    self.pending_repeated_failure = Some(
+                        "Your last tool call failed with the same error 3+ times in a row. \
+                         Do NOT retry the same call. Try a different approach — read the \
+                         file first, use a different tool, or explain the problem to the user."
+                            .into(),
+                    );
+                }
+                msg
+            }
+        };
+
+        if is_verification {
+            self.verified = verification_passed(&result);
+        }
+
+        // Mutating tools (file edits, run_shell, memory_update, MCP mutates)
+        // invalidate the read/verify cache so later hits are not stale.
+        if !is_tool_error_text(&result) && should_invalidate_tool_cache(&name, self.mcp.as_ref()) {
+            self.tool_cache.clear();
+        } else if is_cacheable_tool(&name, self.mcp.as_ref())
+            && !cache_key.is_empty()
+            && !is_tool_error_text(&result)
+        {
+            // Cache successful read-only / verify-style results (builtin + MCP).
+            self.tool_cache.insert(cache_key, result.clone());
+        }
+        let preview: String = result.chars().take(600).collect();
+        let _ = tx
+            .send(AgentEvent::ToolEnd {
+                name: name.clone(),
+                preview,
+            })
+            .await;
+        let mut tool_msg = ChatMessage::plain("tool", Some(result));
+        tool_msg.tool_call_id = Some(id);
+        self.messages.push(tool_msg);
+    }
+}
+
+/// Coarse class for a tool result the model will see. `ok` is not an error.
+fn tool_error_class(text: &str) -> &'static str {
+    if !(text.starts_with("Error:") || text.starts_with("Tool error:")) {
+        return "ok";
+    }
+    let lower = text.to_ascii_lowercase();
+    if lower.contains("timed out") || lower.contains("timeout") {
+        "timeout"
+    } else if lower.contains("declined") || lower.contains("not run") {
+        "user_abort"
+    } else if lower.contains("invalid") || lower.contains("required") || lower.contains("missing") {
+        "invalid_arguments"
+    } else if lower.contains("dangerous-command denylist")
+        || lower.contains("sigsys")
+        || lower.contains("does not exist")
+        || lower.contains("not a file")
+        || lower.contains("sandbox")
+    {
+        "environment"
+    } else if lower.contains("http") {
+        "provider"
+    } else {
+        "unexpected"
+    }
+}
+
+/// Inspect a verification tool result to determine whether it represents a
+/// genuinely successful run (fail-closed, issue #136).
+///
+/// Returns `true` only when the output shows `exit=0` and contains no signal
+/// kill, linker/compile failure, timeout, or test-failure markers. A
+/// SIGSYS-killed, timed-out, linker-crashed, or non-zero-exit "verification"
+/// does not count as verified.
+fn verification_passed(output: &str) -> bool {
+    if output.contains("Error: command killed by signal")
+        || output.contains("killed by signal")
+        || output.contains("timed out")
+    {
+        return false;
+    }
+
+    // Linker / compiler failures report `exit=0` when the command was piped
+    // (the pipeline's exit code is the last stage's) while the payload shows
+    // the real failure. Fail closed on the payload markers.
+    if output.contains("terminated with signal")
+        || output.contains("could not compile")
+        || output.contains("error: linking with")
+    {
+        return false;
+    }
+
+    if parse_exit_code(output) != Some(0) {
+        return false;
+    }
+
+    if output.contains("FAILED")
+        || output.contains("failures:")
+        || output.contains("test result: FAILED")
+    {
+        return false;
+    }
+
+    true
+}
+
+/// First `exit=N` token in tool output (`--- run_tests (cargo) exit=10 ---`
+/// or a bare `exit=10\n` from `run_shell`).
+///
+/// Must not treat `exit=10` as `exit=0` via substring match.
+fn parse_exit_code(output: &str) -> Option<i32> {
+    let bytes = output.as_bytes();
+    let mut i = 0;
+    while i + 5 <= bytes.len() {
+        if &bytes[i..i + 5] == b"exit=" {
+            let rest = &output[i + 5..];
+            let end = rest
+                .find(|c: char| !c.is_ascii_digit() && c != '-')
+                .unwrap_or(rest.len());
+            if end > 0 {
+                if let Ok(n) = rest[..end].parse::<i32>() {
+                    return Some(n);
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Canonicalize tool argument JSON so equivalent objects share a cache key
+/// (`{"b":1,"a":2}` and `{"a":2,"b":1}` hit the same entry).
+pub(crate) fn normalize_tool_args(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    match serde_json::from_str::<Value>(trimmed) {
+        Ok(v) => serde_json::to_string(&sort_json_keys(&v)).unwrap_or_else(|_| trimmed.to_string()),
+        Err(_) => trimmed.to_string(),
+    }
+}
+
+fn sort_json_keys(v: &Value) -> Value {
+    match v {
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            let mut out = serde_json::Map::new();
+            for k in keys {
+                out.insert(k.clone(), sort_json_keys(&map[k]));
+            }
+            Value::Object(out)
+        }
+        Value::Array(arr) => Value::Array(arr.iter().map(sort_json_keys).collect()),
+        other => other.clone(),
+    }
+}
+
+/// Cache key: `name` + normalized argument JSON.
+pub(crate) fn tool_cache_key(name: &str, raw_args: &str) -> String {
+    format!("{}:{}", name, normalize_tool_args(raw_args))
+}
+
+/// Built-in tools whose successful results are safe to reuse until a mutate.
+pub(crate) fn is_builtin_read_only(name: &str) -> bool {
+    matches!(
+        name,
+        "list_dir"
+            | "read_file"
+            | "grep"
+            | "search_code"
+            | "git_status"
+            | "git_diff"
+            | "git_log"
+            | "skill_search"
+            | "skill_load"
+            | "memory_search"
+            | "tool_schema"
+            | "think"
+    )
+}
+
+/// Verify-style MCP names we cache even when `readOnlyHint` is missing
+/// (motivating case: `ripwire__doc_drift`).
+///
+/// Prefer exact advertised names / `__doc_drift` suffix over a substring match
+/// so names like `update_doc_drift_notes` are not falsely treated as cacheable.
+/// Prefer `readOnlyHint` via [`is_cacheable_tool`] when the MCP server sets it.
+pub(crate) fn is_mcp_verify_cacheable(name: &str) -> bool {
+    name == "doc_drift" || name.ends_with("__doc_drift")
+}
+
+/// Whether a successful `(name, args)` result may be short-circuited from cache.
+///
+/// Includes built-in read-only tools, MCP tools annotated `readOnlyHint: true`,
+/// and exact doc_drift verifies. Mutating tools are never cacheable; a
+/// successful mutate clears the cache via [`should_invalidate_tool_cache`].
+pub(crate) fn is_cacheable_tool(name: &str, mcp: Option<&huginn_tools::mcp::McpHandle>) -> bool {
+    if is_builtin_read_only(name) {
+        return true;
+    }
+    if is_mcp_verify_cacheable(name) {
+        return true;
+    }
+    if let Some(mcp) = mcp {
+        if mcp.has_tool(name) && mcp.is_read_only(name) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Tools whose successful results invalidate the read/verify tool cache.
+///
+/// Broader than the serial file-edit path: `run_shell`, `memory_update`, and
+/// non-read-only MCP tools also clear so verify-cache hits cannot go stale.
+pub(crate) fn should_invalidate_tool_cache(
+    name: &str,
+    mcp: Option<&huginn_tools::mcp::McpHandle>,
+) -> bool {
+    if matches!(
+        name,
+        "write_file" | "search_replace" | "apply_patch" | "run_shell" | "memory_update"
+    ) {
+        return true;
+    }
+    if let Some(mcp) = mcp {
+        // Non-cacheable MCP tools are treated as mutators.
+        if mcp.has_tool(name) && !is_cacheable_tool(name, Some(mcp)) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Same threshold as the HARD STOP reminder in `compute_reminders`.
+pub(crate) const IDENTICAL_SUCCESS_LOOP_N: usize = 3;
+
+/// How many trailing successful tool results match `(name, normalized args)`.
+pub(crate) fn identical_success_streak(
+    messages: &[ChatMessage],
+    name: &str,
+    raw_args: &str,
+) -> usize {
+    let want_args = normalize_tool_args(raw_args);
+    let mut call_meta: std::collections::HashMap<&str, (String, String)> =
+        std::collections::HashMap::new();
+    for m in messages {
+        if m.role != "assistant" {
+            continue;
+        }
+        let Some(tcs) = m.tool_calls.as_ref() else {
+            continue;
+        };
+        for tc in tcs {
+            call_meta.insert(
+                tc.id.as_str(),
+                (
+                    tc.function.name.clone(),
+                    normalize_tool_args(&tc.function.arguments),
+                ),
+            );
+        }
+    }
+    let mut streak = 0usize;
+    for m in messages.iter().rev() {
+        if m.role != "tool" {
+            continue;
+        }
+        let Some(id) = m.tool_call_id.as_deref() else {
+            continue;
+        };
+        let Some((n, args)) = call_meta.get(id) else {
+            continue;
+        };
+        let content = m.content.as_deref().unwrap_or("");
+        if content.starts_with("Error: HARD STOP") {
+            // A hard-stop refusal is sticky for the same call, so the model
+            // cannot immediately resume the blocked identical-call loop.
+            if n == name && args.as_str() == want_args {
+                streak += 1;
+                continue;
+            }
+            break;
+        }
+        if content.starts_with("Error:") || content.starts_with("Tool error:") {
+            // Other failures break the identical-success streak.
+            break;
+        }
+        if n == name && args.as_str() == want_args {
+            streak += 1;
+        } else {
+            break;
+        }
+    }
+    streak
+}
+
+pub(crate) fn hard_stop_refuse_message(name: &str, n: usize) -> String {
+    format!(
+        "Error: HARD STOP — `{name}` already succeeded {n} times with the same arguments. Further identical calls are refused. Use the result you have, call ask_user if you need a decision, or finalize your answer now."
+    )
+}
+
+fn is_tool_error_text(s: &str) -> bool {
+    s.starts_with("Error:") || s.starts_with("Tool error:")
+}
+
+fn mutating_tool_succeeded(result: &Result<String, ToolError>) -> bool {
+    match result {
+        Ok(s) => !is_tool_error_text(s),
+        Err(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verification_passed_clean_exit() {
+        let output = "--- run_tests (cargo) exit=0 ---\ntest result: ok. 10 passed; 0 failed\n";
+        assert!(verification_passed(output));
+    }
+
+    #[test]
+    fn verification_passed_non_zero_exit() {
+        let output = "--- run_tests (cargo) exit=1 ---\ncompilation failed\n";
+        assert!(!verification_passed(output));
+    }
+
+    #[test]
+    fn verification_passed_killed_by_signal() {
+        let output = "Error: command killed by signal 31\nsome output\n";
+        assert!(!verification_passed(output));
+    }
+
+    #[test]
+    fn verification_passed_killed_by_signal_in_run_tests() {
+        let output = "--- run_tests (cargo) killed by signal 31 ---\n";
+        assert!(!verification_passed(output));
+    }
+
+    #[test]
+    fn verification_passed_timed_out() {
+        let output = "Error: test runner timed out\n";
+        assert!(!verification_passed(output));
+    }
+
+    #[test]
+    fn verification_passed_test_failures() {
+        let output = "--- run_tests (cargo) exit=0 ---\ntest result: FAILED. 5 passed; 2 failed\n";
+        assert!(!verification_passed(output));
+    }
+
+    #[test]
+    fn verification_passed_no_exit_line() {
+        let output = "No test runner detected\n";
+        assert!(!verification_passed(output));
+    }
+
+    #[test]
+    fn verification_passed_spilled_shell_keeps_exit_zero() {
+        let output = "exit=0\nFull output saved to .raven/tool-output/shell-1.log (20000 bytes, 400 lines).\nTail:\nok\n";
+        assert!(verification_passed(output));
+    }
+
+    #[test]
+    fn verification_passed_run_shell_exit_0() {
+        let output = "exit=0\nrunning tests...\nok\n";
+        assert!(verification_passed(output));
+    }
+
+    #[test]
+    fn verification_passed_run_shell_exit_nonzero() {
+        let output = "exit=2\ntests failed\n";
+        assert!(!verification_passed(output));
+    }
+
+    #[test]
+    fn verification_passed_run_shell_killed_by_signal() {
+        let output = "Error: command killed by signal 9\n";
+        assert!(!verification_passed(output));
+    }
+
+    #[test]
+    fn verification_passed_exit_10_is_not_exit_0() {
+        let output = "--- run_tests (cargo) exit=10 ---\n10 tests failed\n";
+        assert!(!verification_passed(output));
+        assert_eq!(parse_exit_code(output), Some(10));
+    }
+
+    #[test]
+    fn verification_passed_linker_signal_terminated_is_not_verified() {
+        // Regression: a piped `cargo test | tail` reports the pipeline's
+        // exit=0 while the payload shows the real linker death. The gate
+        // must fail closed on the payload markers.
+        let output = "exit=0\ncollect2: fatal error: ld terminated with signal 25 [File size limit exceeded]\nerror: could not compile `raven` (lib test) due to 1 previous error\n";
+        assert!(!verification_passed(output));
+    }
+
+    #[test]
+    fn verification_passed_linking_with_failure_is_not_verified() {
+        let output = "exit=0\nerror: linking with `cc` failed: exit status: 1\n";
+        assert!(!verification_passed(output));
+    }
+
+    #[test]
+    fn verification_passed_could_not_compile_is_not_verified() {
+        let output = "exit=0\nerror: could not compile `raven` due to 3 previous errors\n";
+        assert!(!verification_passed(output));
+    }
+
+    #[test]
+    fn parse_exit_code_reads_first_token() {
+        assert_eq!(parse_exit_code("exit=0\nok\n"), Some(0));
+        assert_eq!(parse_exit_code("exit=-1\n"), Some(-1));
+        assert_eq!(parse_exit_code("no status here"), None);
+    }
+
+    #[test]
+    fn mutating_tool_error_does_not_count_as_edit() {
+        assert!(!mutating_tool_succeeded(&Err(ToolError::Other(
+            "blocked".into()
+        ))));
+        assert!(!mutating_tool_succeeded(&Ok(
+            "Error: path escapes workspace".into()
+        )));
+        assert!(mutating_tool_succeeded(&Ok("wrote a.rs".into())));
+    }
+
+    #[test]
+    fn normalize_tool_args_sorts_object_keys() {
+        let a = normalize_tool_args(r#"{"b":1,"a":2}"#);
+        let b = normalize_tool_args(r#"{"a":2,"b":1}"#);
+        assert_eq!(a, b);
+        assert_eq!(a, r#"{"a":2,"b":1}"#);
+    }
+
+    #[test]
+    fn tool_cache_key_matches_for_equivalent_args() {
+        let k1 = tool_cache_key("read_file", r#"{"path":"a.rs","max_lines":10}"#);
+        let k2 = tool_cache_key("read_file", r#"{"max_lines":10,"path":"a.rs"}"#);
+        assert_eq!(k1, k2);
+        assert!(k1.starts_with("read_file:"));
+    }
+
+    #[test]
+    fn builtin_and_mcp_shaped_tools_are_cacheable() {
+        assert!(is_builtin_read_only("git_status"));
+        assert!(is_builtin_read_only("read_file"));
+        assert!(!is_builtin_read_only("write_file"));
+        assert!(is_mcp_verify_cacheable("ripwire__doc_drift"));
+        assert!(is_mcp_verify_cacheable("doc_drift"));
+        assert!(!is_mcp_verify_cacheable("ripwire__apply_patch"));
+        // Substring must not false-positive non-verify tools.
+        assert!(!is_mcp_verify_cacheable("update_doc_drift_notes"));
+        assert!(!is_mcp_verify_cacheable("doc_drift_writer"));
+        // Without an MCP handle, verify-style names still cache; plain MCP names do not.
+        assert!(is_cacheable_tool("ripwire__doc_drift", None));
+        assert!(!is_cacheable_tool("ripwire__mutate", None));
+        assert!(is_cacheable_tool("list_dir", None));
+    }
+
+    #[test]
+    fn should_invalidate_clears_on_shell_and_file_mutates() {
+        assert!(should_invalidate_tool_cache("run_shell", None));
+        assert!(should_invalidate_tool_cache("write_file", None));
+        assert!(should_invalidate_tool_cache("memory_update", None));
+        assert!(!should_invalidate_tool_cache("read_file", None));
+        assert!(!should_invalidate_tool_cache("git_status", None));
+        assert!(!should_invalidate_tool_cache("ripwire__doc_drift", None));
+    }
+
+    #[test]
+    fn stale_cache_clears_after_mutating_tool_result() {
+        use std::collections::HashMap;
+        let mut cache: HashMap<String, String> = HashMap::new();
+        let key = tool_cache_key("git_status", "{}");
+        cache.insert(key.clone(), "clean".into());
+        // Simulate record_tool_result invalidate path for run_shell.
+        if should_invalidate_tool_cache("run_shell", None) {
+            cache.clear();
+        }
+        assert!(!cache.contains_key(&key));
+    }
+
+    #[test]
+    fn identical_success_streak_counts_trailing_matches() {
+        use huginn_proto::{FunctionCall, ToolCall};
+        let mut msgs = Vec::new();
+        for i in 0..3 {
+            let id = format!("c{i}");
+            msgs.push(ChatMessage {
+                role: "assistant".into(),
+                content: Some("ok".into()),
+                tool_calls: Some(vec![ToolCall {
+                    id: id.clone(),
+                    type_: "function".into(),
+                    function: FunctionCall {
+                        name: "git_status".into(),
+                        arguments: "{}".into(),
+                    },
+                }]),
+                tool_call_id: None,
+                reasoning_content: None,
+                usage: None,
+            });
+            let mut m = ChatMessage::plain("tool", Some("clean".into()));
+            m.tool_call_id = Some(id);
+            msgs.push(m);
+        }
+        assert_eq!(identical_success_streak(&msgs, "git_status", "{}"), 3);
+        assert_eq!(
+            identical_success_streak(&msgs, "git_status", r#"{"x":1}"#),
+            0
+        );
+        assert!(identical_success_streak(&msgs, "git_status", "{}") >= IDENTICAL_SUCCESS_LOOP_N);
+        let refuse = hard_stop_refuse_message("git_status", 3);
+        assert!(refuse.starts_with("Error: HARD STOP"));
+        assert!(refuse.contains("refused"));
+    }
+
+    #[test]
+    fn hard_stop_refusal_stays_sticky_for_same_call() {
+        use huginn_proto::{FunctionCall, ToolCall};
+
+        let mut msgs = Vec::new();
+        for i in 0..3 {
+            let id = format!("success_{i}");
+            msgs.push(ChatMessage {
+                role: "assistant".into(),
+                content: None,
+                tool_calls: Some(vec![ToolCall {
+                    id: id.clone(),
+                    type_: "function".into(),
+                    function: FunctionCall {
+                        name: "git_status".into(),
+                        arguments: "{}".into(),
+                    },
+                }]),
+                tool_call_id: None,
+                reasoning_content: None,
+                usage: None,
+            });
+            let mut result = ChatMessage::plain("tool", Some("clean".into()));
+            result.tool_call_id = Some(id);
+            msgs.push(result);
+        }
+
+        let id = "refused";
+        msgs.push(ChatMessage {
+            role: "assistant".into(),
+            content: None,
+            tool_calls: Some(vec![ToolCall {
+                id: id.into(),
+                type_: "function".into(),
+                function: FunctionCall {
+                    name: "git_status".into(),
+                    arguments: "{}".into(),
+                },
+            }]),
+            tool_call_id: None,
+            reasoning_content: None,
+            usage: None,
+        });
+        let mut refusal = ChatMessage::plain(
+            "tool",
+            Some(hard_stop_refuse_message(
+                "git_status",
+                IDENTICAL_SUCCESS_LOOP_N,
+            )),
+        );
+        refusal.tool_call_id = Some(id.into());
+        msgs.push(refusal);
+
+        assert_eq!(identical_success_streak(&msgs, "git_status", "{}"), 4);
+    }
+
+    #[test]
+    fn tool_cache_hit_returns_prior_builtin_result() {
+        use std::collections::HashMap;
+        let mut cache: HashMap<String, String> = HashMap::new();
+        let key = tool_cache_key("git_status", "{}");
+        assert!(is_cacheable_tool("git_status", None));
+        cache.insert(key.clone(), "clean".into());
+        assert_eq!(cache.get(&key).map(String::as_str), Some("clean"));
+        // Equivalent empty-object args still hit.
+        let key2 = tool_cache_key("git_status", " {} ");
+        assert_eq!(cache.get(&key2).map(String::as_str), Some("clean"));
+    }
+
+    #[test]
+    fn tool_cache_hit_for_mcp_doc_drift_shape() {
+        use std::collections::HashMap;
+        let mut cache: HashMap<String, String> = HashMap::new();
+        let name = "ripwire__doc_drift";
+        let key = tool_cache_key(name, r#"{"path":"docs"}"#);
+        assert!(is_cacheable_tool(name, None));
+        cache.insert(key.clone(), "live drift=0".into());
+        let again = tool_cache_key(name, r#"{"path":"docs"}"#);
+        assert_eq!(cache.get(&again).map(String::as_str), Some("live drift=0"));
+    }
+}

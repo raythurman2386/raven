@@ -1,5 +1,5 @@
 //! Local skill discovery and loading.
 //!
-//! Re-exported from `raven-tools`.
+//! Re-exported from `huginn-tools`.
 
-pub use raven_tools::skills::*;
+pub use huginn_tools::skills::*;

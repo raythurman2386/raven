@@ -1,5 +1,5 @@
 //! Typed errors for the agent loop.
 //!
-//! Re-exported from `raven-proto`.
+//! Re-exported from `huginn-proto`.
 
-pub use raven_proto::{cap_http_body, AgentError, ToolError};
+pub use huginn_proto::{cap_http_body, AgentError, ToolError};

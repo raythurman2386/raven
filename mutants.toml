@@ -6,5 +6,5 @@
 # Main entry + TUI — argument parsing / UI glue, not mutation targets
 exclude_globs = [
     "src/main.rs",
-    "crates/raven-tui/**/*.rs",
+    "crates/huginn-tui/**/*.rs",
 ]

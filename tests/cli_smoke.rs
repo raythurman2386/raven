@@ -1,19 +1,19 @@
 //! End-to-end smoke tests for the `raven` CLI binary.
 //!
-//! These exercise the compiled binary (via `CARGO_BIN_EXE_raven`) as a black
+//! These exercise the compiled binary (via `CARGO_BIN_EXE_huginn`) as a black
 //! box — no `[lib]` target is required. They cover the offline surface that
 //! doesn't need a live Ollama: help/version output and session persistence.
 
 use std::process::Command;
 
-/// The compiled `raven` binary, provided by Cargo for integration tests.
-fn raven_bin() -> &'static str {
-    env!("CARGO_BIN_EXE_raven")
+/// The compiled `huginn` binary, provided by Cargo for integration tests.
+fn huginn_bin() -> &'static str {
+    env!("CARGO_BIN_EXE_huginn")
 }
 
 /// Run `raven` with the given args and return its stdout + stderr + status.
 fn run(args: &[&str]) -> (String, String, std::process::ExitStatus) {
-    let out = Command::new(raven_bin())
+    let out = Command::new(huginn_bin())
         .args(args)
         .output()
         .expect("failed to spawn raven");

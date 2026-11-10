@@ -15,16 +15,16 @@ use base64::Engine as _;
 use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
 
-/// The compiled `raven` binary, provided by Cargo for integration tests.
-fn raven_bin() -> &'static str {
-    env!("CARGO_BIN_EXE_raven")
+/// The compiled `huginn` binary, provided by Cargo for integration tests.
+fn huginn_bin() -> &'static str {
+    env!("CARGO_BIN_EXE_huginn")
 }
 
 /// Skip a test that binds a local `TcpListener` (AF_INET socket) when running
 /// under a restrictive outer sandbox that SIGSYS-kills sockets. Returns `true`
 /// when the test should skip.
 fn skip_if_outer_sandbox() -> bool {
-    if raven::testutil::outer_sandbox_restrictive() {
+    if huginn::testutil::outer_sandbox_restrictive() {
         eprintln!("outer sandbox blocks AF_INET sockets; skipping update integration test");
         true
     } else {
@@ -49,7 +49,7 @@ fn raven_backup_name() -> String {
 /// in a state where an immediate `execve` fails with `ETXTBSY` on Linux. The
 /// executable bit is set explicitly (a plain write creates a 0644 file).
 fn copy_binary(dst: &Path) {
-    let bytes = std::fs::read(raven_bin()).unwrap();
+    let bytes = std::fs::read(huginn_bin()).unwrap();
     std::fs::write(dst, bytes).unwrap();
     #[cfg(unix)]
     {
@@ -266,7 +266,7 @@ fn self_update_replaces_and_rolls_back() {
     assert!(backup.exists(), "a .old backup should be kept");
     assert_eq!(
         std::fs::read(&backup).unwrap(),
-        std::fs::read(raven_bin()).unwrap(),
+        std::fs::read(huginn_bin()).unwrap(),
         "backup should be the original binary"
     );
 
@@ -347,7 +347,7 @@ fn self_update_fails_closed_on_bad_signature() {
     );
     assert_eq!(
         std::fs::read(&target).unwrap(),
-        std::fs::read(raven_bin()).unwrap(),
+        std::fs::read(huginn_bin()).unwrap(),
         "fail-closed update must not modify the binary"
     );
 

@@ -1,0 +1,546 @@
+//! OpenAI-style function-calling tool definitions for the model.
+
+/// OpenAI-style function-calling tool definitions for the model.
+///
+/// Returns a JSON array of tool schemas consumed by the `/v1/chat/completions`
+/// `tools` field. The names here must match the arms in [`crate::dispatch`].
+pub fn tool_definitions() -> serde_json::Value {
+    serde_json::json!([
+        {
+            "type": "function",
+            "function": {
+                "name": "list_dir",
+                "description": "List files and directories relative to the workspace root.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "Relative path (default '.')" }
+                    },
+                    "required": []
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "description": "Read a file (optionally a line range). Always prefer reading before editing.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" },
+                        "start_line": { "type": "integer", "description": "1-based start" },
+                        "max_lines": { "type": "integer", "description": "Max lines (default 400)" }
+                    },
+                    "required": ["path"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "search_replace",
+                "description": "Edit a file by replacing an exact string. If old_string is empty, create a new file. Use replace_all to replace every occurrence; otherwise old_string must be unique.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" },
+                        "old_string": { "type": "string", "description": "Exact text to find (empty = create new file)" },
+                        "new_string": { "type": "string" },
+                        "replace_all": { "type": "boolean", "description": "Replace all occurrences (default false)" }
+                    },
+                    "required": ["path", "old_string", "new_string"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "write_file",
+                "description": "Write full content to a file (creates parent dirs). Prefer search_replace for edits to existing files.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" },
+                        "content": { "type": "string" }
+                    },
+                    "required": ["path", "content"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "grep",
+                "description": "Search file contents with a regex pattern. Returns matching lines with file:line: snippet.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "pattern": { "type": "string", "description": "Rust regex pattern" },
+                        "path": { "type": "string", "description": "Relative directory to search (default workspace root)" },
+                        "include": { "type": "string", "description": "Glob filter for file names, e.g. '*.rs'" },
+                        "max_results": { "type": "integer" }
+                    },
+                    "required": ["pattern"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "run_shell",
+                "description": "Run a shell command inside the workspace sandbox. Prefer dedicated tools (read_file, grep, list_dir) over cat/grep/find.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": { "type": "string" },
+                        "timeout": { "type": "integer", "description": "Seconds (default 60)" }
+                    },
+                    "required": ["command"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "search_code",
+                "description": "Search source files for a literal text query (case-insensitive). Prefer grep for regex.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" },
+                        "max_results": { "type": "integer" }
+                    },
+                    "required": ["query"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "todo_write",
+                "description": "Create or replace a structured task list. Use for any task with 3+ steps. Send the complete list each call (full-replace).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "todos": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "content": { "type": "string" },
+                                    "status": { "type": "string", "enum": ["pending", "in_progress", "completed"] },
+                                    "priority": { "type": "string", "enum": ["low", "medium", "high"] }
+                                },
+                                "required": ["content", "status"]
+                            }
+                        }
+                    },
+                    "required": ["todos"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "think",
+                "description": "Record a short reasoning step. Does not read files or change the workspace. Use for long chains of tool calls, sequential decisions, or when a mistake would be costly.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "thought": { "type": "string", "description": "The thought to record" }
+                    },
+                    "required": ["thought"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "delegate_task",
+                "description": "Spawn a focused sub-agent on a self-contained sub-task in a fresh context window and return a short summary. The child shares this workspace (no worktree isolation), cannot nest another delegate_task, and cannot change the parent goal or todo list. Use for exploration or isolated work.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "description": { "type": "string", "description": "A self-contained, unambiguous task for the sub-agent" }
+                    },
+                    "required": ["description"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "goal_set",
+                "description": "Set or update the current goal for this task. Persists across turns and sessions. Use at the start of a multi-step task and whenever the objective changes.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "description": { "type": "string", "description": "The goal, stated concisely" },
+                        "status": { "type": "string", "enum": ["pending", "in_progress", "completed"], "description": "Goal status (default in_progress)" }
+                    },
+                    "required": ["description"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "memory_update",
+                "description": "Save a durable project fact to memory (persists across sessions). Use for conventions, decisions, or context — not ephemeral task progress.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "section": { "type": "string", "enum": ["Conventions", "Decisions", "Context"], "description": "Memory section to append to" },
+                        "content": { "type": "string", "description": "Content to append (one fact per call)" }
+                    },
+                    "required": ["section", "content"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "git_status",
+                "description": "Show working tree status (git status --porcelain). Read-only.",
+                "parameters": { "type": "object", "properties": {} }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "git_diff",
+                "description": "Show unstaged changes (git diff). Set staged=true for staged changes. Read-only.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "staged": { "type": "boolean", "description": "Show staged changes instead of unstaged (default false)" }
+                    }
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "git_log",
+                "description": "Show recent commit history (git log --oneline). Read-only.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "n": { "type": "integer", "description": "Number of commits to show (default 10)" }
+                    }
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "apply_patch",
+                "description": "Apply a unified diff patch to files. Supports multiple hunks and files. Rejects if context doesn't match.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "patch": { "type": "string", "description": "Unified diff format patch text" }
+                    },
+                    "required": ["patch"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "run_tests",
+                "description": "Auto-detect and run the project's test suite (cargo test, npm test, or pytest). Returns output with exit code.",
+                "parameters": { "type": "object", "properties": {} }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "ask_user",
+                "description": "Ask the user a question and wait for their typed answer. Use when you need a decision, clarification, or confirmation you cannot resolve from the workspace. Keep the question concise and specific.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "question": { "type": "string", "description": "The question to ask the user" }
+                    },
+                    "required": ["question"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "description": "Search the web and return a ranked list of result titles and URLs (10 per page). Uses a self-hosted SearXNG instance when RAVEN_SEARXNG_URL is set, otherwise DuckDuckGo. No API key required. Use for current, factual, or unfamiliar topics. Use the page parameter to fetch subsequent pages. If the backend rate-limits you with a challenge error, wait a minute before retrying.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "The search query" },
+                        "page": { "type": "integer", "description": "Page number (1-indexed, default 1). Each page returns up to 10 results." }
+                    },
+                    "required": ["query"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "web_fetch",
+                "description": "Fetch an http(s) URL and return its readable text (HTML stripped, entities decoded). Use to read a page found via web_search or a known URL. Only http/https and HTML/text content types are allowed; binary URLs error out.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": { "type": "string", "description": "Absolute http(s) URL to fetch" }
+                    },
+                    "required": ["url"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "skill_search",
+                "description": "List skills whose name or description matches a query, or all skills when the query is empty. Skills are SKILL.md files in .raven/skills/ or ~/.raven/skills/.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "Keyword to match against skill names/descriptions (empty lists all)" }
+                    },
+                    "required": ["query"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "skill_load",
+                "description": "Load a skill's instructions into context as a <skill> envelope. Call skill_search first to find the exact name.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string", "description": "Exact skill name to load" }
+                    },
+                    "required": ["name"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "memory_search",
+                "description": "Search project memory (.raven/MEMORY.md) for lines matching a query. Use to recall past decisions, conventions, or context stored in memory.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "Keywords to search for in memory" }
+                    },
+                    "required": ["query"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "run_lint",
+                "description": "Auto-detect and run the project's linter or type checker (cargo clippy for Rust, tsc for TypeScript, eslint for JS, compileall for Python). Reports problems without fixing them. Run after editing to catch issues.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {}
+                }
+            }
+        }
+    ])
+}
+
+/// The read-only tool subset exposed during plan mode.
+///
+/// These let the model gather context (list/read/search/git-inspect) to
+/// produce a good plan, but exclude every tool that writes to the workspace
+/// or runs shell. Kept in sync with the full [`tool_definitions`] list.
+pub fn plan_tool_definitions() -> serde_json::Value {
+    const PLAN_TOOLS: &[&str] = &[
+        "list_dir",
+        "read_file",
+        "grep",
+        "search_code",
+        "git_status",
+        "git_diff",
+        "git_log",
+        "web_search",
+        "web_fetch",
+        "skill_search",
+        "skill_load",
+        "memory_search",
+        "think",
+    ];
+
+    let all = tool_definitions();
+    let arr = all.as_array().cloned().unwrap_or_default();
+    let filtered: Vec<serde_json::Value> = arr
+        .into_iter()
+        .filter(|tool| {
+            tool.get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+                .map(|name| PLAN_TOOLS.contains(&name))
+                .unwrap_or(false)
+        })
+        .collect();
+    serde_json::Value::Array(filtered)
+}
+
+/// Read-only toolset for Chat mode: all plan tools plus `ask_user` so the
+/// model can ask clarifying questions. Excludes all write/shell tools.
+pub fn chat_tool_definitions() -> serde_json::Value {
+    const CHAT_TOOLS: &[&str] = &[
+        "list_dir",
+        "read_file",
+        "grep",
+        "search_code",
+        "git_status",
+        "git_diff",
+        "git_log",
+        "web_search",
+        "web_fetch",
+        "skill_search",
+        "skill_load",
+        "memory_search",
+        "ask_user",
+        "think",
+    ];
+
+    let all = tool_definitions();
+    let arr = all.as_array().cloned().unwrap_or_default();
+    let filtered: Vec<serde_json::Value> = arr
+        .into_iter()
+        .filter(|tool| {
+            tool.get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+                .map(|name| CHAT_TOOLS.contains(&name))
+                .unwrap_or(false)
+        })
+        .collect();
+    serde_json::Value::Array(filtered)
+}
+
+/// Tools kept in the static list when `tool_offload` is on.
+const CORE_TOOLS: &[&str] = &[
+    "list_dir",
+    "read_file",
+    "search_replace",
+    "write_file",
+    "grep",
+    "run_shell",
+    "think",
+    "todo_write",
+    "goal_set",
+    "delegate_task",
+    "git_status",
+    "git_diff",
+    "git_log",
+    "run_tests",
+    "ask_user",
+    "apply_patch",
+];
+
+/// Tools whose full schema is loaded through `tool_schema` when offload is on.
+const OFFLOADED_TOOLS: &[&str] = &[
+    "search_code",
+    "web_search",
+    "web_fetch",
+    "skill_search",
+    "skill_load",
+    "memory_search",
+    "memory_update",
+    "run_lint",
+];
+
+fn tool_name_of(tool: &serde_json::Value) -> Option<&str> {
+    tool.get("function")
+        .and_then(|f| f.get("name"))
+        .and_then(|n| n.as_str())
+}
+
+fn tool_schema_definition() -> serde_json::Value {
+    serde_json::json!({
+        "type": "function",
+        "function": {
+            "name": "tool_schema",
+            "description": "Return the argument schema for a tool that is not in the static tool list. Pass an empty name to list those tools.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Tool name, or empty to list offloaded tools" }
+                },
+                "required": ["name"]
+            }
+        }
+    })
+}
+
+/// Static tool list for `efficiency.tool_offload`: core tools plus `tool_schema`.
+pub fn offloaded_tool_definitions(plan_only: bool, mode: huginn_config::Mode) -> serde_json::Value {
+    let base = if plan_only {
+        match mode {
+            huginn_config::Mode::Chat => chat_tool_definitions(),
+            _ => plan_tool_definitions(),
+        }
+    } else {
+        tool_definitions()
+    };
+    let mut arr: Vec<serde_json::Value> = base
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|tool| tool_name_of(tool).is_some_and(|name| CORE_TOOLS.contains(&name)))
+        .collect();
+    arr.push(tool_schema_definition());
+    serde_json::Value::Array(arr)
+}
+
+/// One line per offloaded tool, for the setup message.
+pub fn offloaded_tool_catalog() -> String {
+    let all = tool_definitions();
+    let Some(arr) = all.as_array() else {
+        return String::new();
+    };
+    let mut lines = Vec::new();
+    for tool in arr {
+        let Some(name) = tool_name_of(tool) else {
+            continue;
+        };
+        if !OFFLOADED_TOOLS.contains(&name) {
+            continue;
+        }
+        let desc = tool
+            .get("function")
+            .and_then(|f| f.get("description"))
+            .and_then(|d| d.as_str())
+            .unwrap_or("");
+        let sentence = desc.split('.').next().unwrap_or(desc);
+        lines.push(format!(
+            "- {name}: {sentence}. Call tool_schema before using it."
+        ));
+    }
+    lines.join("\n")
+}
+
+/// Full schema for one tool, or the offloaded catalog when `name` is empty.
+pub fn tool_schema_text(name: &str) -> String {
+    if name.trim().is_empty() {
+        return offloaded_tool_catalog();
+    }
+    let all = tool_definitions();
+    let Some(arr) = all.as_array() else {
+        return format!("Unknown tool: {name}");
+    };
+    for tool in arr {
+        if tool_name_of(tool) == Some(name) {
+            return tool.to_string();
+        }
+    }
+    format!("Unknown tool: {name}")
+}

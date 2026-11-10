@@ -1,5 +1,5 @@
 //! Streaming agent loop, compaction, and parallel sub-agents.
 //!
-//! Re-exported from `raven-agent`.
+//! Re-exported from `huginn-agent`.
 
-pub use raven_agent::*;
+pub use huginn_agent::*;

@@ -1,0 +1,32 @@
+//! Unit tests for the workspace-scoped tools and sandbox, split by subsystem.
+//!
+//! The tests were originally one ~2,170-line block in `tools/mod.rs`; they are
+//! now grouped by the subsystem they exercise:
+//!
+//! - [`sandbox_fs`] — path resolution, file I/O, `search_replace`, `grep`, globs
+//! - [`sandbox_shell`] — `run_shell`, OS confinement, command allow/deny lists
+//! - [`git`] — status/diff/log, worktrees, patch-apply merge
+//! - [`dispatch`] — tool dispatch and the plan/chat/full toolsets
+//! - [`patch`] — unified-diff parsing and `apply_patch`
+//! - [`verify`] — `run_tests`/`run_lint` and the verification-gate matcher
+
+use crate::Sandbox;
+
+mod dispatch;
+mod git;
+mod patch;
+mod sandbox_fs;
+mod sandbox_shell;
+mod verify;
+
+/// A fresh `Sandbox` rooted at a throwaway temp dir.
+fn sandbox() -> Sandbox {
+    let tmp = tempfile::tempdir().unwrap();
+    Sandbox::new(tmp.path().canonicalize().unwrap())
+}
+
+/// Whether the test process is running under a restrictive outer sandbox that
+/// pre-empts the inner sandbox's exemptions. See `huginn_testutil`.
+/// Only used by Linux-gated tests (the sandbox confinement is Linux-only).
+#[cfg(target_os = "linux")]
+pub(crate) use huginn_testutil::outer_sandbox_restrictive;

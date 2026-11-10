@@ -1,5 +1,5 @@
 //! Configuration: `Settings`, environment defaults, named providers, and Grok auth.
 //!
-//! Re-exported from `raven-config`.
+//! Re-exported from `huginn-config`.
 
-pub use raven_config::*;
+pub use huginn_config::*;

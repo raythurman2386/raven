@@ -1,6 +1,6 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use raven::agent::ChatMessage;
-use raven::context::compact_if_needed_llm;
+use huginn::agent::ChatMessage;
+use huginn::context::compact_if_needed_llm;
 
 fn build_history(n: usize, tool_heavy: bool) -> Vec<ChatMessage> {
     let mut msgs = Vec::new();
@@ -25,10 +25,10 @@ fn build_history(n: usize, tool_heavy: bool) -> Vec<ChatMessage> {
             msgs.push(ChatMessage {
                 role: "assistant".into(),
                 content: None,
-                tool_calls: Some(vec![raven::agent::ToolCall {
+                tool_calls: Some(vec![huginn::agent::ToolCall {
                     id: format!("call_{i}"),
                     type_: "function".into(),
-                    function: raven::agent::FunctionCall {
+                    function: huginn::agent::FunctionCall {
                         name: "read_file".into(),
                         arguments: r#"{"path":"src/auth.rs"}"#.into(),
                     },

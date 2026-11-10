@@ -1,5 +1,5 @@
 //! Agent plugin manifests and their stdio MCP specs.
 //!
-//! Re-exported from `raven-tools`.
+//! Re-exported from `huginn-tools`.
 
-pub use raven_tools::plugins::*;
+pub use huginn_tools::plugins::*;
