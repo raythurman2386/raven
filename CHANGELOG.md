@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to Raven are documented here. Format follows
+All notable changes to Huginn (formerly Raven) are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
@@ -11,6 +11,38 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 ### Fixed
+
+## [0.7.0] - 2026-11-10
+
+**Raven is now Huginn.** This is a clean rename with no compatibility layer: no `raven` alias or shim, no `RAVEN_*` fallback, no automatic move of `~/.raven`, and no deprecation period. `raven`, `RAVEN_*`, and `.raven` are not read. `raven self update` from 0.6.x cannot reach this release; install fresh with the install script. Release signatures use the same Ed25519 key as before.
+
+### Changed (breaking)
+
+- Binary and crates: the binary is `huginn` (`cargo install --path .` installs `huginn`). The workspace crates are `huginn`, `huginn-proto`, `huginn-tokenizer`, `huginn-config`, `huginn-persist`, `huginn-sandbox`, `huginn-tools`, `huginn-agent`, `huginn-tui`, `huginn-acp`, and `huginn-testutil`, with Rust paths `huginn::*` and `huginn_*`. All crates stay `publish = false`.
+- Environment variables use the `HUGINN_` prefix, for example `HUGINN_API_KEY`, `HUGINN_PROVIDER`, `HUGINN_GROK_AUTH`, `HUGINN_RELEASE_BASE_URL`, and `HUGINN_SIGNING_PUBLIC_KEY`. The onboarding writer saves `HUGINN_API_KEY`. The release signing scripts read `HUGINN_SIGNING_DIR` and `HUGINN_SIGNING_KEY`, and their default directory is `~/.huginn/signing`. The eval harness reads `HUGINN_BIN`, `HUGINN_MODEL`, `HUGINN_HOST`, and `HUGINN_API_KEY`.
+- State directories: global state lives in `~/.huginn` (config, `.env`, memory, sessions, system scope, skills, plugins) and workspace state lives in `{workspace}/.huginn`. The session format and `SESSION_FORMAT_VERSION` are unchanged, so moved session folders load as-is.
+- The log file is `~/.huginn/huginn.log`.
+- Protocol identifiers:
+  - ACP `agentInfo` is `huginn` / `Huginn`.
+  - The self-update user agent is `huginn-self-update`, and the web tool user agent is `huginn/<version>`.
+  - OpenRouter gets `X-Title: Huginn`.
+  - The Grok chat proxy gets `x-grok-client-identifier: huginn`.
+  - Prompt tags are `<huginn_reminder>`, `<huginn_setup>`, and `<huginn_context>`.
+  - Subagent branches are `huginn-sub-*`, and the git author is `huginn@local`.
+  - The session export header is `# Huginn session`.
+- Release artifacts are `huginn-{version}-{triple}` and `huginn-{version}-{triple}.tar.gz`, with `huginn` inside the archive, listed in `checksums.txt`. The pinned public key file is `huginn-signing-key.pub`. It has the same bytes as the old `raven-signing-key.pub`, so signatures on earlier releases still verify.
+- Repository: `raythurman2386/huginn`. The installer, self-update, signing scripts, user agent, and docs point there.
+- Docs, README, the agent skill (`.agents/skills/huginn`), the issue templates, and the eval harness use the Huginn name. The brand mark is `assets/huginn.svg`. `ravenwood` theme references are unchanged.
+
+### Migration
+
+There is no automatic migration. On a machine that ran raven, do this once after installing 0.7.0:
+
+1. Back up `~/.raven`, including `signing/` if it is there.
+2. Install with `curl -fsSL https://raw.githubusercontent.com/raythurman2386/huginn/master/install.sh | sh`, then remove the old `raven` binary (`cargo uninstall raven`, or delete `~/.cargo/bin/raven` and `raven.old`).
+3. Move `~/.raven` to `~/.huginn`. Rename `raven.log` to `huginn.log` and rename the variables in `~/.huginn/.env` from `RAVEN_*` to `HUGINN_*` by hand.
+4. Move each workspace's `.raven` to `.huginn` and add `.huginn/` to that repo's `.gitignore`.
+5. Update editor and desktop integrations that launch `raven`, such as a Zed `agent_servers` entry (`"command": "huginn"`) and Omarchy agent wrappers.
 
 ## [0.6.11] - 2026-11-09
 

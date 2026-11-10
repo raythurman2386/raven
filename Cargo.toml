@@ -4,7 +4,7 @@ members = [".", "crates/huginn-proto", "crates/huginn-tokenizer", "crates/huginn
 default-members = [".", "crates/huginn-proto", "crates/huginn-tokenizer", "crates/huginn-config", "crates/huginn-persist", "crates/huginn-sandbox", "crates/huginn-tools", "crates/huginn-agent", "crates/huginn-tui", "crates/huginn-acp", "crates/huginn-testutil"]
 
 [workspace.package]
-version = "0.6.11"
+version = "0.7.0"
 edition = "2021"
 license = "MIT"
 rust-version = "1.88"
@@ -42,16 +42,16 @@ landlock = "0.4.7"
 seccompiler = "0.5.0"
 criterion = "0.8"
 zip = "9.5"
-huginn-proto = { path = "crates/huginn-proto", version = "0.6.11" }
-huginn-tokenizer = { path = "crates/huginn-tokenizer", version = "0.6.11" }
-huginn-config = { path = "crates/huginn-config", version = "0.6.11" }
-huginn-persist = { path = "crates/huginn-persist", version = "0.6.11" }
-huginn-sandbox = { path = "crates/huginn-sandbox", version = "0.6.11" }
-huginn-tools = { path = "crates/huginn-tools", version = "0.6.11" }
-huginn-agent = { path = "crates/huginn-agent", version = "0.6.11" }
-huginn-tui = { path = "crates/huginn-tui", version = "0.6.11" }
-huginn-acp = { path = "crates/huginn-acp", version = "0.6.11" }
-huginn-testutil = { path = "crates/huginn-testutil", version = "0.6.11" }
+huginn-proto = { path = "crates/huginn-proto", version = "0.7.0" }
+huginn-tokenizer = { path = "crates/huginn-tokenizer", version = "0.7.0" }
+huginn-config = { path = "crates/huginn-config", version = "0.7.0" }
+huginn-persist = { path = "crates/huginn-persist", version = "0.7.0" }
+huginn-sandbox = { path = "crates/huginn-sandbox", version = "0.7.0" }
+huginn-tools = { path = "crates/huginn-tools", version = "0.7.0" }
+huginn-agent = { path = "crates/huginn-agent", version = "0.7.0" }
+huginn-tui = { path = "crates/huginn-tui", version = "0.7.0" }
+huginn-acp = { path = "crates/huginn-acp", version = "0.7.0" }
+huginn-testutil = { path = "crates/huginn-testutil", version = "0.7.0" }
 
 [package]
 name = "huginn"
