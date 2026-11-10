@@ -19,7 +19,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed (breaking)
 
 - Binary and crates: the binary is `huginn` (`cargo install --path .` installs `huginn`). The workspace crates are `huginn`, `huginn-proto`, `huginn-tokenizer`, `huginn-config`, `huginn-persist`, `huginn-sandbox`, `huginn-tools`, `huginn-agent`, `huginn-tui`, `huginn-acp`, and `huginn-testutil`, with Rust paths `huginn::*` and `huginn_*`. All crates stay `publish = false`.
-- Environment variables use the `HUGINN_` prefix, for example `HUGINN_API_KEY`, `HUGINN_PROVIDER`, `HUGINN_GROK_AUTH`, `HUGINN_RELEASE_BASE_URL`, and `HUGINN_SIGNING_PUBLIC_KEY`. The onboarding writer saves `HUGINN_API_KEY`. The release signing scripts read `HUGINN_SIGNING_DIR` and `HUGINN_SIGNING_KEY`, and their default directory is `~/.huginn/signing`. The eval harness reads `HUGINN_BIN`, `HUGINN_MODEL`, `HUGINN_HOST`, and `HUGINN_API_KEY`.
+- Environment variables use the `HUGINN_` prefix, for example `HUGINN_API_KEY`, `HUGINN_PROVIDER`, `HUGINN_GROK_AUTH`, `HUGINN_RELEASE_BASE_URL`, and `HUGINN_SIGNING_PUBLIC_KEY`. The onboarding writer saves `HUGINN_API_KEY`. Release signing: `scripts/sign-releases.sh` reads `HUGINN_SIGNING_DIR` and `HUGINN_SIGNING_KEY`, and `scripts/upload-release-sigs.sh` reads `HUGINN_SIGNING_DIR`; both default to `~/.huginn/signing`. `scripts/gen-signing-key.sh` reads no env var and takes an optional output-dir argument (default `~/.huginn/signing`). The eval harness reads `HUGINN_BIN`, `HUGINN_MODEL`, `HUGINN_HOST`, and `HUGINN_API_KEY`.
 - State directories: global state lives in `~/.huginn` (config, `.env`, memory, sessions, system scope, skills, plugins) and workspace state lives in `{workspace}/.huginn`. The session format and `SESSION_FORMAT_VERSION` are unchanged, so moved session folders load as-is.
 - The log file is `~/.huginn/huginn.log`.
 - Protocol identifiers:
@@ -36,13 +36,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Migration
 
-There is no automatic migration. On a machine that ran raven, do this once after installing 0.7.0:
+There is no automatic migration. On a machine that ran raven, do this once:
 
 1. Back up `~/.raven`, including `signing/` if it is there.
-2. Install with `curl -fsSL https://raw.githubusercontent.com/raythurman2386/huginn/master/install.sh | sh`, then remove the old `raven` binary (`cargo uninstall raven`, or delete `~/.cargo/bin/raven` and `raven.old`).
-3. Move `~/.raven` to `~/.huginn`. Rename `raven.log` to `huginn.log` and rename the variables in `~/.huginn/.env` from `RAVEN_*` to `HUGINN_*` by hand.
-4. Move each workspace's `.raven` to `.huginn` and add `.huginn/` to that repo's `.gitignore`.
-5. Update editor and desktop integrations that launch `raven`, such as a Zed `agent_servers` entry (`"command": "huginn"`) and Omarchy agent wrappers.
+2. Reinstall with the install script: `curl -fsSL https://raw.githubusercontent.com/raythurman2386/huginn/master/install.sh | sh`. `raven self update` in 0.6.x cannot reach 0.7.0, because it looks for `raven-*` artifacts.
+3. Delete the old `raven` binary: `cargo uninstall raven`, or remove `~/.cargo/bin/raven` and `~/.cargo/bin/raven.old`.
+4. Move `~/.raven` to `~/.huginn`, and rename `~/.huginn/raven.log` to `huginn.log` (or delete it).
+5. Rename each project's `.raven` folder to `.huginn`, and add `.huginn/` to that repo's `.gitignore`.
+6. Rename `RAVEN_*` environment variables to `HUGINN_*` everywhere they are set, including `~/.huginn/.env`, project `.env` files, and shell profiles.
+7. Use the new repository URL, `https://github.com/raythurman2386/huginn`. The old `raythurman2386/raven` URLs redirect, but you can point existing clones at it with `git remote set-url origin git@github.com:raythurman2386/huginn.git`.
+8. Update editor and desktop integrations that launch `raven`, such as a Zed `agent_servers` entry (`"command": "huginn"`) and Omarchy agent wrappers.
 
 ## [0.6.11] - 2026-11-09
 
