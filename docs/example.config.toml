@@ -85,6 +85,8 @@
 # Supported keys per provider:
 #   base_url      — OpenAI-compatible /v1 endpoint (required).
 #   default_model — model used when no --model / /model override is set.
+#   models        — optional ids for /model and the ACP picker. When set, this
+#                   list replaces the live /models catalog for that provider.
 #   api_key       — literal key in the file. Prefer api_key_env so the secret
 #                   stays out of the file.
 #   api_key_env   — NAME of the env var holding this provider's key. Only the
@@ -103,6 +105,7 @@ default_model = "glm-5.3-flash:cloud"
 # Built-in default: https://openrouter.ai/api/v1
 base_url = "https://openrouter.ai/api/v1"
 default_model = "x-ai/grok-4.5"
+# models = ["x-ai/grok-4.7", "x-ai/grok-4.6", "x-ai/grok-4.5"]
 # api_key_env = "OPENROUTER_API_KEY"
 
 [providers.opencode-go]
@@ -125,6 +128,7 @@ default_model = "deepseek-v4-flash"
 # HUGINN_GROK_CLIENT_VERSION if the proxy raises that floor before Huginn does.
 base_url = "https://cli-chat-proxy.grok.com/v1"
 default_model = "grok-4.7"
+# models = ["grok-4.7", "grok-4.7-build-fast", "grok-4.6", "grok-4.5"]
 
 # --- Adding a brand-new provider (example: Groq) ----------------------------
 # The endpoint MUST speak OpenAI-compatible /v1/chat/completions. Native APIs

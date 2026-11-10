@@ -34,7 +34,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Padding, Paragraph},
+    widgets::{Block, Borders, Clear, Padding, Paragraph},
     Frame, Terminal,
 };
 use std::collections::HashMap;
@@ -55,6 +55,7 @@ pub mod commands;
 mod completion;
 mod dispatch;
 mod markdown;
+mod picker;
 mod render;
 mod selection;
 mod status;
@@ -125,7 +126,6 @@ pub fn completion_arg_candidates(
             .collect(),
         "provider" => huginn_config::known_provider_names(config_file),
         "model" => {
-            let live_names = provider_model_candidates(&settings.provider);
             let mut preferred = Vec::new();
             let mut seen = std::collections::BTreeSet::new();
             let mut push_unique = |value: &str| {
@@ -145,7 +145,16 @@ pub fn completion_arg_candidates(
                     push_unique(model);
                 }
             }
-            for name in live_names {
+            // A configured list is the whole catalog for this provider.
+            if let Some(curated) =
+                huginn_config::curated_models(config_file, &settings.provider.name)
+            {
+                for name in curated {
+                    push_unique(&name);
+                }
+                return preferred;
+            }
+            for name in provider_model_candidates(&settings.provider) {
                 push_unique(&name);
             }
             // Provider-aware curated fallback (e.g. opencode-go models) so
@@ -161,8 +170,9 @@ pub fn completion_arg_candidates(
                 "deepseek-v4-pro:cloud",
                 "glm-5.3:cloud",
                 "glm-5.3-flash:cloud",
-                "x-ai/grok-4.5",
+                "x-ai/grok-4.7",
                 "x-ai/grok-4.6",
+                "x-ai/grok-4.5",
             ] {
                 push_unique(candidate);
             }
@@ -205,6 +215,9 @@ struct TuiState {
     cursor: usize,
     /// Active slash-command autocomplete, if any.
     completion: Option<Completion>,
+    /// Model picker modal. While set, keystrokes edit the filter instead of
+    /// the task input, and slash-command completion stays closed.
+    model_picker: Option<picker::ModelPicker>,
     status: String,
     /// Configured per-turn iteration budget, shown next to the live
     /// iteration count so the user can see the turn approaching its cap.
@@ -315,6 +328,7 @@ impl TuiState {
             input: String::new(),
             cursor: 0,
             completion: None,
+            model_picker: None,
             status: "ready".to_string(),
             iterations_max: settings.max_iterations,
             plan_pending: false,
@@ -421,11 +435,47 @@ impl TuiState {
         self.input_dirty = true;
     }
 
+    /// A permission, question, or plan prompt owns Enter and Esc.
+    fn prompt_blocks_picker(&self) -> bool {
+        self.pending_permission.is_some() || self.pending_question.is_some() || self.plan_pending
+    }
+
+    /// Open the model picker on `provider` / `model` and close completion.
+    ///
+    /// Returns false when a prompt already owns the keys, leaving the picker closed.
+    fn open_model_picker(
+        &mut self,
+        cfg: &huginn_config::ConfigFile,
+        provider: &str,
+        model: &str,
+    ) -> bool {
+        if self.prompt_blocks_picker() {
+            return false;
+        }
+        self.model_picker = Some(picker::catalog(cfg, provider, model));
+        self.completion = None;
+        self.input_dirty = true;
+        true
+    }
+
+    fn close_model_picker(&mut self) {
+        if self.model_picker.take().is_some() {
+            self.input_dirty = true;
+        }
+    }
+
     /// Recompute the completion popup for the current input, honoring a
     /// prior Esc dismissal: once dismissed at N chars, the popup stays closed
     /// while the input is at or past N chars and only reopens after the user
     /// deletes back below the dismissal point.
+    ///
+    /// An open model picker suppresses completion so the two popups never
+    /// share the key loop.
     fn recompute_completion(&mut self, arg_candidates: &dyn Fn(&str) -> Vec<String>) {
+        if self.model_picker.is_some() {
+            self.completion = None;
+            return;
+        }
         let len = self.input.chars().count();
         let dismissed = matches!(self.completion_dismissed_at, Some(at) if len >= at);
         if dismissed {
@@ -674,6 +724,79 @@ pub async fn run_tui(
                     Event::Key(key)
                         if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat =>
                     {
+                        let ctrl_c = matches!(key.code, KeyCode::Char('c'))
+                            && key.modifiers.contains(KeyModifiers::CONTROL);
+                        // A prompt that arrived while the picker was open owns
+                        // the next key. Drop the picker and fall through.
+                        if state.model_picker.is_some() && state.prompt_blocks_picker() {
+                            state.close_model_picker();
+                        }
+                        if state.model_picker.is_some() && !ctrl_c {
+                            let mut closed = false;
+                            match key.code {
+                                KeyCode::Esc => {
+                                    state.model_picker = None;
+                                    state.input_dirty = true;
+                                    closed = true;
+                                }
+                                KeyCode::Enter => {
+                                    dispatch::confirm_model_picker(
+                                        &mut state,
+                                        &mut settings,
+                                        &store,
+                                        &mut session,
+                                        &mut compact_at,
+                                        &config_file,
+                                    )
+                                    .await;
+                                    closed = true;
+                                }
+                                KeyCode::Up => {
+                                    if let Some(picker) = state.model_picker.as_mut() {
+                                        picker.move_up();
+                                    }
+                                    state.input_dirty = true;
+                                }
+                                KeyCode::Down => {
+                                    if let Some(picker) = state.model_picker.as_mut() {
+                                        picker.move_down();
+                                    }
+                                    state.input_dirty = true;
+                                }
+                                // Ctrl+N stays the new-session shortcut, so it
+                                // is not a picker binding. Ctrl+M is Enter.
+                                KeyCode::Char('p' | 'P')
+                                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                                {
+                                    if let Some(picker) = state.model_picker.as_mut() {
+                                        picker.move_up();
+                                    }
+                                    state.input_dirty = true;
+                                }
+                                KeyCode::Backspace => {
+                                    if let Some(picker) = state.model_picker.as_mut() {
+                                        picker.backspace();
+                                    }
+                                    state.input_dirty = true;
+                                }
+                                KeyCode::Char(c)
+                                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                                        && !key.modifiers.contains(KeyModifiers::ALT)
+                                        && !c.is_control() =>
+                                {
+                                    if let Some(picker) = state.model_picker.as_mut() {
+                                        picker.push_char(c);
+                                    }
+                                    state.input_dirty = true;
+                                }
+                                _ => {}
+                            }
+                            if closed {
+                                state.recompute_completion(&arg_candidates);
+                            }
+                            continue;
+                        }
                         match key.code {
                             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                 // Grok Build-style Ctrl+C: while a turn runs,
@@ -841,6 +964,19 @@ pub async fn run_tui(
                                     state.cursor = state.input.len();
                                     state.input_dirty = true;
                                 }
+                            }
+                            KeyCode::Char('m' | 'M')
+                                if key.modifiers.contains(KeyModifiers::ALT)
+                                    && !key.modifiers.contains(KeyModifiers::CONTROL)
+                                    && state.pending_permission.is_none()
+                                    && state.pending_question.is_none()
+                                    && !state.plan_pending =>
+                            {
+                                state.open_model_picker(
+                                    &config_file,
+                                    &settings.provider.name,
+                                    &settings.model,
+                                );
                             }
                             KeyCode::Tab => {
                                 if state.pending_question.is_none() {
@@ -1104,7 +1240,17 @@ pub async fn run_tui(
                         // and any newline in the pasted text is treated as Enter.
                         // Allowed while running too: the text becomes a queued
                         // steer on Enter, same as typed input.
-                        if state.pending_question.is_none() {
+                        if state.model_picker.is_some() && state.prompt_blocks_picker() {
+                            state.close_model_picker();
+                        }
+                        if state.model_picker.is_some() {
+                            if let Some(picker) = state.model_picker.as_mut() {
+                                for c in text.chars().filter(|c| !c.is_control()) {
+                                    picker.push_char(c);
+                                }
+                            }
+                            state.input_dirty = true;
+                        } else if state.pending_question.is_none() {
                             let remaining =
                                 MAX_INPUT_CHARS.saturating_sub(state.input.chars().count());
                             let pasted: String = text
@@ -1280,6 +1426,7 @@ pub async fn run_tui(
                     state.pending_question = Some(reply);
                     state.pending_question_text = Some(question);
                     state.pending_permission = None;
+                    state.close_model_picker();
                     state.status = "awaiting answer".into();
                     state.clear_input();
                     state.scroll = 0;
@@ -1289,6 +1436,7 @@ pub async fn run_tui(
                     state.pending_question = Some(reply);
                     state.pending_question_text = None;
                     state.pending_permission = Some(command);
+                    state.close_model_picker();
                     state.status = "permission required".into();
                     state.clear_input();
                     state.scroll = 0;
@@ -1330,6 +1478,7 @@ pub async fn run_tui(
                         state.push_system(String::new());
                         state.push_system("plan ready — approve or revise below");
                         state.plan_pending = true;
+                        state.close_model_picker();
                         state.agent_state = AgentState::AwaitingApproval;
                         state.status = "awaiting plan approval".into();
                     } else {
@@ -1565,6 +1714,9 @@ fn format_tool_args(args: &serde_json::Value) -> String {
 
 /// Context-sensitive keyhint footer text, shown in the bottom row.
 fn keyhint(state: &TuiState) -> String {
+    if state.model_picker.is_some() {
+        return "type filter · up/down move · enter apply · esc cancel · alt+m".to_string();
+    }
     if state.pending_permission.is_some() {
         "y allow · n deny · enter allow · esc deny".to_string()
     } else if state.pending_question_text.is_some() {
@@ -1576,7 +1728,8 @@ fn keyhint(state: &TuiState) -> String {
     } else if state.mode == Mode::Chat {
         "chat is read-only · shift+tab agent to edit · enter send · /help".to_string()
     } else {
-        "enter send · /help · /model · /new · shift+tab mode · esc esc quit · up/down recall · wheel/pgup scroll".to_string()
+        "enter send · alt+m model · /help · /new · shift+tab mode · esc esc quit · up/down recall"
+            .to_string()
     }
 }
 
@@ -2035,8 +2188,10 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &mut TuiSt
     );
     f.render_widget(input_w, chunks[5]);
 
-    let (cx, cy) = input_cursor_position(&state.input, prompt, state.cursor, chunks[5]);
-    f.set_cursor_position((cx, cy));
+    if state.model_picker.is_none() {
+        let (cx, cy) = input_cursor_position(&state.input, prompt, state.cursor, chunks[5]);
+        f.set_cursor_position((cx, cy));
+    }
 
     // Context-sensitive keyhint footer.
     f.render_widget(
@@ -2046,6 +2201,141 @@ fn draw_ui(f: &mut Frame, app_name: &str, settings: &Settings, state: &mut TuiSt
         ))),
         chunks[6],
     );
+
+    // Overlay the log. A layout slot would move the status row.
+    if state.model_picker.is_some() {
+        draw_model_picker(f, state, chunks[1]);
+    }
+}
+
+/// Centered model-picker overlay. At most eight rows, selection inverted.
+fn draw_model_picker(f: &mut Frame, state: &TuiState, log: Rect) {
+    let Some(picker) = state.model_picker.as_ref() else {
+        return;
+    };
+    if log.width < 8 || log.height < 4 {
+        return;
+    }
+    let theme = state.theme;
+    const MAX_ROWS: usize = 8;
+    let filtered = picker.filtered();
+    let inner_cap = (log.height as usize).saturating_sub(4);
+    let row_slots = inner_cap.clamp(1, MAX_ROWS);
+    let shown = if filtered.is_empty() {
+        1
+    } else {
+        filtered.len().min(row_slots)
+    };
+    let height = (shown + 4).min(log.height as usize) as u16;
+    let width = 52.min(log.width);
+    let rect = centered_in(log, width, height);
+    let row_w = rect.width.saturating_sub(2) as usize;
+
+    f.render_widget(Clear, rect);
+    let block = Block::default()
+        .title(Span::styled(
+            " model ",
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.accent))
+        .style(Style::default().bg(theme.status_bg));
+
+    let total = filtered.len();
+    let selected = if total == 0 {
+        0
+    } else {
+        picker.selected().min(total - 1)
+    };
+    let start = if total <= shown {
+        0
+    } else {
+        selected
+            .saturating_sub(shown / 2)
+            .min(total.saturating_sub(shown))
+    };
+    let end = (start + shown).min(total);
+
+    let mut lines = Vec::new();
+    let filter_style = if picker.query().is_empty() {
+        Style::default().fg(theme.dim).bg(theme.status_bg)
+    } else {
+        Style::default().fg(theme.fg).bg(theme.status_bg)
+    };
+    let filter_text = if picker.query().is_empty() {
+        "filter".to_string()
+    } else {
+        picker.query().to_string()
+    };
+    lines.push(Line::from(Span::styled(filter_text, filter_style)));
+
+    if filtered.is_empty() {
+        lines.push(Line::from(Span::styled(
+            padded_to("no matches", row_w),
+            Style::default().fg(theme.dim).bg(theme.status_bg),
+        )));
+    } else {
+        for (offset, entry) in filtered[start..end].iter().enumerate() {
+            let idx = start + offset;
+            let style = if idx == selected {
+                Style::default()
+                    .fg(theme.status_bg)
+                    .bg(theme.accent)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme.fg).bg(theme.status_bg)
+            };
+            lines.push(Line::from(Span::styled(
+                padded_to(&entry.label, row_w),
+                style,
+            )));
+        }
+    }
+    lines.push(Line::from(Span::styled(
+        "enter apply · esc cancel · alt+m",
+        Style::default().fg(theme.dim).bg(theme.status_bg),
+    )));
+
+    f.render_widget(
+        Paragraph::new(lines)
+            .style(Style::default().bg(theme.status_bg))
+            .block(block),
+        rect,
+    );
+}
+
+fn centered_in(area: Rect, width: u16, height: u16) -> Rect {
+    let width = width.min(area.width);
+    let height = height.min(area.height);
+    let x = area.x.saturating_add(area.width.saturating_sub(width) / 2);
+    let y = area
+        .y
+        .saturating_add(area.height.saturating_sub(height) / 2);
+    Rect::new(x, y, width, height)
+}
+
+fn padded_to(text: &str, width: usize) -> String {
+    use unicode_width::UnicodeWidthChar;
+
+    if width == 0 {
+        return String::new();
+    }
+    let mut out = String::new();
+    let mut used = 0usize;
+    for ch in text.chars() {
+        let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used + cw > width {
+            break;
+        }
+        out.push(ch);
+        used += cw;
+    }
+    if used < width {
+        out.push_str(&" ".repeat(width - used));
+    }
+    out
 }
 
 /// Word-wrap `s` to `width` display cells (`trim: false`).

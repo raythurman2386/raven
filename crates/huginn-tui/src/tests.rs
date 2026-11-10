@@ -523,6 +523,7 @@ fn dummy_state() -> TuiState {
         input: String::new(),
         cursor: 0,
         completion: None,
+        model_picker: None,
         status: String::new(),
         iterations_max: 60,
         plan_pending: false,
@@ -787,6 +788,331 @@ async fn model_switch_updates_settings_compact_and_header_blocks() {
     } else {
         panic!("block 1 should be a SystemBlock");
     }
+}
+
+#[tokio::test]
+async fn bare_model_and_provider_open_the_picker() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = SessionStore::for_workspace(tmp.path()).unwrap();
+    let mut session = store.create("gemma4:latest").unwrap();
+    let mut settings = test_settings(tmp.path());
+    let mut state = dummy_state();
+    let mut compact_at = 128_000 - 128_000 / 8;
+    let model = settings.model.clone();
+    let provider = settings.provider.name.clone();
+
+    let pc = commands::parse("/model").unwrap();
+    let handled = dispatch::dispatch_slash_command(
+        &mut state,
+        &pc,
+        &mut settings,
+        &store,
+        &mut session,
+        &mut compact_at,
+        &ConfigFile::default(),
+    )
+    .await
+    .unwrap();
+    assert!(handled);
+    assert!(state.model_picker.is_some(), "bare /model opens the picker");
+    assert_eq!(settings.model, model);
+    assert_eq!(settings.provider.name, provider);
+    assert!(state.blocks.is_empty(), "opening the picker is silent");
+
+    state.model_picker = None;
+    let pc = commands::parse("/provider").unwrap();
+    let handled = dispatch::dispatch_slash_command(
+        &mut state,
+        &pc,
+        &mut settings,
+        &store,
+        &mut session,
+        &mut compact_at,
+        &ConfigFile::default(),
+    )
+    .await
+    .unwrap();
+    assert!(handled);
+    assert!(
+        state.model_picker.is_some(),
+        "bare /provider opens the picker"
+    );
+    assert_eq!(settings.model, model);
+    assert_eq!(settings.provider.name, provider);
+    assert!(state.blocks.is_empty());
+}
+
+#[tokio::test]
+async fn bare_model_stays_closed_while_a_prompt_is_pending() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = SessionStore::for_workspace(tmp.path()).unwrap();
+    let mut session = store.create("gemma4:latest").unwrap();
+    let mut settings = test_settings(tmp.path());
+    let mut state = dummy_state();
+    state.plan_pending = true;
+    let mut compact_at = 128_000 - 128_000 / 8;
+    let model = settings.model.clone();
+
+    let pc = commands::parse("/model").unwrap();
+    dispatch::dispatch_slash_command(
+        &mut state,
+        &pc,
+        &mut settings,
+        &store,
+        &mut session,
+        &mut compact_at,
+        &ConfigFile::default(),
+    )
+    .await
+    .unwrap();
+    assert!(state.model_picker.is_none());
+    assert_eq!(settings.model, model);
+    let notice = state
+        .blocks
+        .iter()
+        .find_map(|b| match b {
+            BlockKind::System(s) => Some(s.text()),
+            _ => None,
+        })
+        .unwrap_or("");
+    assert!(notice.contains("answer the prompt"), "notice: {notice}");
+
+    state.plan_pending = false;
+    state.pending_permission = Some("curl".into());
+    let pc = commands::parse("/provider").unwrap();
+    dispatch::dispatch_slash_command(
+        &mut state,
+        &pc,
+        &mut settings,
+        &store,
+        &mut session,
+        &mut compact_at,
+        &ConfigFile::default(),
+    )
+    .await
+    .unwrap();
+    assert!(state.model_picker.is_none());
+    assert_eq!(settings.model, model);
+}
+
+#[tokio::test]
+async fn model_switch_unknown_prefix_stays_on_current_provider() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let store = SessionStore::for_workspace(tmp.path()).unwrap();
+    let mut session = store.create("x-ai/grok-4.5").unwrap();
+    let mut settings = test_settings(tmp.path());
+    settings.provider = Provider::builtin("openrouter")
+        .expect("openrouter")
+        .resolve_key();
+    settings.provider.base_url = "http://127.0.0.1:1/v1".into();
+    settings.model = "x-ai/grok-4.5".into();
+    let mut state = dummy_state();
+    let mut compact_at = 128_000 - 128_000 / 8;
+
+    let pc = commands::parse("/model x-ai/grok-4.7").unwrap();
+    let handled = dispatch::dispatch_slash_command(
+        &mut state,
+        &pc,
+        &mut settings,
+        &store,
+        &mut session,
+        &mut compact_at,
+        &ConfigFile::default(),
+    )
+    .await
+    .unwrap();
+
+    assert!(handled);
+    assert_eq!(settings.provider.name, "openrouter");
+    assert_eq!(settings.model, "x-ai/grok-4.7");
+    assert_eq!(session.summary.model, "x-ai/grok-4.7");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn model_switch_provider_slash_sets_provider_and_model() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let store = SessionStore::for_workspace(tmp.path()).unwrap();
+    let mut session = store.create("x-ai/grok-4.5").unwrap();
+    let mut settings = test_settings(tmp.path());
+    settings.provider = Provider::builtin("ollama").expect("ollama").resolve_key();
+    settings.provider.base_url = "http://127.0.0.1:1/v1".into();
+    settings.model = "gemma4:latest".into();
+    let mut cfg = ConfigFile::default();
+    cfg.providers.insert(
+        "openrouter".into(),
+        huginn_config::ProviderConfig {
+            base_url: Some("http://127.0.0.1:1/v1".into()),
+            ..Default::default()
+        },
+    );
+    let mut state = dummy_state();
+    state.blocks = vec![
+        BlockKind::System(SystemBlock::new(format!(
+            "huginn v{} · {} · {}",
+            env!("CARGO_PKG_VERSION"),
+            settings.model,
+            settings.provider.name
+        ))),
+        BlockKind::System(SystemBlock::new(format!(
+            "workspace {} · context {} · compact ~{}",
+            settings.workspace.display(),
+            fmt_tokens(settings.context_window as u64),
+            fmt_tokens(128_000 - 128_000 / 8),
+        ))),
+    ];
+    let mut compact_at = 128_000 - 128_000 / 8;
+
+    // `openrouter/x-ai/grok-4.7`: prefix is the provider, the rest is the id.
+    let pc = commands::parse("/model openrouter/x-ai/grok-4.7").unwrap();
+    let handled = dispatch::dispatch_slash_command(
+        &mut state,
+        &pc,
+        &mut settings,
+        &store,
+        &mut session,
+        &mut compact_at,
+        &cfg,
+    )
+    .await
+    .unwrap();
+    assert!(handled);
+    assert_eq!(settings.provider.name, "openrouter");
+    assert_eq!(settings.model, "x-ai/grok-4.7");
+
+    // Context-window fetch may fail offline; don't assert a live window size.
+    let pc = commands::parse("/model grok/grok-4.7").unwrap();
+    let handled = dispatch::dispatch_slash_command(
+        &mut state,
+        &pc,
+        &mut settings,
+        &store,
+        &mut session,
+        &mut compact_at,
+        &cfg,
+    )
+    .await
+    .unwrap();
+
+    assert!(handled);
+    assert_eq!(settings.provider.name, "grok");
+    assert_eq!(settings.model, "grok-4.7");
+    assert_eq!(session.summary.model, "grok-4.7");
+    if let BlockKind::System(b) = &state.blocks[0] {
+        assert!(b.text().contains("grok-4.7"), "header: {}", b.text());
+        assert!(b.text().ends_with(" · grok"), "header: {}", b.text());
+    } else {
+        panic!("block 0 should be a SystemBlock");
+    }
+    let notice = state
+        .blocks
+        .iter()
+        .rev()
+        .find_map(|b| match b {
+            BlockKind::System(s) => Some(s.text()),
+            _ => None,
+        })
+        .unwrap_or("");
+    assert!(
+        notice.contains("grok-4.7") && notice.contains("context"),
+        "slash switch notice: {notice}"
+    );
+}
+
+#[tokio::test]
+async fn model_switch_picker_confirm_sets_provider_and_model() {
+    if skip_if_outer_sandbox() {
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let store = SessionStore::for_workspace(tmp.path()).unwrap();
+    let mut session = store.create("x-ai/grok-4.5").unwrap();
+    let mut settings = test_settings(tmp.path());
+    settings.provider = Provider::builtin("openrouter")
+        .expect("openrouter")
+        .resolve_key();
+    settings.provider.base_url = "http://127.0.0.1:1/v1".into();
+    settings.model = "x-ai/grok-4.5".into();
+    let mut state = dummy_state();
+    state.blocks = vec![
+        BlockKind::System(SystemBlock::new("header".into())),
+        BlockKind::System(SystemBlock::new("context".into())),
+    ];
+    state.model_picker = Some(picker::catalog(
+        &ConfigFile::default(),
+        "ollama",
+        "qwen3.8:latest",
+    ));
+    let mut compact_at = 128_000 - 128_000 / 8;
+
+    dispatch::confirm_model_picker(
+        &mut state,
+        &mut settings,
+        &store,
+        &mut session,
+        &mut compact_at,
+        &ConfigFile::default(),
+    )
+    .await;
+
+    assert!(state.model_picker.is_none());
+    assert_eq!(settings.provider.name, "ollama");
+    assert_eq!(settings.model, "qwen3.8:latest");
+    assert_eq!(session.summary.model, "qwen3.8:latest");
+    if let BlockKind::System(b) = &state.blocks[0] {
+        assert!(b.text().contains("qwen3.8:latest"), "header: {}", b.text());
+        assert!(b.text().ends_with(" · ollama"), "header: {}", b.text());
+    } else {
+        panic!("block 0 should be a SystemBlock");
+    }
+    let notice = state
+        .blocks
+        .iter()
+        .rev()
+        .find_map(|b| match b {
+            BlockKind::System(s) => Some(s.text().to_string()),
+            _ => None,
+        })
+        .unwrap_or_default();
+    assert_eq!(notice, "model → ollama · qwen3.8:latest");
+}
+
+#[tokio::test]
+async fn model_switch_picker_confirm_empty_is_noop() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = SessionStore::for_workspace(tmp.path()).unwrap();
+    let mut session = store.create("gemma4:latest").unwrap();
+    let mut settings = test_settings(tmp.path());
+    let mut state = dummy_state();
+    let mut picker = picker::catalog(&ConfigFile::default(), "ollama", "gemma4:latest");
+    for c in "___no_such_model___".chars() {
+        picker.push_char(c);
+    }
+    assert!(picker.confirm().is_none());
+    state.model_picker = Some(picker);
+    let mut compact_at = 128_000 - 128_000 / 8;
+    let model = settings.model.clone();
+    let provider = settings.provider.name.clone();
+
+    dispatch::confirm_model_picker(
+        &mut state,
+        &mut settings,
+        &store,
+        &mut session,
+        &mut compact_at,
+        &ConfigFile::default(),
+    )
+    .await;
+
+    assert!(state.model_picker.is_none());
+    assert_eq!(settings.model, model);
+    assert_eq!(settings.provider.name, provider);
+    assert!(state.blocks.is_empty());
 }
 
 #[test]
@@ -1397,6 +1723,33 @@ fn opencode_go_models_autocomplete() {
         d.candidates.iter().any(|s| s == "deepseek-v4-flash"),
         "deepseek-v4-flash not in /model d completion: {:?}",
         d.candidates
+    );
+}
+
+#[test]
+fn configured_models_replace_the_live_catalog() {
+    let mut settings = test_settings(tempfile::tempdir().unwrap().path());
+    settings.model = "x-ai/grok-4.7".into();
+    settings.provider = huginn_config::Provider::builtin("openrouter")
+        .expect("openrouter builtin")
+        .resolve_key();
+    settings.provider.default_model = "x-ai/grok-4.7".into();
+    let mut cfg = ConfigFile::default();
+    cfg.providers.insert(
+        "openrouter".into(),
+        huginn_config::ProviderConfig {
+            default_model: Some("x-ai/grok-4.7".into()),
+            models: vec!["x-ai/grok-4.7".into(), "anthropic/claude-fable-5.2".into()],
+            ..Default::default()
+        },
+    );
+    let candidates = crate::completion_arg_candidates(&settings, &cfg, "model");
+    assert_eq!(
+        candidates,
+        vec![
+            "x-ai/grok-4.7".to_string(),
+            "anthropic/claude-fable-5.2".to_string(),
+        ]
     );
 }
 

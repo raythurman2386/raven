@@ -61,7 +61,11 @@ pub fn fallback_models(provider_name: &str) -> Vec<String> {
             "glm-5.3:cloud".into(),
             "glm-5.3-flash:cloud".into(),
         ],
-        "openrouter" => vec!["x-ai/grok-4.5".into(), "x-ai/grok-4.6".into()],
+        "openrouter" => vec![
+            "x-ai/grok-4.7".into(),
+            "x-ai/grok-4.6".into(),
+            "x-ai/grok-4.5".into(),
+        ],
         // OpenCode Go models, from the OpenAI-style /zen/go/v1/models list.
         "opencode-go" => vec![
             "deepseek-v4-flash".into(),
@@ -73,7 +77,12 @@ pub fn fallback_models(provider_name: &str) -> Vec<String> {
             "minimax-m3".into(),
         ],
         // Grok Build subscription proxy model ids.
-        "grok" => vec!["grok-4.7".into(), "grok-4.6".into(), "grok-4.5".into()],
+        "grok" => vec![
+            "grok-4.7".into(),
+            "grok-4.7-build-fast".into(),
+            "grok-4.6".into(),
+            "grok-4.5".into(),
+        ],
         // Custom OpenAI-compatible endpoints: suggest a sensible OpenAI-model
         // default so the user always has a starting point, then let them type
         // the exact model id their endpoint exposes.
@@ -459,6 +468,7 @@ mod tests3 {
     #[test]
     fn fallback_models_openrouter() {
         let m = fallback_models("openrouter");
+        assert!(m.contains(&"x-ai/grok-4.7".to_string()));
         assert!(m.contains(&"x-ai/grok-4.5".to_string()));
     }
 
@@ -466,6 +476,7 @@ mod tests3 {
     fn fallback_models_grok() {
         let m = fallback_models("grok");
         assert!(m.iter().any(|s| s == "grok-4.7"));
+        assert!(m.iter().any(|s| s == "grok-4.7-build-fast"));
         assert!(m.iter().any(|s| s == "grok-4.6"));
         assert!(m.iter().any(|s| s == "grok-4.5"));
     }

@@ -253,6 +253,13 @@ pub struct ProviderConfig {
     /// itself stays in the environment.
     pub api_key_env: Option<String>,
     pub default_model: Option<String>,
+    /// Model ids offered by `/model` and the ACP model picker.
+    ///
+    /// A non-empty list replaces the live `/models` catalog for this provider.
+    /// Empty means "not set": Huginn uses the live catalog, then
+    /// [`super::fallback_models`].
+    #[serde(default)]
+    pub models: Vec<String>,
 }
 
 impl ProviderConfig {
@@ -266,7 +273,33 @@ impl ProviderConfig {
             api_key: overlay.api_key.or(self.api_key),
             api_key_env: overlay.api_key_env.or(self.api_key_env),
             default_model: overlay.default_model.or(self.default_model),
+            // A blank-only overlay is not a pin. `curated_models` would drop
+            // those entries and fall through to the live catalog.
+            models: if overlay.models.iter().any(|model| !model.trim().is_empty()) {
+                overlay.models
+            } else {
+                self.models
+            },
         }
+    }
+}
+
+/// Curated model ids from `[providers.<name>] models`, if that list is set.
+///
+/// Whitespace-only entries are dropped. `None` means the provider has no
+/// curated list, so callers should use the live catalog.
+pub fn curated_models(cfg: &ConfigFile, name: &str) -> Option<Vec<String>> {
+    let configured = cfg.providers.get(name)?;
+    let models: Vec<String> = configured
+        .models
+        .iter()
+        .map(|model| model.trim().to_string())
+        .filter(|model| !model.is_empty())
+        .collect();
+    if models.is_empty() {
+        None
+    } else {
+        Some(models)
     }
 }
 
@@ -675,6 +708,7 @@ mod tests {
             api_key: None,
             api_key_env: Some("OLLAMA_API_KEY".into()),
             default_model: Some("gemma4:latest".into()),
+            models: vec!["gemma4:latest".into()],
         };
         let overlay = ProviderConfig {
             base_url: Some("http://workspace:11434/v1".into()),
@@ -687,7 +721,56 @@ mod tests {
         );
         assert_eq!(merged.api_key_env.as_deref(), Some("OLLAMA_API_KEY"));
         assert_eq!(merged.default_model.as_deref(), Some("gemma4:latest"));
+        assert_eq!(merged.models, vec!["gemma4:latest".to_string()]);
         assert!(merged.api_key.is_none());
+    }
+
+    #[test]
+    fn provider_config_merge_replaces_curated_models() {
+        let base = ProviderConfig {
+            models: vec!["grok-4.5".into()],
+            ..Default::default()
+        };
+        let overlay = ProviderConfig {
+            models: vec!["grok-4.7".into(), "grok-4.6".into()],
+            ..Default::default()
+        };
+        let merged = base.merge(overlay);
+        assert_eq!(
+            merged.models,
+            vec!["grok-4.7".to_string(), "grok-4.6".to_string()]
+        );
+    }
+
+    #[test]
+    fn provider_config_merge_blank_models_keep_the_base_list() {
+        let base = ProviderConfig {
+            models: vec!["grok-4.5".into()],
+            ..Default::default()
+        };
+        let overlay = ProviderConfig {
+            models: vec![" ".into(), "".into()],
+            ..Default::default()
+        };
+        let merged = base.merge(overlay);
+        assert_eq!(merged.models, vec!["grok-4.5".to_string()]);
+    }
+
+    #[test]
+    fn curated_models_reads_configured_list_and_ignores_blanks() {
+        let toml_str = r#"
+            [providers.grok]
+            models = ["grok-4.7", "  ", "grok-4.6"]
+            [providers.openrouter]
+            default_model = "x-ai/grok-4.7"
+        "#;
+        let cfg: ConfigFile = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            curated_models(&cfg, "grok").as_deref(),
+            Some(["grok-4.7".to_string(), "grok-4.6".to_string()].as_slice())
+        );
+        assert!(curated_models(&cfg, "openrouter").is_none());
+        assert!(curated_models(&cfg, "ollama").is_none());
     }
 
     #[test]

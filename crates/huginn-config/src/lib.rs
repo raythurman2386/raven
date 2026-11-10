@@ -29,8 +29,8 @@ pub use onboarding::{
     config_paths, fallback_models, needs_onboarding, read_line_if_tty, run_onboarding, stdin_is_tty,
 };
 pub use provider::{
-    fetch_live_provider_models, is_known_provider, known_provider_names, resolve_provider,
-    Provider, ProviderConfig,
+    curated_models, fetch_live_provider_models, is_known_provider, known_provider_names,
+    resolve_provider, Provider, ProviderConfig,
 };
 
 pub mod grok_auth;

@@ -145,8 +145,9 @@ If the editor exposes ACP session config options (e.g. selectors in the
 Agent Panel), picking a model entry switches that Huginn session onto the
 chosen provider + model:
 
-- Each provider's list comes from its live `/models` endpoint when reachable,
-  else its curated fallback list.
+- Each provider's list comes from a non-empty `models` list in
+  `[providers.<name>]` when that is set. Otherwise it comes from the live
+  `/models` endpoint when reachable, else its curated fallback list.
 - Selections are `provider/model` ids (e.g. `ollama/deepseek-v4-flash:cloud`,
   `opencode-go/glm-5.3-flash`). A value with a known provider prefix switches
   providers; a plain model name stays on the current provider.
