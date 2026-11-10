@@ -1,6 +1,6 @@
 //! Library crate for Raven — exposes the core modules so benchmarks and
 //! integration tests can import them. The binary (`main.rs`) re-exports the
-//! same modules via `use raven::...`.
+//! same modules via `use huginn::...`.
 
 pub mod acp;
 pub mod agent;

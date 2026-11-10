@@ -87,5 +87,5 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: raven-linux-x86_64
-          path: target/release/raven
+          name: huginn-linux-x86_64
+          path: target/release/huginn

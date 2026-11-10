@@ -1,5 +1,5 @@
 //! Project memory — cross-session Markdown memory files.
 //!
-//! Re-exported from `raven-persist`.
+//! Re-exported from `huginn-persist`.
 
-pub use raven_persist::memory::*;
+pub use huginn_persist::memory::*;

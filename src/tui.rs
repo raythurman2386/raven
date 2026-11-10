@@ -1,5 +1,5 @@
 //! Ratatui interface.
 //!
-//! Re-exported from `raven-tui`.
+//! Re-exported from `huginn-tui`.
 
-pub use raven_tui::*;
+pub use huginn_tui::*;

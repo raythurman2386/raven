@@ -1,5 +1,5 @@
 //! Shared test utilities (also used by integration tests in `tests/`).
 //!
-//! Re-exported from `raven-testutil`.
+//! Re-exported from `huginn-testutil`.
 
-pub use raven_testutil::*;
+pub use huginn_testutil::*;

@@ -1,5 +1,5 @@
 //! Web search and fetch.
 //!
-//! Re-exported from `raven-tools`.
+//! Re-exported from `huginn-tools`.
 
-pub use raven_tools::web::*;
+pub use huginn_tools::web::*;

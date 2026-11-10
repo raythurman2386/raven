@@ -1,5 +1,5 @@
 //! Workspace tools, dispatch, and the sandbox re-exports.
 //!
-//! Re-exported from `raven-tools`.
+//! Re-exported from `huginn-tools`.
 
-pub use raven_tools::*;
+pub use huginn_tools::*;

@@ -1,5 +1,5 @@
 //! Session persistence — save/load conversation history as JSONL.
 //!
-//! Re-exported from `raven-persist`.
+//! Re-exported from `huginn-persist`.
 
-pub use raven_persist::session::*;
+pub use huginn_persist::session::*;

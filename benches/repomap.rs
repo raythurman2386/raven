@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use raven::repomap::{build_map, invalidate};
+use huginn::repomap::{build_map, invalidate};
 use std::path::Path;
 
 fn make_workspace(dir: &Path, files: usize, lines_per_file: usize) {

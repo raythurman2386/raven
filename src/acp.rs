@@ -1,5 +1,5 @@
 //! ACP v1 stdio adapter.
 //!
-//! Re-exported from `raven-acp`.
+//! Re-exported from `huginn-acp`.
 
-pub use raven_acp::*;
+pub use huginn_acp::*;

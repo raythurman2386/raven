@@ -1,5 +1,5 @@
 //! Regex repo map injected into the setup prompt.
 //!
-//! Re-exported from `raven-tools`.
+//! Re-exported from `huginn-tools`.
 
-pub use raven_tools::repomap::*;
+pub use huginn_tools::repomap::*;

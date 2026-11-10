@@ -41,16 +41,16 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use raven::agent::{run_parallel, Agent, ChatMessage};
-use raven::config::{
+use huginn::agent::{run_parallel, Agent, ChatMessage};
+use huginn::config::{
     default_max_iter, env_compact_threshold, env_context_window, env_searxng_engines,
     env_searxng_url, load_config_file, load_dotenv_from, load_global_dotenv, needs_onboarding,
     parse_reasoning_effort, resolve_mode, resolve_provider, resolve_scope, run_onboarding,
     EfficiencyFlags, Mode, Settings,
 };
-use raven::context::{fetch_context_window, infer_context_window};
-use raven::runner;
-use raven::session::{Session, SessionStore};
+use huginn::context::{fetch_context_window, infer_context_window};
+use huginn::runner;
+use huginn::session::{Session, SessionStore};
 
 /// CLI value for the `--mode` flag.
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
@@ -204,7 +204,7 @@ enum Command {
 #[derive(clap::Subcommand, Debug)]
 enum SelfSubcommand {
     /// Update raven to the latest (or a pinned) release.
-    Update(raven::update::UpdateArgs),
+    Update(huginn::update::UpdateArgs),
 }
 
 /// Run `grok login` so `~/.grok/auth.json` is refreshed for the grok provider.
@@ -218,11 +218,11 @@ fn run_grok_login() -> Result<()> {
     if !status.success() {
         anyhow::bail!("`grok login` exited with {status}");
     }
-    match raven::config::grok_auth::resolve_session() {
+    match huginn::config::grok_auth::resolve_session() {
         Ok(_) => {
             println!(
                 "Grok session ready ({})",
-                raven::config::grok_auth_path().display()
+                huginn::config::grok_auth_path().display()
             );
             Ok(())
         }
@@ -241,7 +241,7 @@ fn init_tracing() {
     // directives override each other (last wins), so the crate must be
     // targeted explicitly; an explicit RUST_LOG still wins.
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn,raven=info"));
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn,huginn=info"));
 
     let use_file = std::io::stdout().is_terminal();
     if use_file {
@@ -292,7 +292,7 @@ async fn main() -> Result<()> {
     if let Some(command) = &cli.command {
         match command {
             Command::SelfCmd { cmd } => match cmd {
-                SelfSubcommand::Update(args) => return raven::update::run(args.clone()).await,
+                SelfSubcommand::Update(args) => return huginn::update::run(args.clone()).await,
             },
             Command::Login => return run_grok_login(),
         }
@@ -449,7 +449,7 @@ async fn main() -> Result<()> {
     };
 
     if cli.acp {
-        return raven::acp::run_stdio(settings, cfg_for_acp).await;
+        return huginn::acp::run_stdio(settings, cfg_for_acp).await;
     }
 
     if let Some(tasks) = cli.parallel {
@@ -484,7 +484,7 @@ async fn main() -> Result<()> {
 
     // ── Session management ─────────────────────────────────────────────
 
-    let store = raven::session::SessionStore::for_settings(&settings)?;
+    let store = huginn::session::SessionStore::for_settings(&settings)?;
 
     // --list-sessions: print sessions and exit
     if cli.list_sessions {
@@ -574,14 +574,14 @@ async fn main() -> Result<()> {
 
     // Default to TUI when no task given
     if (task.is_empty() && !cli.headless) || cli.tui {
-        return raven::tui::run_tui(settings, cfg_for_tui, resume_session).await;
+        return huginn::tui::run_tui(settings, cfg_for_tui, resume_session).await;
     }
 
     let workspace = settings.workspace.clone();
     let native = cfg.mcp.specs();
     let mcp = tokio::task::spawn_blocking(move || {
-        let specs = raven::mcp::merge_specs(raven::plugins::mcp_specs(&workspace), native);
-        raven::mcp::connect_specs(&specs)
+        let specs = huginn::mcp::merge_specs(huginn::plugins::mcp_specs(&workspace), native);
+        huginn::mcp::connect_specs(&specs)
     })
     .await
     .unwrap_or(None);
@@ -599,7 +599,7 @@ async fn headless_run(
     task: &str,
     resume_session: Option<Session>,
     store: SessionStore,
-    mcp: Option<raven::mcp::McpHandle>,
+    mcp: Option<huginn::mcp::McpHandle>,
 ) -> Result<()> {
     let compact_at = ((settings.context_window - settings.context_window / 8) as f32
         * settings.compact_threshold) as usize;

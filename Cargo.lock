@@ -1241,6 +1241,193 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
 
 [[package]]
+name = "huginn"
+version = "0.6.11"
+dependencies = [
+ "anyhow",
+ "base64 0.23.1",
+ "clap",
+ "criterion",
+ "dirs",
+ "huginn-acp",
+ "huginn-agent",
+ "huginn-config",
+ "huginn-persist",
+ "huginn-proto",
+ "huginn-sandbox",
+ "huginn-testutil",
+ "huginn-tokenizer",
+ "huginn-tools",
+ "huginn-tui",
+ "libc",
+ "reqwest",
+ "ring",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "huginn-acp"
+version = "0.6.11"
+dependencies = [
+ "anyhow",
+ "huginn-agent",
+ "huginn-config",
+ "huginn-persist",
+ "huginn-proto",
+ "huginn-testutil",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "huginn-agent"
+version = "0.6.11"
+dependencies = [
+ "anyhow",
+ "futures-util",
+ "huginn-config",
+ "huginn-persist",
+ "huginn-proto",
+ "huginn-testutil",
+ "huginn-tokenizer",
+ "huginn-tools",
+ "reqwest",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "huginn-config"
+version = "0.6.11"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "huginn-proto",
+ "huginn-testutil",
+ "libc",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "toml",
+ "tracing",
+]
+
+[[package]]
+name = "huginn-persist"
+version = "0.6.11"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "huginn-config",
+ "huginn-proto",
+ "huginn-testutil",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
+name = "huginn-proto"
+version = "0.6.11"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
+name = "huginn-sandbox"
+version = "0.6.11"
+dependencies = [
+ "anyhow",
+ "huginn-proto",
+ "landlock",
+ "libc",
+ "regex",
+ "rustix",
+ "seccompiler",
+ "shlex",
+ "tempfile",
+ "tracing",
+ "walkdir",
+]
+
+[[package]]
+name = "huginn-testutil"
+version = "0.6.11"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "huginn-tokenizer"
+version = "0.6.11"
+dependencies = [
+ "huginn-proto",
+ "regex",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "huginn-tools"
+version = "0.6.11"
+dependencies = [
+ "anydoc",
+ "anyhow",
+ "dirs",
+ "huginn-config",
+ "huginn-persist",
+ "huginn-proto",
+ "huginn-sandbox",
+ "huginn-testutil",
+ "ignore",
+ "regex",
+ "reqwest",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "zip",
+]
+
+[[package]]
+name = "huginn-tui"
+version = "0.6.11"
+dependencies = [
+ "anyhow",
+ "crossterm",
+ "dirs",
+ "huginn-agent",
+ "huginn-config",
+ "huginn-persist",
+ "huginn-proto",
+ "huginn-testutil",
+ "pulldown-cmark",
+ "ratatui",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml",
+ "unicode-segmentation",
+ "unicode-width",
+]
+
+[[package]]
 name = "hybrid-array"
 version = "0.4.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2531,193 +2718,6 @@ dependencies = [
  "serde",
  "strum",
  "time",
- "unicode-segmentation",
- "unicode-width",
-]
-
-[[package]]
-name = "raven"
-version = "0.6.11"
-dependencies = [
- "anyhow",
- "base64 0.23.1",
- "clap",
- "criterion",
- "dirs",
- "libc",
- "raven-acp",
- "raven-agent",
- "raven-config",
- "raven-persist",
- "raven-proto",
- "raven-sandbox",
- "raven-testutil",
- "raven-tokenizer",
- "raven-tools",
- "raven-tui",
- "reqwest",
- "ring",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "raven-acp"
-version = "0.6.11"
-dependencies = [
- "anyhow",
- "raven-agent",
- "raven-config",
- "raven-persist",
- "raven-proto",
- "raven-testutil",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "raven-agent"
-version = "0.6.11"
-dependencies = [
- "anyhow",
- "futures-util",
- "raven-config",
- "raven-persist",
- "raven-proto",
- "raven-testutil",
- "raven-tokenizer",
- "raven-tools",
- "reqwest",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "raven-config"
-version = "0.6.11"
-dependencies = [
- "anyhow",
- "dirs",
- "libc",
- "raven-proto",
- "raven-testutil",
- "reqwest",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "toml",
- "tracing",
-]
-
-[[package]]
-name = "raven-persist"
-version = "0.6.11"
-dependencies = [
- "anyhow",
- "dirs",
- "raven-config",
- "raven-proto",
- "raven-testutil",
- "serde",
- "serde_json",
- "tempfile",
- "tracing",
-]
-
-[[package]]
-name = "raven-proto"
-version = "0.6.11"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "tokio",
-]
-
-[[package]]
-name = "raven-sandbox"
-version = "0.6.11"
-dependencies = [
- "anyhow",
- "landlock",
- "libc",
- "raven-proto",
- "regex",
- "rustix",
- "seccompiler",
- "shlex",
- "tempfile",
- "tracing",
- "walkdir",
-]
-
-[[package]]
-name = "raven-testutil"
-version = "0.6.11"
-dependencies = [
- "libc",
-]
-
-[[package]]
-name = "raven-tokenizer"
-version = "0.6.11"
-dependencies = [
- "raven-proto",
- "regex",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
-name = "raven-tools"
-version = "0.6.11"
-dependencies = [
- "anydoc",
- "anyhow",
- "dirs",
- "ignore",
- "raven-config",
- "raven-persist",
- "raven-proto",
- "raven-sandbox",
- "raven-testutil",
- "regex",
- "reqwest",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
- "zip",
-]
-
-[[package]]
-name = "raven-tui"
-version = "0.6.11"
-dependencies = [
- "anyhow",
- "crossterm",
- "dirs",
- "pulldown-cmark",
- "ratatui",
- "raven-agent",
- "raven-config",
- "raven-persist",
- "raven-proto",
- "raven-testutil",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "toml",
  "unicode-segmentation",
  "unicode-width",
 ]
