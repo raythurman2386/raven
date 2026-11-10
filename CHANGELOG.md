@@ -32,7 +32,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - The session export header is `# Huginn session`.
 - Release artifacts are `huginn-{version}-{triple}` and `huginn-{version}-{triple}.tar.gz`, with `huginn` inside the archive, listed in `checksums.txt`. The pinned public key file is `huginn-signing-key.pub`. It has the same bytes as the old `raven-signing-key.pub`, so signatures on earlier releases still verify.
 - Repository: `raythurman2386/huginn`. The installer, self-update, signing scripts, user agent, and docs point there.
-- Docs, README, the agent skill (`.agents/skills/huginn`), the issue templates, and the eval harness use the Huginn name. The brand mark is `assets/huginn.svg`. `ravenwood` theme references are unchanged.
+- Docs, README, the agent skill (`.agents/skills/huginn`), the issue templates, and the eval harness use the Huginn name. The brand mark is `assets/huginn.svg`. Theme names are unchanged.
 
 ### Migration
 
