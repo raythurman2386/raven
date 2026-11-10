@@ -5,7 +5,7 @@ set -euo pipefail
 #
 # For each VERSION (a tag like v0.5.10), downloads the release's checksums.txt
 # from GitHub, signs it with the Ed25519 secret key, and writes the result to
-# ~/.raven/signing/releases/<version>/checksums.txt.sig. The checksums.txt is
+# ~/.huginn/signing/releases/<version>/checksums.txt.sig. The checksums.txt is
 # kept alongside so each version's signing inputs and outputs live in one
 # folder.
 #
@@ -13,10 +13,10 @@ set -euo pipefail
 # scripts/upload-release-sigs.sh) so signing stays offline and the secret key
 # never touches a network call.
 
-SIGNING_DIR="${RAVEN_SIGNING_DIR:-$HOME/.raven/signing}"
-SECRET_KEY="${RAVEN_SIGNING_KEY:-$SIGNING_DIR/secret.pem}"
+SIGNING_DIR="${HUGINN_SIGNING_DIR:-$HOME/.huginn/signing}"
+SECRET_KEY="${HUGINN_SIGNING_KEY:-$SIGNING_DIR/secret.pem}"
 RELEASES_DIR="$SIGNING_DIR/releases"
-REPO="raythurman2386/raven"
+REPO="raythurman2386/huginn"
 BASE_URL="https://github.com/$REPO/releases/download"
 
 usage() {
@@ -32,8 +32,8 @@ Writes, per version:
   $RELEASES_DIR/<version>/checksums.txt.sig
 
 Environment:
-  RAVEN_SIGNING_DIR   Override the signing directory (default: ~/.raven/signing)
-  RAVEN_SIGNING_KEY   Override the secret key path
+  HUGINN_SIGNING_DIR   Override the signing directory (default: ~/.huginn/signing)
+  HUGINN_SIGNING_KEY   Override the secret key path
 EOF
 }
 

@@ -3,7 +3,7 @@
 //! The security model mirrors the installer (`install.sh`):
 //!   - **Authenticity** — `checksums.txt` is signed with an Ed25519 key held
 //!     offline by the maintainer. The signature is verified in-process against
-//!     the pinned public key (`raven-signing-key.pub`) before anything is
+//!     the pinned public key (`huginn-signing-key.pub`) before anything is
 //!     trusted.
 //!   - **Integrity** — the downloaded binary's SHA-256 must match the entry in
 //!     the (authenticated) `checksums.txt`.
@@ -18,24 +18,25 @@ use std::path::{Path, PathBuf};
 
 /// Default base URL for release artifacts, matching the installers.
 pub const DEFAULT_RELEASE_BASE_URL: &str =
-    "https://github.com/raythurman2386/raven/releases/download";
+    "https://github.com/raythurman2386/huginn/releases/download";
 
 /// Pinned Ed25519 public key (PEM) — the root of trust for release authenticity.
 ///
-/// This is the single source of truth (`raven-signing-key.pub`), embedded at
+/// This is the single source of truth (`huginn-signing-key.pub`), embedded at
 /// compile time so the update path never depends on a runtime file.
-pub const SIGNING_PUBLIC_KEY_PEM: &str = include_str!("../raven-signing-key.pub");
+pub const SIGNING_PUBLIC_KEY_PEM: &str = include_str!("../huginn-signing-key.pub");
 
 /// Resolve the public key used for signature verification.
 ///
-/// Defaults to the embedded pinned key. `RAVEN_SIGNING_PUBLIC_KEY` overrides it
-/// (mirroring the `RAVEN_RELEASE_BASE_URL` override) so self-hosted mirrors and
+/// Defaults to the embedded pinned key. `HUGINN_SIGNING_PUBLIC_KEY` overrides it
+/// (mirroring the `HUGINN_RELEASE_BASE_URL` override) so self-hosted mirrors and
 /// the integration tests can pin their own trust root.
 fn signing_public_key() -> String {
-    std::env::var("RAVEN_SIGNING_PUBLIC_KEY").unwrap_or_else(|_| SIGNING_PUBLIC_KEY_PEM.to_string())
+    std::env::var("HUGINN_SIGNING_PUBLIC_KEY")
+        .unwrap_or_else(|_| SIGNING_PUBLIC_KEY_PEM.to_string())
 }
 
-/// Arguments for the `raven self update` subcommand.
+/// Arguments for the `huginn self update` subcommand.
 #[derive(clap::Args, Clone, Debug)]
 pub struct UpdateArgs {
     /// Pin a specific release version (e.g. `0.5.1` or `v0.5.1`).
@@ -47,12 +48,12 @@ pub struct UpdateArgs {
     pub rollback: bool,
 }
 
-/// Entry point for `raven self update`.
+/// Entry point for `huginn self update`.
 pub async fn run(args: UpdateArgs) -> Result<()> {
     if args.rollback {
         let target = std::env::current_exe().context("failed to resolve current executable")?;
         rollback(&target)?;
-        println!("==> Rolled back raven to the previous version");
+        println!("==> Rolled back huginn to the previous version");
         return Ok(());
     }
     update(args.version.as_deref()).await
@@ -60,7 +61,7 @@ pub async fn run(args: UpdateArgs) -> Result<()> {
 
 /// Download, verify, and install a release, replacing the running binary.
 async fn update(pinned_version: Option<&str>) -> Result<()> {
-    let base_url = std::env::var("RAVEN_RELEASE_BASE_URL")
+    let base_url = std::env::var("HUGINN_RELEASE_BASE_URL")
         .unwrap_or_else(|_| DEFAULT_RELEASE_BASE_URL.to_string());
     let base_url = base_url.trim_end_matches('/');
 
@@ -70,7 +71,7 @@ async fn update(pinned_version: Option<&str>) -> Result<()> {
         None => latest_version_tag().await?,
     };
     let version_no_v = version_tag.trim_start_matches('v');
-    let artifact = format!("raven-{version_no_v}-{triple}");
+    let artifact = format!("huginn-{version_no_v}-{triple}");
 
     let artifact_url = format!("{base_url}/{version_tag}/{artifact}");
     let checksums_url = format!("{base_url}/{version_tag}/checksums.txt");
@@ -86,7 +87,7 @@ async fn update(pinned_version: Option<&str>) -> Result<()> {
 
     // Authenticity: the checksums file must verify against the pinned Ed25519
     // public key. This proves the checksums (and therefore the binary) were
-    // produced by the raven maintainers, not tampered with in transit.
+    // produced by the huginn maintainers, not tampered with in transit.
     if !verify_signature(&checksums, &signature, &signing_public_key()) {
         bail!("release signature verification FAILED for checksums.txt; refusing to update");
     }
@@ -113,7 +114,7 @@ async fn update(pinned_version: Option<&str>) -> Result<()> {
     let tmp_path = tmp.into_temp_path();
     atomic_replace(&tmp_path, &target)?;
 
-    println!("==> Updated raven to {version_tag}");
+    println!("==> Updated huginn to {version_tag}");
     Ok(())
 }
 
@@ -253,10 +254,10 @@ fn normalize_version_tag(version: &str) -> String {
 /// API is rate-limited to 60 req/hr per IP for unauthenticated clients, which
 /// breaks self-update on shared/NAT'd networks; the redirect is not limited.
 async fn latest_version_tag() -> Result<String> {
-    let url = "https://github.com/raythurman2386/raven/releases/latest";
+    let url = "https://github.com/raythurman2386/huginn/releases/latest";
     let resp = reqwest::Client::new()
         .get(url)
-        .header("User-Agent", "raven-self-update")
+        .header("User-Agent", "huginn-self-update")
         .send()
         .await
         .context("failed to query GitHub for the latest release")?;
@@ -357,10 +358,10 @@ mod tests {
 
     #[test]
     fn find_checksum_locates_artifact() {
-        let body = b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  raven-0.5.1-x86_64-unknown-linux-gnu\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  raven-0.5.1-x86_64-unknown-linux-gnu.tar.gz\n";
-        let found = find_checksum(body, "raven-0.5.1-x86_64-unknown-linux-gnu").unwrap();
+        let body = b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  huginn-0.5.1-x86_64-unknown-linux-gnu\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  huginn-0.5.1-x86_64-unknown-linux-gnu.tar.gz\n";
+        let found = find_checksum(body, "huginn-0.5.1-x86_64-unknown-linux-gnu").unwrap();
         assert_eq!(found, "a".repeat(64));
-        assert!(find_checksum(body, "raven-0.5.1-missing").is_err());
+        assert!(find_checksum(body, "huginn-0.5.1-missing").is_err());
     }
 
     #[test]
@@ -378,7 +379,7 @@ mod tests {
     #[test]
     fn atomic_replace_and_rollback_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("raven");
+        let target = dir.path().join("huginn");
         let new = dir.path().join("new");
         std::fs::write(&new, b"new binary").unwrap();
 

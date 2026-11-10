@@ -4,13 +4,13 @@ set -euo pipefail
 # Upload checksums.txt.sig back to each published GitHub release.
 #
 # Reads the signatures produced by scripts/sign-releases.sh from
-# ~/.raven/signing/releases/<version>/checksums.txt.sig and attaches them to
+# ~/.huginn/signing/releases/<version>/checksums.txt.sig and attaches them to
 # the matching GitHub release as a `checksums.txt.sig` asset. Requires `gh`
 # authenticated with a token that has repo write scope.
 
-SIGNING_DIR="${RAVEN_SIGNING_DIR:-$HOME/.raven/signing}"
+SIGNING_DIR="${HUGINN_SIGNING_DIR:-$HOME/.huginn/signing}"
 RELEASES_DIR="$SIGNING_DIR/releases"
-REPO="raythurman2386/raven"
+REPO="raythurman2386/huginn"
 
 usage() {
     cat <<EOF

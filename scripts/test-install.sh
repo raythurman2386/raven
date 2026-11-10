@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Local test harness for the raven installer's integrity + authenticity checks.
+# Local test harness for the huginn installer's integrity + authenticity checks.
 #
 # Builds a fake release (binary + checksums.txt + checksums.txt.sig) in a local
 # directory and runs install.sh against it using the local-mirror mode
-# (RAVEN_RELEASE_BASE_URL pointing at a filesystem path). Verifies that:
+# (HUGINN_RELEASE_BASE_URL pointing at a filesystem path). Verifies that:
 #   1. a clean, correctly-signed release installs successfully;
 #   2. a tampered binary is refused (checksum mismatch);
 #   3. a tampered checksums.txt is refused (signature verification fails);
@@ -28,7 +28,7 @@ case "$arch" in
     *) echo "unsupported arch: $arch" >&2; exit 1 ;;
 esac
 TRIPLE="${arch}-unknown-linux-gnu"
-ARTIFACT="raven-${VERSION}-${TRIPLE}"
+ARTIFACT="huginn-${VERSION}-${TRIPLE}"
 
 WORK="$(mktemp -d)"
 RELEASE_ROOT="$WORK/release"
@@ -53,10 +53,10 @@ pass() {
 # --- helpers ---------------------------------------------------------------
 
 make_fake_binary() {
-    # A tiny executable that reports a version, standing in for the real raven.
+    # A tiny executable that reports a version, standing in for the real huginn.
     cat > "$1" <<'EOF'
 #!/usr/bin/env bash
-echo "raven 0.5.1 (fake)"
+echo "huginn 0.5.1 (fake)"
 EOF
     chmod +x "$1"
 }
@@ -70,7 +70,7 @@ write_checksums() {
 
 run_install() {
     # Run install.sh against the local release directory. Returns its exit code.
-    RAVEN_RELEASE_BASE_URL="$RELEASE_ROOT" \
+    HUGINN_RELEASE_BASE_URL="$RELEASE_ROOT" \
         bash "$INSTALL_SH_PATCHED" --version "$VERSION" --to "$INSTALL_DIR" --force \
         >"$WORK/out.log" 2>&1
 }
@@ -114,7 +114,7 @@ if [[ $rc -ne 0 ]]; then
     cat "$WORK/out.log" >&2
     fail "clean install should succeed"
 fi
-[[ -x "$INSTALL_DIR/raven" ]] || fail "raven binary not installed"
+[[ -x "$INSTALL_DIR/huginn" ]] || fail "huginn binary not installed"
 grep -q "Signature OK" "$WORK/out.log" || fail "expected 'Signature OK' in output"
 grep -q "Checksum OK" "$WORK/out.log" || fail "expected 'Checksum OK' in output"
 pass "case 1: clean signed release installs"
@@ -135,7 +135,7 @@ if [[ $rc -eq 0 ]]; then
     fail "tampered binary should be refused"
 fi
 grep -q "checksum mismatch" "$WORK/out.log" || fail "expected checksum mismatch message"
-[[ ! -e "$INSTALL_DIR/raven" ]] || fail "tampered binary must not be installed"
+[[ ! -e "$INSTALL_DIR/huginn" ]] || fail "tampered binary must not be installed"
 pass "case 2: tampered binary refused"
 
 # --- case 3: tampered checksums.txt is refused -----------------------------
@@ -154,7 +154,7 @@ if [[ $rc -eq 0 ]]; then
     fail "tampered checksums.txt should be refused"
 fi
 grep -q "signature verification FAILED" "$WORK/out.log" || fail "expected signature failure message"
-[[ ! -e "$INSTALL_DIR/raven" ]] || fail "binary must not be installed on bad signature"
+[[ ! -e "$INSTALL_DIR/huginn" ]] || fail "binary must not be installed on bad signature"
 pass "case 3: tampered checksums.txt refused"
 
 # --- case 4: missing signature is refused (fail closed) --------------------
@@ -171,7 +171,7 @@ if [[ $rc -eq 0 ]]; then
     fail "missing signature should be refused"
 fi
 grep -q "without a release signature" "$WORK/out.log" || fail "expected missing-signature message"
-[[ ! -e "$INSTALL_DIR/raven" ]] || fail "binary must not be installed without a signature"
+[[ ! -e "$INSTALL_DIR/huginn" ]] || fail "binary must not be installed without a signature"
 pass "case 4: missing signature refused (fail closed)"
 
 echo ""

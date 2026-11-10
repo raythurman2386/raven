@@ -29,7 +29,7 @@ Thumbs.db
 .env
 .env.local
 
-# Release signing secret key (public key is committed as raven-signing-key.pub)
+# Release signing secret key (public key is committed as huginn-signing-key.pub)
 *.pem
 
 # Logs

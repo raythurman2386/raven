@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Generate an Ed25519 signing keypair for raven release signing.
+# Generate an Ed25519 signing keypair for huginn release signing.
 #
 # The secret key MUST be kept offline: never commit it, never put it in CI,
 # never upload it to a release. Only the public key is committed and pinned
@@ -10,22 +10,22 @@ set -euo pipefail
 # The same Ed25519 primitive is used by minisign; OpenSSL is used here so the
 # whole flow is testable locally with no external tooling.
 
-OUT_DIR="${1:-$HOME/.raven/signing}"
+OUT_DIR="${1:-$HOME/.huginn/signing}"
 
 usage() {
     cat <<EOF
 Usage: $0 [OUT_DIR]
 
-Generate an Ed25519 keypair for signing raven releases.
+Generate an Ed25519 keypair for signing huginn releases.
 
-  OUT_DIR  Directory to write the keys (default: \$HOME/.raven/signing)
+  OUT_DIR  Directory to write the keys (default: \$HOME/.huginn/signing)
 
 Writes:
   OUT_DIR/secret.pem   Secret key — KEEP OFFLINE, never commit
   OUT_DIR/public.pem   Public key — commit and pin in the installers
 
 After generating, copy the contents of public.pem into the pinned public key
-in install.sh (or the raven-signing-key.pub file).
+in install.sh (or the huginn-signing-key.pub file).
 EOF
 }
 
