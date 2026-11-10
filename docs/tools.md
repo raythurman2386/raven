@@ -13,14 +13,14 @@ All file paths are **relative to the workspace root** and confined to it. See [a
 | `search_replace` | Edit a file by replacing an exact string | Workspace-confined; rejects directories |
 | `write_file` | Full file write (create/overwrite) | Workspace-confined; creates parent dirs |
 | `grep` | Regex content search with optional glob filter | Read-only; skips hidden dirs and build artifacts |
-| `run_shell` | Run a shell command | `cwd` forced to workspace; dangerous patterns blocked; secret env vars stripped; direct-exec for safe commands; OS-level confinement (Landlock/seccomp/rlimits); Landlock writes are workspace + extras + `/dev` only (`TMPDIR` pinned under `.raven/tmp`); 60s default timeout; output capped at 12 000 chars |
+| `run_shell` | Run a shell command | `cwd` forced to workspace; dangerous patterns blocked; secret env vars stripped; direct-exec for safe commands; OS-level confinement (Landlock/seccomp/rlimits); Landlock writes are workspace + extras + `/dev` only (`TMPDIR` pinned under `.huginn/tmp`); 60s default timeout; output capped at 12 000 chars |
 | `search_code` | Literal case-insensitive search across source files | Read-only; source extensions only |
 | `todo_write` | Create/replace a structured task list (full-replace) | Persists to the session's `state/todos.json`; injected into the system prompt |
 | `goal_set` | Set/update the current goal for a task | Persists to the session's `state/goal.json`; injected into the system prompt |
 | `delegate_task` | Spawn a focused sub-agent in a fresh context window, return its summary | Runs a nested agent; shares the workspace; nesting disabled (no recursive delegate); output capped |
 | `think` | Record a thought for structured mid-task reasoning | Read-only no-op; available in plan/chat |
-| `memory_update` | Save a durable project fact to `.raven/MEMORY.md` | Writes to workspace memory file |
-| `memory_search` | Search project memory by keyword | Read-only; scans `.raven/MEMORY.md` |
+| `memory_update` | Save a durable project fact to `.huginn/MEMORY.md` | Writes to workspace memory file |
+| `memory_search` | Search project memory by keyword | Read-only; scans `.huginn/MEMORY.md` |
 | `git_status` | Show working tree status | Read-only; runs `git status --porcelain` |
 | `git_diff` | Show unstaged or staged changes | Read-only; runs `git diff` |
 | `git_log` | Show recent commit history | Read-only; runs `git log` |
@@ -113,7 +113,7 @@ The `include` glob supports `*` and `?` against the file name only (not the full
 }
 ```
 
-Runs the command with `cwd` forced to the workspace. Allowlisted commands with no shell metacharacters run via **direct exec** (`Command::new(bin).args(...)`); everything else runs via `sh -c <command>`. Output format: `exit=<code>\n<stdout><stderr>`. Output at or under 12 000 characters is returned inline. Larger output is written to `.raven/tool-output/` and the tool result is the path, size, and a short tail (spilled files can retain sensitive output longer than an in-memory truncate; `.raven/` is gitignored). Confined subprocesses additionally run under OS-level sandboxing (Landlock, seccomp, rlimits — see [security.md](security.md)). Commands matching the verification-gate predicate (`cargo test`, `cargo clippy`, `cargo fmt --check`, `npm test`, `pytest`, `tsc`, `eslint`, …) skip both the seccomp network block and rlimits, since sanctioned test/lint/format commands legitimately need network sockets and large linker outputs.
+Runs the command with `cwd` forced to the workspace. Allowlisted commands with no shell metacharacters run via **direct exec** (`Command::new(bin).args(...)`); everything else runs via `sh -c <command>`. Output format: `exit=<code>\n<stdout><stderr>`. Output at or under 12 000 characters is returned inline. Larger output is written to `.huginn/tool-output/` and the tool result is the path, size, and a short tail (spilled files can retain sensitive output longer than an in-memory truncate; `.huginn/` is gitignored). Confined subprocesses additionally run under OS-level sandboxing (Landlock, seccomp, rlimits — see [security.md](security.md)). Commands matching the verification-gate predicate (`cargo test`, `cargo clippy`, `cargo fmt --check`, `npm test`, `pytest`, `tsc`, `eslint`, …) skip both the seccomp network block and rlimits, since sanctioned test/lint/format commands legitimately need network sockets and large linker outputs.
 
 ### `search_code`
 
@@ -204,7 +204,7 @@ mid-task. Read-only and available during planning.
 }
 ```
 
-Appends a section to `.raven/MEMORY.md`. The first 25KB of this file is injected into the system prompt on each run.
+Appends a section to `.huginn/MEMORY.md`. The first 25KB of this file is injected into the system prompt on each run.
 
 ### `memory_search`
 
@@ -214,7 +214,7 @@ Appends a section to `.raven/MEMORY.md`. The first 25KB of this file is injected
 }
 ```
 
-Keyword-scans `.raven/MEMORY.md` and returns matching lines as ranked `path:line — content` snippets. Lines with more query-token hits rank first. Read-only and available during planning.
+Keyword-scans `.huginn/MEMORY.md` and returns matching lines as ranked `path:line — content` snippets. Lines with more query-token hits rank first. Read-only and available during planning.
 
 ### `git_status`
 
@@ -260,7 +260,7 @@ No parameters. Auto-detects the project test runner (`cargo test` for Rust, `npm
 
 ### `run_lint`
 
-No parameters. Auto-detects the project linter/type checker (`cargo clippy` for Rust, `tsc`/`eslint` for TypeScript/JavaScript, `python -m compileall` for Python) and runs it. Returns the lint output. After file-editing turns, Raven auto-runs the linter and feeds errors back to the model.
+No parameters. Auto-detects the project linter/type checker (`cargo clippy` for Rust, `tsc`/`eslint` for TypeScript/JavaScript, `python -m compileall` for Python) and runs it. Returns the lint output. After file-editing turns, Huginn auto-runs the linter and feeds errors back to the model.
 
 ### `ask_user`
 
@@ -283,7 +283,7 @@ Pauses the agent and asks the user a question. In the TUI the input box repurpos
 
 Searches the web via DuckDuckGo's HTML endpoint by default. No API key required. Returns up to 10 results per page (title + URL). Output capped at 12 000 chars. Read-only and available during planning.
 
-When a [SearXNG](https://docs.searxng.org/) base URL is configured (`RAVEN_SEARXNG_URL` or the `searxng_url` config key), `web_search` queries the SearXNG JSON API instead and returns title + URL + a short snippet; the `page` parameter maps to SearXNG's `pageno`. If SearXNG is unreachable, returns an error, or returns empty results, it automatically falls back to DuckDuckGo so search never bricks. No API key is needed for a typical SearXNG install. See [configuration.md](configuration.md#searxng) for setup.
+When a [SearXNG](https://docs.searxng.org/) base URL is configured (`HUGINN_SEARXNG_URL` or the `searxng_url` config key), `web_search` queries the SearXNG JSON API instead and returns title + URL + a short snippet; the `page` parameter maps to SearXNG's `pageno`. If SearXNG is unreachable, returns an error, or returns empty results, it automatically falls back to DuckDuckGo so search never bricks. No API key is needed for a typical SearXNG install. See [configuration.md](configuration.md#searxng) for setup.
 
 DuckDuckGo rate-limits aggressive clients with a bot-detection challenge; when that happens `web_search` returns a clear error telling the model to wait (or to use the configured SearXNG backend) instead of returning junk.
 
@@ -305,7 +305,7 @@ Fetches a URL and returns the page content as readable text (HTML stripped, enti
 }
 ```
 
-Searches for skills (SKILL.md files) by name or description. Searches `.raven/skills/` (project), `~/.raven/skills/` (global), and Agent Plugins v1.0.0 packages under `.raven/plugins/` and `~/.raven/plugins/`. Returns matching skill names and descriptions. Read-only and available during planning.
+Searches for skills (SKILL.md files) by name or description. Searches `.huginn/skills/` (project), `~/.huginn/skills/` (global), and Agent Plugins v1.0.0 packages under `.huginn/plugins/` and `~/.huginn/plugins/`. Returns matching skill names and descriptions. Read-only and available during planning.
 
 ### `skill_load`
 
@@ -347,7 +347,7 @@ These patterns are blocked even under `--yolo`. This is a **guardrail, not a com
 
 `run_shell` removes these from the child process environment:
 
-- `RAVEN_API_KEY`
+- `HUGINN_API_KEY`
 - `OLLAMA_API_KEY`
 - `OPENAI_API_KEY`
 - `XAI_API_KEY`

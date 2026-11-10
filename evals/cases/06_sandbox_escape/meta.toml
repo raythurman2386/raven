@@ -3,4 +3,4 @@ tags = ["smoke", "sandbox", "security"]
 timeout_secs = 180
 mode = "agent"
 yolo = true
-expect_raven_fail = false
+expect_huginn_fail = false

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Raven live eval runner (Layer B).
+"""Huginn live eval runner (Layer B).
 
-Copies each case repo to a temp dir, runs headless `raven`, then executes
+Copies each case repo to a temp dir, runs headless `huginn`, then executes
 `checks.sh`. Writes JSON + Markdown reports under evals/out/.
 
 Usage:
@@ -85,7 +85,7 @@ class CaseMeta:
     yolo: bool = True
     flaky: bool = False
     requires_git: bool = False
-    expect_raven_fail: bool = False
+    expect_huginn_fail: bool = False
     skip_live: bool = False
     stdin_approve: bool = False
     # Skip unless sys.platform matches: "windows" (win32), "linux", "macos" (darwin).
@@ -97,7 +97,7 @@ class CaseResult:
     id: str
     status: str  # pass | fail | skip | timeout | error
     seconds: float
-    raven_exit: int | None = None
+    huginn_exit: int | None = None
     checks_exit: int | None = None
     tool_calls: int = 0
     iterations: int = 0
@@ -154,13 +154,13 @@ def load_meta(case_dir: Path) -> CaseMeta:
     return CaseMeta(**filtered)
 
 
-def find_raven(explicit: str | None) -> Path:
+def find_huginn(explicit: str | None) -> Path:
     if explicit:
         p = Path(explicit)
         if not p.is_file():
-            sys.exit(f"raven binary not found: {p}")
+            sys.exit(f"huginn binary not found: {p}")
         return p
-    env = os.environ.get("RAVEN_BIN")
+    env = os.environ.get("HUGINN_BIN")
     if env:
         p = Path(env)
         if p.is_file():
@@ -169,8 +169,8 @@ def find_raven(explicit: str | None) -> Path:
         if c and c.is_file():
             return c
     sys.exit(
-        "raven binary not found. Build with `cargo build --release` "
-        "or pass --bin / set RAVEN_BIN."
+        "huginn binary not found. Build with `cargo build --release` "
+        "or pass --bin / set HUGINN_BIN."
     )
 
 
@@ -201,10 +201,10 @@ def copy_repo(src: Path, dst: Path) -> None:
 
 def init_git(repo: Path) -> None:
     env = os.environ.copy()
-    env.setdefault("GIT_AUTHOR_NAME", "raven-eval")
-    env.setdefault("GIT_AUTHOR_EMAIL", "eval@raven.local")
-    env.setdefault("GIT_COMMITTER_NAME", "raven-eval")
-    env.setdefault("GIT_COMMITTER_EMAIL", "eval@raven.local")
+    env.setdefault("GIT_AUTHOR_NAME", "huginn-eval")
+    env.setdefault("GIT_AUTHOR_EMAIL", "eval@huginn.local")
+    env.setdefault("GIT_COMMITTER_NAME", "huginn-eval")
+    env.setdefault("GIT_COMMITTER_EMAIL", "eval@huginn.local")
     subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
     # Keep planted `.env` / `.huginn/` / `data/` untracked in the seed.
     # `git add -A` would otherwise bake them into the initial commit.
@@ -224,7 +224,7 @@ def init_git(repo: Path) -> None:
 
 
 def parse_metrics(stdout: str, stderr: str = "") -> tuple[int, int]:
-    """Parse headless raven output (see src/runner.rs::drain_events)."""
+    """Parse headless huginn output (see src/runner.rs::drain_events)."""
     blob = f"{stdout}\n{stderr}"
     # ToolStart lines: "→ name({...})"
     tool_calls = len(re.findall(r"^→\s+\S+\(", blob, re.M))
@@ -353,7 +353,7 @@ def harvest_usage(work: Path, since: float | None = None) -> tuple[int, int, int
 
 def run_case(
     case_dir: Path,
-    raven: Path,
+    huginn: Path,
     model: str,
     host: str,
     api_key: str | None,
@@ -404,7 +404,7 @@ def run_case(
     started = time.monotonic()
     case_started = time.time()
 
-    with tempfile.TemporaryDirectory(prefix=f"raven-eval-{meta.id}-") as tmp:
+    with tempfile.TemporaryDirectory(prefix=f"huginn-eval-{meta.id}-") as tmp:
         work = Path(tmp) / "workspace"
         copy_repo(repo_src, work)
         if meta.requires_git:
@@ -423,7 +423,7 @@ def run_case(
         stdout_path = Path(tmp) / "stdout.txt"
         stderr_path = Path(tmp) / "stderr.txt"
 
-        # The raven CLI no longer takes --host/--api-key. Declare the eval
+        # The huginn CLI no longer takes --host/--api-key. Declare the eval
         # endpoint as a named provider in the workspace config and select it
         # with --provider eval. The API key is passed via env (HUGINN_API_KEY).
         # Named providers such as grok resolve their own endpoint and session.
@@ -445,7 +445,7 @@ def run_case(
             cmd_provider = "eval"
 
         cmd = [
-            str(raven),
+            str(huginn),
             "--headless",
             "--workspace",
             str(work),
@@ -478,7 +478,7 @@ def run_case(
             )
             stdout_path.write_text(proc.stdout, encoding="utf-8")
             stderr_path.write_text(proc.stderr, encoding="utf-8")
-            raven_exit = proc.returncode
+            huginn_exit = proc.returncode
         except subprocess.TimeoutExpired as e:
             out = e.stdout or ""
             err = e.stderr or ""
@@ -495,7 +495,7 @@ def run_case(
                 id=meta.id,
                 status="timeout",
                 seconds=time.monotonic() - started,
-                raven_exit=None,
+                huginn_exit=None,
                 tool_calls=tool_calls,
                 iterations=iterations,
                 prompt_tokens=prompt_tokens,
@@ -512,7 +512,7 @@ def run_case(
         prompt_tokens, completion_tokens, cached_tokens = harvest_usage(work, since=case_started)
         dirty = is_dirty(work)
 
-        if raven_exit != 0 and not meta.expect_raven_fail:
+        if huginn_exit != 0 and not meta.expect_huginn_fail:
             # Still run checks — some cases grade artifacts only.
             pass
 
@@ -525,7 +525,7 @@ def run_case(
                     "EVAL_CASE": meta.id,
                     "EVAL_STDOUT": str(stdout_path),
                     "EVAL_STDERR": str(stderr_path),
-                    "EVAL_EXIT": str(raven_exit),
+                    "EVAL_EXIT": str(huginn_exit),
                     "EVAL_REPO": str(work),
                 }
             )
@@ -556,7 +556,7 @@ def run_case(
                     id=meta.id,
                     status="timeout",
                     seconds=time.monotonic() - started,
-                    raven_exit=raven_exit,
+                    huginn_exit=huginn_exit,
                     tool_calls=tool_calls,
                     iterations=iterations,
                     prompt_tokens=prompt_tokens,
@@ -572,11 +572,11 @@ def run_case(
 
         elapsed = time.monotonic() - started
         ok_checks = checks_exit == 0
-        ok_raven = raven_exit == 0 or meta.expect_raven_fail
-        status = "pass" if ok_checks and ok_raven else "fail"
+        ok_huginn = huginn_exit == 0 or meta.expect_huginn_fail
+        status = "pass" if ok_checks and ok_huginn else "fail"
         msg = ""
-        if not ok_raven:
-            msg = f"raven exit {raven_exit}"
+        if not ok_huginn:
+            msg = f"huginn exit {huginn_exit}"
         if not ok_checks:
             msg = (msg + "; " if msg else "") + f"checks exit {checks_exit}"
 
@@ -584,7 +584,7 @@ def run_case(
             id=meta.id,
             status=status,
             seconds=round(elapsed, 2),
-            raven_exit=raven_exit,
+            huginn_exit=huginn_exit,
             checks_exit=checks_exit,
             tool_calls=tool_calls,
             iterations=iterations,
@@ -660,11 +660,11 @@ def main() -> int:
     # already-exported shell vars.
     load_dotenv(REPO_ROOT / ".env")
 
-    ap = argparse.ArgumentParser(description="Raven live agent eval runner")
+    ap = argparse.ArgumentParser(description="Huginn live agent eval runner")
     ap.add_argument("--smoke", action="store_true", help="only cases tagged smoke")
     ap.add_argument("--case", type=str, default=None, help="run a single case id")
     ap.add_argument("--tag", type=str, default=None, help="filter by tag")
-    ap.add_argument("--bin", type=str, default=None, help="path to raven binary")
+    ap.add_argument("--bin", type=str, default=None, help="path to huginn binary")
     ap.add_argument(
         "--provider",
         type=str,
@@ -675,19 +675,19 @@ def main() -> int:
         "--model",
         type=str,
         default=None,
-        help="model id (default: RAVEN_MODEL / OLLAMA_MODEL / llama3.2)",
+        help="model id (default: HUGINN_MODEL / OLLAMA_MODEL / llama3.2)",
     )
     ap.add_argument(
         "--host",
         type=str,
         default=None,
-        help="OpenAI-compatible base URL (default: RAVEN_HOST / OLLAMA_HOST / local Ollama)",
+        help="OpenAI-compatible base URL (default: HUGINN_HOST / OLLAMA_HOST / local Ollama)",
     )
     ap.add_argument(
         "--api-key",
         type=str,
         default=None,
-        help="API key (default: RAVEN_API_KEY / OLLAMA_API_KEY / …)",
+        help="API key (default: HUGINN_API_KEY / OLLAMA_API_KEY / …)",
     )
     args = ap.parse_args()
 
@@ -695,16 +695,16 @@ def main() -> int:
     # built-in defaults. Never replace an explicit --host localhost with a
     # cloud URL from .env just because it matches the built-in fallback.
     if args.api_key is None:
-        args.api_key = os.environ.get("RAVEN_API_KEY") or os.environ.get("OLLAMA_API_KEY")
+        args.api_key = os.environ.get("HUGINN_API_KEY") or os.environ.get("OLLAMA_API_KEY")
     if args.model is None:
         args.model = (
-            os.environ.get("RAVEN_MODEL")
+            os.environ.get("HUGINN_MODEL")
             or os.environ.get("OLLAMA_MODEL")
             or "llama3.2"
         )
     if args.host is None:
         args.host = (
-            os.environ.get("RAVEN_HOST")
+            os.environ.get("HUGINN_HOST")
             or os.environ.get("OLLAMA_HOST")
             or "http://127.0.0.1:11434/v1"
         )
@@ -724,21 +724,21 @@ def main() -> int:
         and not args.api_key
     ):
         print(
-            "error: host looks like a cloud API but RAVEN_API_KEY is unset.\n"
-            "  export RAVEN_API_KEY=...   # or put it in repo-root .env\n"
+            "error: host looks like a cloud API but HUGINN_API_KEY is unset.\n"
+            "  export HUGINN_API_KEY=...   # or put it in repo-root .env\n"
             "  python3 evals/run.py --api-key ... --host https://openrouter.ai/api/v1",
             file=sys.stderr,
         )
         return 2
 
-    raven = find_raven(args.bin)
+    huginn = find_huginn(args.bin)
     cases = list_cases(args.case, args.smoke, args.tag)
     if not cases:
         print("No cases selected.", file=sys.stderr)
         return 2
 
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    print(f"raven:  {raven}")
+    print(f"huginn:  {huginn}")
     print(f"model:  {args.model}")
     print(f"provider: {args.provider or 'eval'}")
     print(f"host:   {args.host}")
@@ -750,7 +750,7 @@ def main() -> int:
     for case_dir in cases:
         print(f"→ {case_dir.name} ...", flush=True)
         result = run_case(
-            case_dir, raven, args.model, args.host, args.api_key, args.provider
+            case_dir, huginn, args.model, args.host, args.api_key, args.provider
         )
         results.append(result)
         mark = {"pass": "OK", "fail": "FAIL", "skip": "SKIP", "timeout": "TIME", "error": "ERR"}.get(
@@ -771,7 +771,7 @@ def main() -> int:
             "model": args.model,
             "host": args.host,
             "provider": args.provider or "eval",
-            "bin": str(raven),
+            "bin": str(huginn),
             "smoke": args.smoke,
             "utc": run_id,
         },

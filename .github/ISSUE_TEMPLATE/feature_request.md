@@ -1,6 +1,6 @@
 ---
 name: Feature request
-about: Suggest an idea for raven
+about: Suggest an idea for huginn
 title: "[Feature] "
 labels: enhancement
 assignees: ''
@@ -12,7 +12,7 @@ What problem are you trying to solve? Describe the use case clearly.
 
 ## Proposed solution
 
-What would you like raven to do? Be as specific as possible.
+What would you like huginn to do? Be as specific as possible.
 
 ## Alternatives considered
 

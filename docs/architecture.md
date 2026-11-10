@@ -1,26 +1,26 @@
 # Architecture
 
-Design overview for **Raven**. The [crate workspace](#crate-workspace) is the source map. See [contributing.md](contributing.md) for how to extend the codebase.
+Design overview for **Huginn**. The [crate workspace](#crate-workspace) is the source map. See [contributing.md](contributing.md) for how to extend the codebase.
 
 ## Crate workspace
 
-One binary, `raven` (`cargo install --path .` installs that package). Implementation lives under `crates/`. Dependencies point only downward. The root package is the clap CLI (`src/main.rs`), the headless runner (`src/runner.rs`), and self-update (`src/update.rs`), plus thin `pub use` facades so existing paths keep resolving (`raven::agent::ChatMessage`, `raven::tokenizer`, `raven::context`, `raven::repomap`, `raven::testutil`, and the other historical module paths). Benches stay at the repo root and call those facades.
+One binary, `huginn` (`cargo install --path .` installs that package). Implementation lives under `crates/`. Dependencies point only downward. The root package is the clap CLI (`src/main.rs`), the headless runner (`src/runner.rs`), and self-update (`src/update.rs`), plus thin `pub use` facades so existing paths keep resolving (`huginn::agent::ChatMessage`, `huginn::tokenizer`, `huginn::context`, `huginn::repomap`, `huginn::testutil`, and the other historical module paths). Benches stay at the repo root and call those facades.
 
 | Crate | Owns | Depends on |
 | --- | --- | --- |
-| `raven-proto` | `ChatMessage`, `ToolCall`, `FunctionCall`, `AgentEvent`, `AgentError` / `ToolError`, plan types, `TodoItem`, `Goal` | — |
-| `raven-tokenizer` | estimator, usage meters, pricing | proto |
-| `raven-config` | `Settings`, named providers, onboarding, Grok auth | proto |
-| `raven-persist` | session JSONL, session-scoped goal/todos, memory | proto, config |
-| `raven-sandbox` | path confinement, Landlock, seccomp, rlimits | proto |
-| `raven-tools` | tool defs, dispatch, git, patch, documents, validate, web, skills, repomap, plugins, stdio MCP client | proto, config, persist, sandbox |
-| `raven-agent` | streaming loop, compaction, stream parse, tool exec, parallel / `delegate_task` | proto, tokenizer, config, persist, tools |
-| `raven-tui` | ratatui UI, markdown, slash commands | proto, config, persist, agent |
-| `raven-acp` | ACP v1 stdio adapter | proto, config, persist, agent |
-| `raven-testutil` | `outer_sandbox_restrictive`, `home_env_lock` | — |
-| `raven` (root) | clap CLI, headless runner, self-update, facade re-exports | the crates above |
+| `huginn-proto` | `ChatMessage`, `ToolCall`, `FunctionCall`, `AgentEvent`, `AgentError` / `ToolError`, plan types, `TodoItem`, `Goal` | — |
+| `huginn-tokenizer` | estimator, usage meters, pricing | proto |
+| `huginn-config` | `Settings`, named providers, onboarding, Grok auth | proto |
+| `huginn-persist` | session JSONL, session-scoped goal/todos, memory | proto, config |
+| `huginn-sandbox` | path confinement, Landlock, seccomp, rlimits | proto |
+| `huginn-tools` | tool defs, dispatch, git, patch, documents, validate, web, skills, repomap, plugins, stdio MCP client | proto, config, persist, sandbox |
+| `huginn-agent` | streaming loop, compaction, stream parse, tool exec, parallel / `delegate_task` | proto, tokenizer, config, persist, tools |
+| `huginn-tui` | ratatui UI, markdown, slash commands | proto, config, persist, agent |
+| `huginn-acp` | ACP v1 stdio adapter | proto, config, persist, agent |
+| `huginn-testutil` | `outer_sandbox_restrictive`, `home_env_lock` | — |
+| `huginn` (root) | clap CLI, headless runner, self-update, facade re-exports | the crates above |
 
-`landlock` and `seccompiler` are Linux target-cfg dependencies of `raven-sandbox` only. ratatui, crossterm, and pulldown-cmark stay on `raven-tui` only. clap stays in the root binary. `delegate_task` runs in `raven-agent` (`tools_exec`), not in tool dispatch, so tools do not depend on the agent. A TUI or ACP edit does not rebuild the agent. A tokenizer edit does not rebuild the sandbox.
+`landlock` and `seccompiler` are Linux target-cfg dependencies of `huginn-sandbox` only. ratatui, crossterm, and pulldown-cmark stay on `huginn-tui` only. clap stays in the root binary. `delegate_task` runs in `huginn-agent` (`tools_exec`), not in tool dispatch, so tools do not depend on the agent. A TUI or ACP edit does not rebuild the agent. A tokenizer edit does not rebuild the sandbox.
 
 Release profile is workspace-wide: lto, codegen-units 1, strip, opt-level z, panic abort.
 
@@ -28,19 +28,19 @@ Release profile is workspace-wide: lto, codegen-units 1, strip, opt-level z, pan
 
 ```
 CLI (src/main.rs)
-  └─ Settings (raven-config) ── named providers, context-window inference,
+  └─ Settings (huginn-config) ── named providers, context-window inference,
   │                              scope (repo | system) via resolve_scope
-  └─ Agent (raven-agent)
+  └─ Agent (huginn-agent)
        ├─ system prompt (stable instructions + mode) and a following setup message (workspace, repo map, AGENTS.md, memory, goal, rules). Git status is request-only, after the conversation.
        ├─ streaming loop ── POST /v1/chat/completions (Ollama / OpenRouter / …)
-       ├─ compaction (raven-agent context) ── estimate tokens, summarize middle
-       ├─ tool dispatch (raven-tools) ── mutators serial; others spawn_blocking
+       ├─ compaction (huginn-agent context) ── estimate tokens, summarize middle
+       ├─ tool dispatch (huginn-tools) ── mutators serial; others spawn_blocking
        └─ events (mpsc) ── TextDelta, ToolStart/End, Iteration, Compacted,
                            VerifyRequired, AskUser, PlanProgress, Done, Error
-  └─ TUI (raven-tui)  ── ratatui event loop, drains agent events
+  └─ TUI (huginn-tui)  ── ratatui event loop, drains agent events
   └─ headless_run ── one-shot tasks (repo and system scope)
   └─ run_parallel ── N independent Agent tasks on git worktrees (repo scope)
-  └─ MCP (raven-tools client; specs in raven-config) ── stdio JSON-RPC; tools merged as `{server}__{tool}`
+  └─ MCP (huginn-tools client; specs in huginn-config) ── stdio JSON-RPC; tools merged as `{server}__{tool}`
 ```
 
 ### Scope axis
@@ -48,7 +48,7 @@ CLI (src/main.rs)
 `Settings.scope` is `Repo` (default) or `System` (`--system`). It decides the
 sandbox root (`{workspace}` vs `/`), the system prompt
 (`SYSTEM_BASE` vs `SYSTEM_SCOPE_BASE`), the session store
-(`{workspace}/.raven/sessions` vs `~/.raven/system/sessions`), the shell
+(`{workspace}/.huginn/sessions` vs `~/.huginn/system/sessions`), the shell
 confirmation allowlists (dev list, plus a system read-only-diagnostics list),
 and gating of sub-agents/goal/todo tools. Dispatch (TUI vs headless one-shot)
 is identical in both scopes; `--system --yolo` is an explicit full-autonomy
@@ -56,7 +56,7 @@ opt-in (denylist + network block still apply).
 
 ### Step-by-step
 
-1. **CLI** (`main.rs`) parses flags with `clap`, builds a [`Settings`](../crates/raven-config/src/lib.rs) struct (resolving env vars, loading config files, and querying the model's actual context window via Ollama's `/api/show` endpoint).
+1. **CLI** (`main.rs`) parses flags with `clap`, builds a [`Settings`](../crates/huginn-config/src/lib.rs) struct (resolving env vars, loading config files, and querying the model's actual context window via Ollama's `/api/show` endpoint).
 2. **Agent construction** (`Agent::new`): validates the workspace, builds a stable system message (instructions + mode) and a following setup message (workspace, repo map, `AGENTS.md`, memory, goal, todos, `--rules`). Git status is not stored; it is appended for the request only.
 3. **Agent loop** (`Agent::run`): appends the user message, then loops up to `max_iterations`:
    - **Compaction check**: estimate history tokens; if over the soft limit, summarize the middle (see [Compaction](#compaction)).
@@ -65,7 +65,7 @@ opt-in (denylist + network block still apply).
    - **Accumulate tool calls**: tool-call deltas arrive incrementally; they are accumulated by index into `(id, name, arguments)`.
    - **No tool calls**: append the assistant message, emit `Done`, return.
    - **Tool calls**: append the assistant message, execute all tools in parallel via `tokio::task::spawn_blocking`, append each result as a `tool`-role message, loop back.
-4. **Events**: progress flows through an `mpsc` channel as [`AgentEvent`](../crates/raven-proto/src/chat.rs) variants. The headless runner and TUI consume these.
+4. **Events**: progress flows through an `mpsc` channel as [`AgentEvent`](../crates/huginn-proto/src/chat.rs) variants. The headless runner and TUI consume these.
 
 ---
 
@@ -104,7 +104,7 @@ opt-in (denylist + network block still apply).
 
 ## Compaction
 
-Implemented in [`context.rs`](../crates/raven-agent/src/context.rs). Token counting uses a built-in token estimator ([`raven-tokenizer`](../crates/raven-tokenizer/src/lib.rs)) for fast, conservative estimates.
+Implemented in [`context.rs`](../crates/huginn-agent/src/context.rs). Token counting uses a built-in token estimator ([`huginn-tokenizer`](../crates/huginn-tokenizer/src/lib.rs)) for fast, conservative estimates.
 
 Compaction is guaranteed to never grow the history: if the assembled compacted form (summary + kept tail) would be no smaller than the original, the original is left unchanged. This guards the degenerate case of many tiny, near-identical messages where the extractive summary's per-line prefixes can cost more than the verbatim middle they replace.
 
@@ -135,7 +135,7 @@ When `history_tokens(messages) > compact_threshold × (context_window − output
 
 If compaction keeps failing to bring the history under the soft limit (a single
 huge file/tool output refills context immediately), the loop would otherwise
-spin on repeated summarize calls. Raven tracks consecutive no-reduction
+spin on repeated summarize calls. Huginn tracks consecutive no-reduction
 compactions (`Agent.compact_thrash_count`); after 3 it pauses auto-compaction,
 retrying every 4th iteration so a later prune can resume shrinking.
 
@@ -143,8 +143,8 @@ retrying every 4th iteration so a later prune can resume shrinking.
 
 ## Persistent agent state
 
-Raven keeps long-horizon task state on disk in the session's `state/`
-directory (`.raven/sessions/{id}/state/`; see [`state.rs`](../crates/raven-persist/src/state.rs))
+Huginn keeps long-horizon task state on disk in the session's `state/`
+directory (`.huginn/sessions/{id}/state/`; see [`state.rs`](../crates/huginn-persist/src/state.rs))
 so it survives context compaction and process restarts. State is
 **session-scoped** (issue #185): a fresh session starts with empty state, and
 only resuming that session restores it:
@@ -157,10 +157,10 @@ and `compute_reminders` re-anchors the model on the goal + next pending task
 at iteration 4 and then every 8th iteration (12, 20, …). Writes are atomic
 (unique temp name + rename).
 
-Large tool results may also land under `.raven/tool-output/` (see
-`Sandbox::present_output`), and compacted middle turns under `.raven/compact/`.
+Large tool results may also land under `.huginn/tool-output/` (see
+`Sandbox::present_output`), and compacted middle turns under `.huginn/compact/`.
 Those spill files can retain sensitive tool output longer than an in-memory
-truncate would; treat the workspace `.raven/` tree as sensitive (it is already
+truncate would; treat the workspace `.huginn/` tree as sensitive (it is already
 gitignored).
 
 ---
@@ -180,7 +180,7 @@ sub-agent in a fresh context window and return its distilled output (capped at
 
 ## Sandbox
 
-Implemented in [`raven-sandbox`](../crates/raven-sandbox/). Tool dispatch lives in [`raven-tools`](../crates/raven-tools/). See [tools.md](tools.md) for the full tool contracts.
+Implemented in [`huginn-sandbox`](../crates/huginn-sandbox/). Tool dispatch lives in [`huginn-tools`](../crates/huginn-tools/). See [tools.md](tools.md) for the full tool contracts.
 
 ### Path confinement
 
@@ -199,17 +199,17 @@ resolved via `Sandbox::safe_resolve`, which applies two defenses:
 `run_shell`:
 
 - Forces `cwd` to the workspace.
-- Strips secret env vars (`RAVEN_API_KEY`, `OLLAMA_API_KEY`, `OPENAI_API_KEY`, `XAI_API_KEY`, `ANTHROPIC_API_KEY`, `AWS_SECRET_ACCESS_KEY`).
+- Strips secret env vars (`HUGINN_API_KEY`, `OLLAMA_API_KEY`, `OPENAI_API_KEY`, `XAI_API_KEY`, `ANTHROPIC_API_KEY`, `AWS_SECRET_ACCESS_KEY`).
 - Blocks destructive command patterns even under `--yolo` (see [tools.md#blocked-commands](tools.md#blocked-commands)).
 - Runs allowlisted, metacharacter-free commands via **direct exec** (`Command::new(bin).args(...)`, no `sh -c`) — see [security.md §5](security.md).
 - Tool-call arguments are length-capped and schema-checked before dispatch.
 - Enforces a timeout (default 60s, overridable per call).
 - Caps output at 12 000 chars.
-- Every confined subprocess additionally runs under OS-level confinement: **Landlock** (filesystem) + **seccomp** (network-block) + **rlimits** (CPU/file-size/fds) on Linux; rlimits on macOS. Landlock write roots are the workspace, explicit extras (git worktrees), and `/dev` — never the process temp dir. `TMPDIR` is pinned under `.raven/tmp`. See [security.md](security.md) for the full defense layers.
+- Every confined subprocess additionally runs under OS-level confinement: **Landlock** (filesystem) + **seccomp** (network-block) + **rlimits** (CPU/file-size/fds) on Linux; rlimits on macOS. Landlock write roots are the workspace, explicit extras (git worktrees), and `/dev` — never the process temp dir. `TMPDIR` is pinned under `.huginn/tmp`. See [security.md](security.md) for the full defense layers.
 
 ### Honest limits
 
-The sandbox confines the agent's subprocesses at the OS level (Landlock, seccomp, rlimits) and confines file-path resolution with `openat2`/`safe_resolve`. It does **not** use containers or VMs. These layers are best-effort on some platforms and each has documented caveats (see [security.md](security.md)); defense-in-depth is the point. For the strongest isolation, run Raven inside a container or VM.
+The sandbox confines the agent's subprocesses at the OS level (Landlock, seccomp, rlimits) and confines file-path resolution with `openat2`/`safe_resolve`. It does **not** use containers or VMs. These layers are best-effort on some platforms and each has documented caveats (see [security.md](security.md)); defense-in-depth is the point. For the strongest isolation, run Huginn inside a container or VM.
 
 ---
 
@@ -241,7 +241,7 @@ Each `dispatch` is sync, so `spawn_blocking` moves it off the async runtime. Res
 When the workspace is a git repo, each sub-agent runs in an isolated git
 worktree. After they finish, each worktree's diff versus the original HEAD is
 applied to the parent working tree **without creating a commit**. A failed
-apply writes `.raven/recovery-sub-N.patch` (indexed in `.raven/RECOVERY.md`).
+apply writes `.huginn/recovery-sub-N.patch` (indexed in `.huginn/RECOVERY.md`).
 Tool events are consumed silently; only `TextDelta` output is accumulated and
 returned in order.
 
@@ -249,12 +249,12 @@ returned in order.
 
 ## TUI limitations
 
-The TUI (`raven-tui`) is intentionally minimal:
+The TUI (`huginn-tui`) is intentionally minimal:
 
 - **Plan approval is human-gated**: plan mode always waits for the user to approve, revise, or dismiss before executing. Headless and the TUI share one classifier: `y`/`yes`/`ok`/`approve`/`go`/`execute` execute, `n`/`no`/`abort`/`q`/`quit` (and Esc in the TUI) dismiss, and any other text revises. A blank Enter executes only in the headless prompt.
 - **No multi-line input**: the input box is single-line only.
 
-Assistant output is rendered as markdown (`crates/raven-tui/src/markdown.rs`, via
+Assistant output is rendered as markdown (`crates/huginn-tui/src/markdown.rs`, via
 `pulldown-cmark`): headings, bold/italic/strikethrough, inline code, fenced
 code blocks, ordered/unordered lists, blockquotes, links, and tables. The
 renderer re-parses the accumulated text on each stream delta and degrades
@@ -262,4 +262,4 @@ unclosed tokens (e.g. a half-typed `**bold`) to literal text, so streaming
 never flashes raw markdown. Tool calls render as a live line with a spinner
 while active, then settle to a dim line once finished.
 
-Conversation history **is** carried across turns via `session_messages` (in-memory) and persisted to `.raven/sessions/`. Transcript scrollback uses the mouse wheel, `PgUp`/`PgDn`, and (when not recalling prompts) `↑`/`↓`. With an empty or mid-recall input, `↑`/`↓` walk prompt history instead; `Home`/`End` jump to the top of the transcript or reattach to the live tail.
+Conversation history **is** carried across turns via `session_messages` (in-memory) and persisted to `.huginn/sessions/`. Transcript scrollback uses the mouse wheel, `PgUp`/`PgDn`, and (when not recalling prompts) `↑`/`↓`. With an empty or mid-recall input, `↑`/`↓` walk prompt history instead; `Home`/`End` jump to the top of the transcript or reattach to the live tail.

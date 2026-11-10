@@ -1,25 +1,27 @@
-# Raven
+# Huginn
+
+Formerly `raven`, renamed to Huginn in 0.7.0.
 
 My opinionated, personal coding-agent harness. Single Rust binary for Linux (x86_64, aarch64) and Raspberry Pi, speaking plain OpenAI-compatible `/v1/chat/completions` to whatever model endpoint I point it at — local Ollama, Ollama Cloud, or OpenRouter.
 
-Modern harnesses are getting bloated: managed auth layers, plugin marketplaces, personality files, and telemetry that not everyone really trusts. I didn't want any of that. I wanted to build and learn a harness end-to-end — the agent loop, streaming, context compaction, sandboxing, TUI, session persistence — and then work through each issue as it comes up in real use. Raven is that project. It's ~26K lines of Rust you can read in an afternoon, and when something breaks, the fix is mine to make.
+Modern harnesses are getting bloated: managed auth layers, plugin marketplaces, personality files, and telemetry that not everyone really trusts. I didn't want any of that. I wanted to build and learn a harness end-to-end — the agent loop, streaming, context compaction, sandboxing, TUI, session persistence — and then work through each issue as it comes up in real use. Huginn is that project. It's ~26K lines of Rust you can read in an afternoon, and when something breaks, the fix is mine to make.
 
 <p align="center">
-  <img src="assets/rvn-screenshot.png" alt="Raven TUI — agent turn streaming in the terminal" width="720">
+  <img src="assets/huginn-screenshot.png" alt="Huginn TUI — agent turn streaming in the terminal" width="720">
 </p>
 
 ---
 
 ## Where it stands
 
-I use raven as my daily harness for the majority of real work:
+I use huginn as my daily harness for the majority of real work:
 
-- **TUI** (`raven`) — terminal driver, streaming output, slash commands, permission gates, plan mode
-- **Editor agent** (`raven --acp`) — ACP over stdio as an external agent in [Zed](https://zed.dev) and [Hearth](https://github.com/raythurman2386/hearth), with provider/model switching from the editor's picker
-- **Headless** (`raven -p "…"`) — scripted/CI tasks, and as the backend other agents drive for debugging (I let Grok Build run it headless to help debug raven itself)
-- **System scope** (`raven --system`) — the same harness pointed at the whole machine for OS administration (Omarchy desktop management), with tiered shell confirmations
+- **TUI** (`huginn`) — terminal driver, streaming output, slash commands, permission gates, plan mode
+- **Editor agent** (`huginn --acp`) — ACP over stdio as an external agent in [Zed](https://zed.dev) and [Hearth](https://github.com/raythurman2386/hearth), with provider/model switching from the editor's picker
+- **Headless** (`huginn -p "…"`) — scripted/CI tasks, and as the backend other agents drive for debugging (I let Grok Build run it headless to help debug huginn itself)
+- **System scope** (`huginn --system`) — the same harness pointed at the whole machine for OS administration (Omarchy desktop management), with tiered shell confirmations
 
-I still reach for other harnesses when one fits a job better, but the loop of daily work — edit, test, fix, commit — I trust to raven. It got there the honest way: I set the models I want to use, leave it alone until it fails at something, then fix that thing in the harness instead of working around it.
+I still reach for other harnesses when one fits a job better, but the loop of daily work — edit, test, fix, commit — I trust to huginn. It got there the honest way: I set the models I want to use, leave it alone until it fails at something, then fix that thing in the harness instead of working around it.
 
 **MCP:** stdio only, opt-in. Configure servers in `config.toml` (`[mcp.servers.<name>]`) or let an ACP editor forward them on `session/new`. Tools show up as `{name}__{tool}` — for example `sysmetrics-mcp` becomes `sysmetrics__get_cpu_metrics`. No marketplace, no HTTP/SSE transport.
 
@@ -30,7 +32,7 @@ I still reach for other harnesses when one fits a job better, but the loop of da
 **Linux / Raspberry Pi** (x86_64, aarch64, armv7 — the only supported platforms):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/raythurman2386/raven/master/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/raythurman2386/huginn/master/install.sh | sh
 ```
 
 The script detects your platform, downloads the latest prebuilt binary from GitHub Releases, verifies the SHA-256 checksum against a manifest signed with a pinned Ed25519 key (a bad signature refuses the install), and installs to `~/.cargo/bin`. Build from source with `cargo build --release` or `cargo install --path .`. macOS code paths still compile (rlimits-only confinement) but there are no release builds for it.
@@ -43,34 +45,34 @@ The script detects your platform, downloads the latest prebuilt binary from GitH
 
 ```bash
 # Interactive TUI (default when no task is given).
-# On first run Raven walks you through provider + model selection.
-raven
+# On first run Huginn walks you through provider + model selection.
+huginn
 
 # One-shot tasks (quotes required for multi-word tasks)
-raven -p "Explain the structure of this repository"
-raven -p "Add a README and .gitignore"
+huginn -p "Explain the structure of this repository"
+huginn -p "Add a README and .gitignore"
 
 # Agent mode (default): full tools immediately, no plan step
-raven -p "Fix the failing tests"
+huginn -p "Fix the failing tests"
 
 # Plan mode: propose → approve → execute
-raven --mode plan -p "Refactor utils"
+huginn --mode plan -p "Refactor utils"
 
 # Fully autonomous (no confirmations)
-raven --yolo -p "Write unit tests for auth"
+huginn --yolo -p "Write unit tests for auth"
 
 # Pick a provider / model for this session
-raven --provider openrouter -m x-ai/grok-4.5 -p "Task"
-raven --provider grok -p "Task"   # grok-4.7 via ~/.grok/auth.json (grok login)
+huginn --provider openrouter -m x-ai/grok-4.5 -p "Task"
+huginn --provider grok -p "Task"   # grok-4.7 via ~/.grok/auth.json (grok login)
 
 # Continue a previous session
-raven --resume          # resume latest
-raven --list-sessions    # browse all sessions
+huginn --resume          # resume latest
+huginn --list-sessions    # browse all sessions
 ```
 
 ### In the editor (Zed / Hearth)
 
-Raven speaks Agent Client Protocol (ACP) over stdio (`raven --acp`), so it runs
+Huginn speaks Agent Client Protocol (ACP) over stdio (`huginn --acp`), so it runs
 as an external agent inside [Zed](https://zed.dev) and
 [Hearth](https://github.com/raythurman2386/hearth). It advertises a `model`
 session config option listing every configured provider's models, so you can
@@ -96,8 +98,8 @@ switch providers and models from the editor's model selector. See
 | Parallel tool execution within a single model turn | |
 | Context-window inference + automatic compaction | |
 | JSONL session persistence + `--resume` / `--list-sessions` | |
-| Cross-session project memory (`.raven/MEMORY.md`) — a plain file, nothing hidden | |
-| ACP v1 stdio (`raven --acp`) for editor attachment (Zed, Hearth) | |
+| Cross-session project memory (`.huginn/MEMORY.md`) — a plain file, nothing hidden | |
+| ACP v1 stdio (`huginn --acp`) for editor attachment (Zed, Hearth) | |
 | Stdio MCP client (`[mcp.servers]`, ACP `mcpServers`, Agent Plugins `mcp.json`) | |
 | ratatui TUI + headless CLI | |
 
@@ -110,7 +112,7 @@ switch providers and models from the editor's model selector. See
 | [docs/usage.md](docs/usage.md) | Users | Day-to-day workflows, plan mode, parallel sub-agents |
 | [docs/configuration.md](docs/configuration.md) | Users | Config, env vars, providers, API keys, AGENTS.md |
 | [docs/example.config.toml](docs/example.config.toml) | Users | Fully-commented reference config |
-| [docs/zed_connection.md](docs/zed_connection.md) | Users | Connect Raven to Zed / Hearth via ACP |
+| [docs/zed_connection.md](docs/zed_connection.md) | Users | Connect Huginn to Zed / Hearth via ACP |
 | [docs/omarchy.md](docs/omarchy.md) | Users (Omarchy Linux) | Default agent + Agents bar panel integration |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Users | Common failure modes (streams, sandbox, ACP) |
 | [docs/tools.md](docs/tools.md) | Users + Contributors | Tool contracts, parameters, sandbox rules |
@@ -121,7 +123,7 @@ switch providers and models from the editor's model selector. See
 
 See also the full [docs index](docs/README.md) and [CHANGELOG.md](CHANGELOG.md).
 
-Raven keeps a plain, editable file at `.raven/MEMORY.md`. The first 25KB is injected into the system prompt on each run, and the `memory_update` tool lets the agent persist conventions, decisions, and context across sessions. It's just a Markdown file — open it, edit it, delete it. It remembers exactly what you (or the agent) put in that file, and nothing else.
+Huginn keeps a plain, editable file at `.huginn/MEMORY.md`. The first 25KB is injected into the system prompt on each run, and the `memory_update` tool lets the agent persist conventions, decisions, and context across sessions. It's just a Markdown file — open it, edit it, delete it. It remembers exactly what you (or the agent) put in that file, and nothing else.
 
 ---
 
@@ -145,10 +147,10 @@ Context window sizes are fetched from the model's actual metadata via Ollama's `
 
 ## Session persistence
 
-Sessions are stored as JSONL under `.raven/sessions/`:
+Sessions are stored as JSONL under `.huginn/sessions/`:
 
 ```
-.raven/sessions/
+.huginn/sessions/
   2026-08-17T12-34-56-12345-0001/          # collision-proof ID (timestamp + PID + counter)
     summary.json                             # metadata: id, model, timestamps, title
     messages.jsonl                           # one ChatMessage per line (append-only)
@@ -164,11 +166,11 @@ Sessions are stored as JSONL under `.raven/sessions/`:
 
 **Usage:**
 ```bash
-raven --resume            # continue the most recent session
-raven --resume <id>       # continue a specific session by ID
-raven --list-sessions     # browse all sessions and their metadata
-raven --export            # write a local Markdown/JSON bundle of the latest session
-raven --export <id>       # export a specific session (see also TUI `/export`)
+huginn --resume            # continue the most recent session
+huginn --resume <id>       # continue a specific session by ID
+huginn --list-sessions     # browse all sessions and their metadata
+huginn --export            # write a local Markdown/JSON bundle of the latest session
+huginn --export <id>       # export a specific session (see also TUI `/export`)
 ```
 
 ---
@@ -185,7 +187,7 @@ Use `--mode plan` (or Shift+Tab in the TUI) when you want a gated plan:
 3. **Execute** — agent runs the plan with full tools
 
 ```bash
-raven --mode plan -p "Add type safety to this handler"
+huginn --mode plan -p "Add type safety to this handler"
 # (agent proposes a plan)
 # ── Approve? [Y]es / [n]o / [r]evise ──
 # y
@@ -196,7 +198,7 @@ raven --mode plan -p "Add type safety to this handler"
 
 Skip the plan step (this is the default):
 ```bash
-raven -p "Refactor this function"
+huginn -p "Refactor this function"
 ```
 
 ### TUI tips
@@ -219,19 +221,19 @@ raven -p "Refactor this function"
 
 ### For large codebases
 
-Raven injects a repo symbol map for larger workspaces (15+ source files or 80+ symbols; per-file cap 256KB). The map helps the agent navigate structure without reading entire files:
+Huginn injects a repo symbol map for larger workspaces (15+ source files or 80+ symbols; per-file cap 256KB). The map helps the agent navigate structure without reading entire files:
 ```bash
-raven --context-window 131072 -p "Find all database queries and optimize them"
+huginn --context-window 131072 -p "Find all database queries and optimize them"
 ```
 
 If the agent seems stuck compacting, raise the threshold:
 ```bash
-raven --compact-threshold 0.85 -p "Task"
+huginn --compact-threshold 0.85 -p "Task"
 ```
 
 ### Workspace memory
 
-Raven keeps a plain `.raven/MEMORY.md` file across sessions. The agent can read and update it:
+Huginn keeps a plain `.huginn/MEMORY.md` file across sessions. The agent can read and update it:
 - Use `memory_search` to find past decisions
 - Use `memory_update` to record conventions or context
 
@@ -250,16 +252,16 @@ Create an `AGENTS.md` or `CLAUDE.md` file in your repo root:
 - Follow the style guide in docs/STYLE.md
 ```
 
-Raven auto-loads this and injects it into every session. You can also override per-session:
+Huginn auto-loads this and injects it into every session. You can also override per-session:
 ```bash
-raven --rules "Use Python 3.11+; no type hints optional." -p "Task"
+huginn --rules "Use Python 3.11+; no type hints optional." -p "Task"
 ```
 
 ### Multi-agent tasks
 
 Use `--parallel` to spawn multiple focused agents and gather results in parallel:
 ```bash
-raven --parallel \
+huginn --parallel \
   "Summarize the architecture" \
   "List all TODOs" \
   "Check for secrets in git history"
@@ -297,13 +299,13 @@ The eval suite runs real agent tasks against a live model endpoint and grades th
 ```bash
 cargo build --release
 
-# Against Ollama Cloud (needs RAVEN_API_KEY)
+# Against Ollama Cloud (needs HUGINN_API_KEY)
 python3 evals/run.py --model qwen3.8 --host https://api.ollama.ai/api/v1
 
 # Against local Ollama
 python3 evals/run.py --model qwen3.8:latest --host http://127.0.0.1:11434/v1
 
-# Against OpenRouter (needs RAVEN_API_KEY)
+# Against OpenRouter (needs HUGINN_API_KEY)
 python3 evals/run.py --model grok-4.5 --host https://openrouter.ai/api/v1
 
 # View results
@@ -325,12 +327,12 @@ SearXNG fallback, ACP) are covered in
 
 ## What talks to the network
 
-Raven makes exactly two kinds of outbound requests, both under your control:
+Huginn makes exactly two kinds of outbound requests, both under your control:
 
 1. **LLM requests** to your configured endpoint (Ollama local, Ollama Cloud, OpenRouter, …).
 2. **Optional** `web_search` requests to DuckDuckGo or a self-hosted SearXNG instance.
 
-That's the whole list. No update checks run on their own (self-update is an explicit `raven self update`), nothing is collected or reported, and all session state — JSONL transcripts, debug-event logs, git-diff snapshots — lives as plain files under `.raven/` on your disk. If you want to verify that, the network calls are in `crates/raven-agent/src/stream.rs` and `crates/raven-tools/src/web.rs`.
+That's the whole list. No update checks run on their own (self-update is an explicit `huginn self update`), nothing is collected or reported, and all session state — JSONL transcripts, debug-event logs, git-diff snapshots — lives as plain files under `.huginn/` on your disk. If you want to verify that, the network calls are in `crates/huginn-agent/src/stream.rs` and `crates/huginn-tools/src/web.rs`.
 
 ---
 
@@ -338,20 +340,20 @@ That's the whole list. No update checks run on their own (self-update is an expl
 
 ```
 crates/
-  raven-proto/      # Messages, events, errors, plan types, TodoItem, Goal
-  raven-tokenizer/  # Pure-Rust token counter (no vocab file)
-  raven-config/     # Layered config.toml, provider presets, onboarding
-  raven-persist/    # JSONL sessions, session-scoped goal/todos, memory
-  raven-sandbox/    # Path confinement, Landlock/seccomp/rlimits
-  raven-tools/      # Tool implementations, git, patch, web, skills, repomap, MCP
-  raven-agent/      # Streaming loop, compaction, parallel sub-agents
-  raven-tui/        # ratatui TUI, markdown, slash commands
-  raven-acp/        # Agent Client Protocol v1 stdio adapter
-  raven-testutil/   # outer_sandbox_restrictive, home_env_lock
+  huginn-proto/      # Messages, events, errors, plan types, TodoItem, Goal
+  huginn-tokenizer/  # Pure-Rust token counter (no vocab file)
+  huginn-config/     # Layered config.toml, provider presets, onboarding
+  huginn-persist/    # JSONL sessions, session-scoped goal/todos, memory
+  huginn-sandbox/    # Path confinement, Landlock/seccomp/rlimits
+  huginn-tools/      # Tool implementations, git, patch, web, skills, repomap, MCP
+  huginn-agent/      # Streaming loop, compaction, parallel sub-agents
+  huginn-tui/        # ratatui TUI, markdown, slash commands
+  huginn-acp/        # Agent Client Protocol v1 stdio adapter
+  huginn-testutil/   # outer_sandbox_restrictive, home_env_lock
 src/
-  main.rs           # clap CLI, one binary named raven
+  main.rs           # clap CLI, one binary named huginn
   runner.rs         # Headless runner
-  update.rs         # Signed self-update (`raven self update`)
+  update.rs         # Signed self-update (`huginn self update`)
 evals/              # Agent evaluation suite
 docs/               # Documentation
 ```

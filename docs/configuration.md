@@ -1,6 +1,6 @@
 # Configuration guide
 
-**Raven** reads a layered **TOML config file** in addition to CLI flags and environment variables. Precedence (highest wins): **CLI flag > env var > workspace config `.raven/config.toml` > global config `~/.raven/config.toml` > built-in default**.
+**Huginn** reads a layered **TOML config file** in addition to CLI flags and environment variables. Precedence (highest wins): **CLI flag > env var > workspace config `.huginn/config.toml` > global config `~/.huginn/config.toml` > built-in default**.
 
 See the [root README quick start](../README.md#quick-start) for the full flag list.
 
@@ -10,48 +10,48 @@ See the [root README quick start](../README.md#quick-start) for the full flag li
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `RAVEN_PROVIDER` | `grok` | Active provider name (overridden by `--provider`) |
-| `RAVEN_API_KEY` | _(unset)_ | Universal Bearer token override for the active provider |
+| `HUGINN_PROVIDER` | `grok` | Active provider name (overridden by `--provider`) |
+| `HUGINN_API_KEY` | _(unset)_ | Universal Bearer token override for the active provider |
 | `OPENROUTER_API_KEY` | _(unset)_ | Bearer token for the `openrouter` provider |
 | `OLLAMA_API_KEY` | _(unset)_ | Bearer token for the `ollama` provider (Ollama Cloud / authenticated hosts) |
 | `OPENCODE_GO_API_KEY` | _(unset)_ | Bearer token for the `opencode-go` provider (OpenCode Go subscription) |
-| `RAVEN_GROK_AUTH` | _(unset)_ | Override path to Grok Build `auth.json` (default `~/.grok/auth.json`) |
-| `GROK_HOME` | _(unset)_ | Grok Build home dir; Raven reads `$GROK_HOME/auth.json` when set |
-| `RAVEN_GROK_PROXY_BASE_URL` / `GROK_CLI_CHAT_PROXY_BASE_URL` | `https://cli-chat-proxy.grok.com/v1` | Grok subscription chat-proxy base URL |
-| `RAVEN_GROK_CLIENT_VERSION` | `grok --version` if `>= 1.0.13`, else `1.0.13` | Semver sent as `x-grok-client-version`. The proxy rejects Raven's package version below this floor (HTTP 426). |
-| `RAVEN_REASONING_EFFORT` | _(unset)_ | Reasoning effort (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`). Also `--effort` and `/effort`. |
-| `RAVEN_MAX_ITER` / `OG_MAX_ITER` | `60` | Max agent iterations per run |
-| `RAVEN_CONTEXT_WINDOW` / `OG_CONTEXT_WINDOW` | _(inferred)_ | Override the model's context window size (tokens) |
-| `RAVEN_COMPACT_THRESHOLD` / `OG_COMPACT_THRESHOLD` | `0.75` | Fraction of usable context at which compaction triggers |
-| `RUST_LOG` | _(unset)_ | `tracing` filter (e.g. `debug`, `raven=trace`) |
-| `RAVEN_SANDBOX_NETWORK_BLOCK` | _(unset)_ | Set to `0` to skip the seccomp network block (Linux only) |
-| `RAVEN_SEARXNG_URL` | _(unset)_ | Optional self-hosted SearXNG base URL for `web_search` (e.g. `http://127.0.0.1:8080`) |
-| `RAVEN_SEARXNG_ENGINES` | _(unset)_ | Optional comma-separated SearXNG engine list (e.g. `google,bing`) |
+| `HUGINN_GROK_AUTH` | _(unset)_ | Override path to Grok Build `auth.json` (default `~/.grok/auth.json`) |
+| `GROK_HOME` | _(unset)_ | Grok Build home dir; Huginn reads `$GROK_HOME/auth.json` when set |
+| `HUGINN_GROK_PROXY_BASE_URL` / `GROK_CLI_CHAT_PROXY_BASE_URL` | `https://cli-chat-proxy.grok.com/v1` | Grok subscription chat-proxy base URL |
+| `HUGINN_GROK_CLIENT_VERSION` | `grok --version` if `>= 1.0.13`, else `1.0.13` | Semver sent as `x-grok-client-version`. The proxy rejects Huginn's package version below this floor (HTTP 426). |
+| `HUGINN_REASONING_EFFORT` | _(unset)_ | Reasoning effort (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`). Also `--effort` and `/effort`. |
+| `HUGINN_MAX_ITER` / `OG_MAX_ITER` | `60` | Max agent iterations per run |
+| `HUGINN_CONTEXT_WINDOW` / `OG_CONTEXT_WINDOW` | _(inferred)_ | Override the model's context window size (tokens) |
+| `HUGINN_COMPACT_THRESHOLD` / `OG_COMPACT_THRESHOLD` | `0.75` | Fraction of usable context at which compaction triggers |
+| `RUST_LOG` | _(unset)_ | `tracing` filter (e.g. `debug`, `huginn=trace`) |
+| `HUGINN_SANDBOX_NETWORK_BLOCK` | _(unset)_ | Set to `0` to skip the seccomp network block (Linux only) |
+| `HUGINN_SEARXNG_URL` | _(unset)_ | Optional self-hosted SearXNG base URL for `web_search` (e.g. `http://127.0.0.1:8080`) |
+| `HUGINN_SEARXNG_ENGINES` | _(unset)_ | Optional comma-separated SearXNG engine list (e.g. `google,bing`) |
 
 ### Examples
 
 ```bash
 # Use the openrouter provider (endpoint + default model from config)
-export RAVEN_PROVIDER=openrouter
-raven -p "Explain this repo"
+export HUGINN_PROVIDER=openrouter
+huginn -p "Explain this repo"
 
 # Point the ollama provider at a remote GPU box
-# (via config.toml [providers.ollama] base_url, or RAVEN_API_KEY for auth)
-raven -p "Explain this repo"
+# (via config.toml [providers.ollama] base_url, or HUGINN_API_KEY for auth)
+huginn -p "Explain this repo"
 
 # Allow more iterations for a big task
-export RAVEN_MAX_ITER=100
-raven -p "Refactor the whole codebase"
+export HUGINN_MAX_ITER=100
+huginn -p "Refactor the whole codebase"
 
 # Debug logging
-RUST_LOG=raven=debug raven -p "..."
+RUST_LOG=huginn=debug huginn -p "..."
 ```
 
 ---
 
 ## Providers
 
-Raven talks to any OpenAI-compatible `/v1/chat/completions` endpoint through a
+Huginn talks to any OpenAI-compatible `/v1/chat/completions` endpoint through a
 **named provider**. A provider bundles the endpoint, auth, and default model so
 switching between local (Ollama) and cloud (OpenRouter / Ollama Cloud) is a
 single unit — `--provider`, `/provider`, or the `provider` config key.
@@ -73,7 +73,7 @@ Add a `[providers.<name>]` table to `config.toml` to override a preset or add
 your own:
 
 ```toml
-# ~/.raven/config.toml
+# ~/.huginn/config.toml
 provider = "ollama"   # active provider
 
 [providers.ollama]
@@ -106,7 +106,7 @@ api_key_env = "GROQ_API_KEY"
 default_model = "llama-3.3-70b-versatile"
 ```
 
-If `api_key_env` is omitted, raven falls back to the built-in mapping for
+If `api_key_env` is omitted, huginn falls back to the built-in mapping for
 known providers (`OPENROUTER_API_KEY` / `OLLAMA_API_KEY` /
 `OPENCODE_GO_API_KEY`), then a conventional
 `{NAME}_API_KEY` (e.g. `GROQ_API_KEY` for a provider named `groq`).
@@ -119,47 +119,47 @@ OpenAI-compatible endpoint. It's a built-in preset, so no config is required:
 
 ```bash
 export OPENCODE_GO_API_KEY="your-go-key"
-raven --provider opencode-go -m glm-5.3-flash -p "..."
+huginn --provider opencode-go -m glm-5.3-flash -p "..."
 ```
 
 Models come from the OpenAI-style `https://opencode.ai/zen/go/v1/models`
 list (e.g. `deepseek-v4-flash`, `deepseek-v4-pro`, `glm-5.3-flash`, `kimi-k3`,
 `mimo-v2.5`, `qwen3.8-max`, `minimax-m3`). Usage is dollar-bounded (about
-$12 / 5h, $30 / week, $60 / month) — raven surfaces those as normal HTTP
+$12 / 5h, $30 / week, $60 / month) — huginn surfaces those as normal HTTP
 429/402 errors. `/model` autocomplete lists all models returned by the
 live `/models` endpoint.
 
 ### Grok (subscription / Grok Build login)
 
-The `grok` provider bills against your Grok Build / SuperGrok seat. Raven
+The `grok` provider bills against your Grok Build / SuperGrok seat. Huginn
 reuses the SpaceXAI OIDC session that `grok login` writes to
 `~/.grok/auth.json`, refreshes it when near expiry, and calls the CLI chat
 proxy (`/v1/chat/completions`) with the required client-identity headers.
 
 ```bash
 grok login   # once, in Grok Build
-raven --provider grok -m grok-4.7 -p "Explain this repo"
+huginn --provider grok -m grok-4.7 -p "Explain this repo"
 ```
 
 This is **not** the metered developer API at `api.x.ai` (that path uses
 `XAI_API_KEY`). Pointing `grok` at a custom proxy is supported via
-`RAVEN_GROK_PROXY_BASE_URL` / `GROK_CLI_CHAT_PROXY_BASE_URL` or
-`[providers.grok] base_url`. Override the auth file with `RAVEN_GROK_AUTH`
+`HUGINN_GROK_PROXY_BASE_URL` / `GROK_CLI_CHAT_PROXY_BASE_URL` or
+`[providers.grok] base_url`. Override the auth file with `HUGINN_GROK_AUTH`
 or `$GROK_HOME/auth.json`. The proxy requires `x-grok-client-version` to be a
-Grok CLI semver of at least 1.0.13; Raven sends the installed `grok --version`
-when it meets that floor. Set `RAVEN_GROK_CLIENT_VERSION` to override it.
+Grok CLI semver of at least 1.0.13; Huginn sends the installed `grok --version`
+when it meets that floor. Set `HUGINN_GROK_CLIENT_VERSION` to override it.
 
 ### Selecting the active provider
 
-Precedence (highest wins): **`--provider` flag > `RAVEN_PROVIDER` env > config `provider` key > built-in `grok`**.
+Precedence (highest wins): **`--provider` flag > `HUGINN_PROVIDER` env > config `provider` key > built-in `grok`**.
 
 ```bash
 # CLI flag
-raven --provider openrouter -p "..."
+huginn --provider openrouter -p "..."
 
 # Env var
-export RAVEN_PROVIDER=openrouter
-raven -p "..."
+export HUGINN_PROVIDER=openrouter
+huginn -p "..."
 ```
 
 ### Switching at runtime
@@ -174,7 +174,7 @@ raven -p "..."
 Keys are resolved per provider, first non-empty wins:
 
 1. Config-file `api_key` on that provider (if set — **not** overridden by env)
-2. `RAVEN_API_KEY` (universal override)
+2. `HUGINN_API_KEY` (universal override)
 3. The provider's declared `api_key_env` (or built-in mapping, e.g.
    `OPENROUTER_API_KEY` / `OLLAMA_API_KEY`)
 
@@ -185,21 +185,21 @@ it wins for that provider.
 ```bash
 # OpenRouter
 export OPENROUTER_API_KEY="sk-or-..."
-raven --provider openrouter -p "..."
+huginn --provider openrouter -p "..."
 
 # Ollama Cloud / remote
 export OLLAMA_API_KEY="your-key-here"
-raven -p "..."
+huginn -p "..."
 
 # Any custom provider declared with api_key_env
 export GROQ_API_KEY="gsk_..."
-raven --provider groq -p "..."
+huginn --provider groq -p "..."
 ```
 
 ### Removed legacy surface
 
-The old flat `--host` / `--api-key` flags and the `RAVEN_HOST` / `OLLAMA_HOST` /
-`RAVEN_MODEL` / `OLLAMA_MODEL` env vars are **removed**. Endpoint + auth now
+The old flat `--host` / `--api-key` flags and the `HUGINN_HOST` / `OLLAMA_HOST` /
+`HUGINN_MODEL` / `OLLAMA_MODEL` env vars are **removed**. Endpoint + auth now
 come from `[providers.*]` config and provider-scoped key env vars. `--model`
 remains as a per-session override of the active provider's `default_model`.
 
@@ -225,7 +225,7 @@ Layered TOML config, loaded from the workspace first (higher priority), then the
 | `searxng_engines` | _(unset)_ | Optional SearXNG engine list (e.g. `["google", "bing"]`) |
 
 ```toml
-# .raven/config.toml  (workspace)  or  ~/.raven/config.toml  (global)
+# .huginn/config.toml  (workspace)  or  ~/.huginn/config.toml  (global)
 provider = "ollama"
 
 [providers.ollama]
@@ -252,11 +252,11 @@ CLI flags still win over config file values; env vars take precedence over the c
 
 ```bash
 # Point web_search at a local SearXNG instance
-export RAVEN_SEARXNG_URL="http://127.0.0.1:8080"
-raven -p "What's the latest Rust edition?"
+export HUGINN_SEARXNG_URL="http://127.0.0.1:8080"
+huginn -p "What's the latest Rust edition?"
 
 # Optionally pin which engines SearXNG should use (comma-separated)
-export RAVEN_SEARXNG_ENGINES="google,bing"
+export HUGINN_SEARXNG_ENGINES="google,bing"
 ```
 
 Or via the config file:
@@ -266,13 +266,13 @@ searxng_url = "https://searx.example.com"
 searxng_engines = ["google", "bing"]
 ```
 
-Precedence: `RAVEN_SEARXNG_URL` env var > config-file `searxng_url`. `RAVEN_SEARXNG_ENGINES` > config-file `searxng_engines`.
+Precedence: `HUGINN_SEARXNG_URL` env var > config-file `searxng_url`. `HUGINN_SEARXNG_ENGINES` > config-file `searxng_engines`.
 
 ---
 
 ## MCP servers
 
-Raven is an MCP **client**. It speaks stdio JSON-RPC to servers you configure
+Huginn is an MCP **client**. It speaks stdio JSON-RPC to servers you configure
 natively, and ACP editors may also forward servers on `session/new` /
 `session/load` / `session/resume` (ACP requires stdio; HTTP/SSE are not
 advertised). Discovered tools are merged into the model's tool list as
@@ -280,7 +280,7 @@ advertised). Discovered tools are merged into the model's tool list as
 mode includes only tools the server marks `readOnlyHint: true`.
 
 ```toml
-# ~/.raven/config.toml  (or workspace .raven/config.toml)
+# ~/.huginn/config.toml  (or workspace .huginn/config.toml)
 [mcp.servers.sysmetrics]
 command = "sysmetrics-mcp"
 args = ["--temp-unit", "celsius", "--max-processes", "10"]
@@ -305,14 +305,14 @@ Behavior:
 
 - When configured, `web_search` queries `GET {base}/search?q=…&format=json` and returns up to 10 results (title + URL + short snippet).
 - The base URL must be `http://` or `https://` only; `file://`, `data://`, etc. are rejected.
-- No API key is required for a typical SearXNG install (`RAVEN_SEARXNG_KEY` is not implemented — SearXNG instances are usually open or IP-restricted).
+- No API key is required for a typical SearXNG install (`HUGINN_SEARXNG_KEY` is not implemented — SearXNG instances are usually open or IP-restricted).
 - If SearXNG is **unreachable**, returns an HTTP error, or returns empty/unparseable results, `web_search` automatically **falls back to DuckDuckGo** so search keeps working. SearXNG is an opt-in enhancement, never a requirement.
 
 ---
 
 ## Context window
 
-The context window is fetched from the model's actual metadata via Ollama's `/api/show` endpoint when `--context-window` / `RAVEN_CONTEXT_WINDOW` / `OG_CONTEXT_WINDOW` are unset. This returns the real `context_length` from the model file. If the API is unreachable, a name-based heuristic is used as fallback:
+The context window is fetched from the model's actual metadata via Ollama's `/api/show` endpoint when `--context-window` / `HUGINN_CONTEXT_WINDOW` / `OG_CONTEXT_WINDOW` are unset. This returns the real `context_length` from the model file. If the API is unreachable, a name-based heuristic is used as fallback:
 
 | Model name contains | Inferred window |
 |---|---|
@@ -327,9 +327,9 @@ The context window is fetched from the model's actual metadata via Ollama's `/ap
 Override it if the inference is wrong:
 
 ```bash
-raven --context-window 65536 -p "..."
-RAVEN_CONTEXT_WINDOW=65536 raven -p "..."
-OG_CONTEXT_WINDOW=65536 raven -p "..."
+huginn --context-window 65536 -p "..."
+HUGINN_CONTEXT_WINDOW=65536 huginn -p "..."
+OG_CONTEXT_WINDOW=65536 huginn -p "..."
 ```
 
 The `max_tokens` output budget is derived as `context_window / 8`, clamped to `[1024, 32768]`. Per iteration, it is further clamped so `prompt_tokens + max_tokens + 64 ≤ context_window`.
@@ -355,7 +355,7 @@ See [architecture.md#compaction](architecture.md#compaction) for the algorithm.
 Leave `OLLAMA_API_KEY` unset and keep the `ollama` provider on `localhost` — no `Authorization` header is sent.
 
 ```bash
-raven -p "Explain this repo"
+huginn -p "Explain this repo"
 ```
 
 ### Ollama Cloud / remote
@@ -365,28 +365,28 @@ export OLLAMA_API_KEY="your-key-here"
 # point the ollama provider at the cloud endpoint in config.toml:
 #   [providers.ollama]
 #   base_url = "https://ollama.com/v1"
-raven -m llama3.1 -p "Explain this repo"
+huginn -m llama3.1 -p "Explain this repo"
 ```
 
 ### OpenRouter
 
 ```bash
 export OPENROUTER_API_KEY="sk-or-..."
-raven --provider openrouter -p "..."
+huginn --provider openrouter -p "..."
 ```
 
 ### Security notes
 
 - **Prefer the provider-scoped env var** (`OLLAMA_API_KEY` / `OPENROUTER_API_KEY`) over a config-file `api_key` so the secret does not land in a committed file or shell history.
 - The sandboxed `run_shell` tool strips these env vars from child processes:
-  - `RAVEN_API_KEY`
+  - `HUGINN_API_KEY`
   - `OLLAMA_API_KEY`
   - `OPENROUTER_API_KEY`
   - `OPENAI_API_KEY`
   - `XAI_API_KEY`
   - `ANTHROPIC_API_KEY`
   - `AWS_SECRET_ACCESS_KEY`
-- **Raven** uses `rustls` with webpki roots for TLS.
+- **Huginn** uses `rustls` with webpki roots for TLS.
 
 ---
 
@@ -417,7 +417,7 @@ Contents (up to 8000 chars) are appended to the system prompt under a `--- Proje
 Use `--rules` for session-specific rules that should not be committed:
 
 ```bash
-raven --rules "Focus only on the auth module. Ignore everything else." -p "Review security"
+huginn --rules "Focus only on the auth module. Ignore everything else." -p "Review security"
 ```
 
 `--rules` content is appended after any `AGENTS.md` content, under a `--- Session rules ---` header.

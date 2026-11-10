@@ -21,7 +21,7 @@ Usage:
     # Specific models
     python3 evals/run_all_models.py --models qwen3.5-coder,deepseek-v4-pro:cloud
     
-    # Against Ollama Cloud (requires RAVEN_API_KEY)
+    # Against Ollama Cloud (requires HUGINN_API_KEY)
     python3 evals/run_all_models.py --host https://api.ollama.ai/api/v1 --api-key sk-...
 """
 
@@ -141,9 +141,9 @@ def run_eval(model: str, host: str, api_key: Optional[str] = None) -> tuple[bool
     
     Returns: (success: bool, error_message: str or "")
     """
-    raven_binary = Path(__file__).parent.parent / "target" / "release" / "huginn"
-    if not raven_binary.exists():
-        return False, f"Raven binary not found: {raven_binary}. Run: cargo build --release"
+    huginn_binary = Path(__file__).parent.parent / "target" / "release" / "huginn"
+    if not huginn_binary.exists():
+        return False, f"Huginn binary not found: {huginn_binary}. Run: cargo build --release"
 
     cmd = [
         sys.executable,
@@ -191,7 +191,7 @@ def main():
     )
     parser.add_argument(
         "--api-key",
-        help="Bearer token for authentication (or set RAVEN_API_KEY env var)",
+        help="Bearer token for authentication (or set HUGINN_API_KEY env var)",
     )
     parser.add_argument(
         "--dry-run",
@@ -209,7 +209,7 @@ def main():
     )
     args = parser.parse_args()
 
-    api_key = args.api_key or os.getenv("RAVEN_API_KEY")
+    api_key = args.api_key or os.getenv("HUGINN_API_KEY")
 
     # Get models to test
     if args.models:

@@ -1,9 +1,9 @@
 # ---------------------------------------------------------------------------
-# Raven configuration — complete reference example
+# Huginn configuration — complete reference example
 #
 # Drop this at EITHER of two locations (both optional):
-#   ~/.raven/config.toml        (global, applies everywhere)
-#   .raven/config.toml          (per-workspace, overrides the global file)
+#   ~/.huginn/config.toml        (global, applies everywhere)
+#   .huginn/config.toml          (per-workspace, overrides the global file)
 #
 # Precedence (highest wins):
 #   CLI flag > environment variable > workspace config > global config
@@ -21,25 +21,25 @@
 
 # The active provider. Names a table from [providers.<name>] below, or one of
 # the built-in presets: "grok", "ollama", "openrouter", and "opencode-go".
-# Overridden by: --provider flag, RAVEN_PROVIDER env var.
+# Overridden by: --provider flag, HUGINN_PROVIDER env var.
 #provider = "grok"
 
 # --- Context management -----------------------------------------------------
 
-# Force the context window size (tokens). When unset, Raven infers it from the
+# Force the context window size (tokens). When unset, Huginn infers it from the
 # model metadata (Ollama /api/show) and falls back to a name-based heuristic.
-# Overridden by: --context-window, RAVEN_CONTEXT_WINDOW / OG_CONTEXT_WINDOW.
+# Overridden by: --context-window, HUGINN_CONTEXT_WINDOW / OG_CONTEXT_WINDOW.
 #context_window = 131072
 
 # Fraction of usable context at which compaction triggers (0.0–1.0).
 # Lower = compact earlier; raise it (riskier) to compact later.
-# Overridden by: --compact-threshold, RAVEN_COMPACT_THRESHOLD.
+# Overridden by: --compact-threshold, HUGINN_COMPACT_THRESHOLD.
 #compact_threshold = 0.75
 
 # --- Agent loop -------------------------------------------------------------
 
 # Maximum agent iterations per run before the loop stops.
-# Overridden by: --max-iterations? No — RAVEN_MAX_ITER / OG_MAX_ITER env.
+# Overridden by: --max-iterations? No — HUGINN_MAX_ITER / OG_MAX_ITER env.
 #max_iterations = 60
 
 # Interaction mode. "agent" (default): full tools, no plan step.
@@ -68,11 +68,11 @@
 
 # Optional self-hosted SearXNG instance for web_search. When unset, web_search
 # uses DuckDuckGo. If SearXNG is unreachable, it falls back to DuckDuckGo.
-# Overridden by: RAVEN_SEARXNG_URL env.
+# Overridden by: HUGINN_SEARXNG_URL env.
 #searxng_url = "https://searx.example.com"
 
 # Optional SearXNG engine list (comma-separated env / TOML array).
-# Overridden by: RAVEN_SEARXNG_ENGINES env.
+# Overridden by: HUGINN_SEARXNG_ENGINES env.
 #searxng_engines = ["google", "bing"]
 
 # ---------------------------------------------------------------------------
@@ -120,9 +120,9 @@ default_model = "deepseek-v4-flash"
 # Built-in default: https://cli-chat-proxy.grok.com/v1
 # Uses your Grok Build / SuperGrok subscription via ~/.grok/auth.json
 # (run `grok login` first). No API key env var — session OAuth instead.
-# Override the proxy with RAVEN_GROK_PROXY_BASE_URL or GROK_CLI_CHAT_PROXY_BASE_URL.
+# Override the proxy with HUGINN_GROK_PROXY_BASE_URL or GROK_CLI_CHAT_PROXY_BASE_URL.
 # x-grok-client-version follows `grok --version` (floor 1.0.13). Override with
-# RAVEN_GROK_CLIENT_VERSION if the proxy raises that floor before Raven does.
+# HUGINN_GROK_CLIENT_VERSION if the proxy raises that floor before Huginn does.
 base_url = "https://cli-chat-proxy.grok.com/v1"
 default_model = "grok-4.7"
 
@@ -139,7 +139,7 @@ default_model = "grok-4.7"
 # API key precedence (highest to lowest, per provider)
 # ---------------------------------------------------------------------------
 # 1. Config-file api_key on that provider (if set — NOT overridden by env)
-# 2. RAVEN_API_KEY (universal override, works for all providers)
+# 2. HUGINN_API_KEY (universal override, works for all providers)
 # 3. For `grok`: SpaceXAI session token from ~/.grok/auth.json (refreshed)
 # 4. The provider's declared api_key_env, or built-in mapping
 #    (OPENROUTER_API_KEY / OLLAMA_API_KEY / OPENCODE_GO_API_KEY), else a
@@ -152,7 +152,7 @@ default_model = "grok-4.7"
 # ---------------------------------------------------------------------------
 # MCP servers (stdio)
 # ---------------------------------------------------------------------------
-# Raven connects these on TUI/headless startup, and ACP editors may also
+# Huginn connects these on TUI/headless startup, and ACP editors may also
 # forward servers on session/new. Tools are advertised as `{name}__{tool}`
 # (e.g. sysmetrics__get_cpu_metrics). HTTP/SSE transports are not supported.
 #

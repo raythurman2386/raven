@@ -1,4 +1,4 @@
-# Raven TUI Polish — Phased UX Program
+# Huginn TUI Polish — Phased UX Program
 
 **North star:** *A serious operator's cockpit for a local agent* — dense, local,
 honest, keyboard-first, terminal-native. Not a chat app with a theme, and not a
@@ -18,7 +18,7 @@ agent-loop behavior change unless fixing a TUI bug.
 
 ## Current state (keybinds verified at v0.6.1)
 
-- `crates/raven-tui/src/lib.rs` — event loop, layout, draw_ui, input, mouse, plan handling,
+- `crates/huginn-tui/src/lib.rs` — event loop, layout, draw_ui, input, mouse, plan handling,
   agent-turn spawn. Extract only when a surface stabilizes.
 - Already extracted and healthy: `blocks.rs`, `completion.rs`, `dispatch.rs`,
   `markdown.rs`, `render.rs`, `selection.rs`, `status.rs`, `theme.rs`.

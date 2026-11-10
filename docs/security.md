@@ -1,11 +1,11 @@
 # Security model
 
-This document describes what **Raven** protects against, what it does **not**
+This document describes what **Huginn** protects against, what it does **not**
 protect against, and why each boundary is what it is. It is written to be
 reviewable — the goal is an honest, auditable threat model, not a marketing
 claim.
 
-Raven is a local coding-agent harness. It runs an LLM agent loop that can read,
+Huginn is a local coding-agent harness. It runs an LLM agent loop that can read,
 write, and execute commands in a workspace. The security question is: **what
 can the agent do, and what stops it from doing more?**
 
@@ -13,7 +13,7 @@ can the agent do, and what stops it from doing more?**
 
 ## Threat model
 
-Raven's primary threat is a **compromised or misbehaving model** — the LLM
+Huginn's primary threat is a **compromised or misbehaving model** — the LLM
 producing tool calls that read, write, or execute something it shouldn't. This
 could be:
 
@@ -24,15 +24,15 @@ could be:
 - **Resource exhaustion** — a runaway command (fork bomb, huge write, infinite loop).
 - **Destructive commands** — `rm -rf /`, `mkfs`, etc.
 
-Raven is **not** a defense against a malicious *user* who already has shell
-access to the machine. If the user can run `raven`, they can run anything.
-Raven confines the *agent*, not the user.
+Huginn is **not** a defense against a malicious *user* who already has shell
+access to the machine. If the user can run `huginn`, they can run anything.
+Huginn confines the *agent*, not the user.
 
 ---
 
 ## Defense layers
 
-Raven applies several independent layers. Each is best-effort on some
+Huginn applies several independent layers. Each is best-effort on some
 platforms; none is a complete boundary on its own. Defense-in-depth is the
 point.
 
@@ -60,18 +60,18 @@ The child is granted **read/write** under the workspace, any explicit extra
 roots (git worktree siblings), and `/dev`; **read-only** for `/usr`, `/bin`,
 `/lib`, `/lib64`, `/etc`, `/proc`, and `$HOME`. Everything else is denied by
 the kernel. The process temp dir is **not** granted — children get `TMPDIR`
-pinned under `workspace/.raven/tmp`. Granting `/tmp` was a real escape:
-`run_shell` could write `/tmp/raven_eval_escape_probe.txt` from a normal
+pinned under `workspace/.huginn/tmp`. Granting `/tmp` was a real escape:
+`run_shell` could write `/tmp/huginn_eval_escape_probe.txt` from a normal
 home-directory workspace.
 
 **Why ABI V3 + pinned caches:** Landlock ABI V1 does not include `REFER`.
 Without it, `rename`/`link` across directories fails with `EXDEV` even under
 the same allowed tree — which is how `rustc` stages `.rmeta` into `target/`.
-Raven therefore:
+Huginn therefore:
 
 1. Uses Landlock **ABI V3** so `AccessFs::from_all` includes `REFER`.
 2. Pins `CARGO_HOME`, `CARGO_TARGET_DIR`, `TMPDIR`, and the npm cache under
-   `workspace/.raven/` so package caches do not hardlink from `$HOME` into
+   `workspace/.huginn/` so package caches do not hardlink from `$HOME` into
    `target/` across separate hierarchies.
 3. Grants `$HOME` **read-only** (not RW) so git can read `~/.gitconfig` and
    rustup can read toolchains, without letting builds write caches into HOME.
@@ -79,12 +79,12 @@ Raven therefore:
 **Why /dev is allowed:** git and many tools need `/dev/null` open for
 read+write.
 
-**Escape hatch:** `RAVEN_SANDBOX_LANDLOCK=0` skips Landlock (tests / recovery).
+**Escape hatch:** `HUGINN_SANDBOX_LANDLOCK=0` skips Landlock (tests / recovery).
 
 **Platforms:** Linux only (Landlock is a Linux LSM, kernel 5.13+; REFER needs
 5.19+ / ABI V2+).
 
-**Limitation:** Best-effort. If the kernel doesn't support Landlock, Raven logs
+**Limitation:** Best-effort. If the kernel doesn't support Landlock, Huginn logs
 a warning and continues without it. The `CompatLevel::BestEffort` mode means
 unsupported features are silently downgraded — a security reviewer should
 verify the kernel supports Landlock.
@@ -105,12 +105,12 @@ anywhere over the network.
 **Platforms:** Linux only (seccomp is a Linux feature). Supported arches:
 x86_64, aarch64, riscv64.
 
-**Limitation:** Best-effort. If the arch is unsupported, Raven logs and
-continues without the filter. Also, the *Raven process itself* (not the
+**Limitation:** Best-effort. If the arch is unsupported, Huginn logs and
+continues without the filter. Also, the *Huginn process itself* (not the
 subprocess) still has network access — the model API call goes through the
 parent process, which is not seccomp-confined.
 
-**Escape hatch:** Set `RAVEN_SANDBOX_NETWORK_BLOCK=0` to skip the filter
+**Escape hatch:** Set `HUGINN_SANDBOX_NETWORK_BLOCK=0` to skip the filter
 entirely (e.g. if a legitimate tool needs network access).
 
 ### 4. Resource limits (`setrlimit`)
@@ -120,7 +120,7 @@ entirely (e.g. if a legitimate tool needs network access).
 
 **Why:** Caps oversized writes (`RLIMIT_FSIZE`), runaway CPU (`RLIMIT_CPU`),
 and fd exhaustion (`RLIMIT_NOFILE`). The 248 MiB write cap stays above real
-toolchain outputs (raven's own debug test binary is ~280 MiB with full
+toolchain outputs (huginn's own debug test binary is ~280 MiB with full
 debuginfo) while bounding a runaway write.
 
 **Exemption for sanctioned verification commands:** `run_tests`, `run_lint`,
@@ -192,7 +192,7 @@ the OS-level layers above.
 
 ### 6. Tool-argument hygiene
 
-**What it does:** Before dispatch, Raven rejects tool calls whose arguments
+**What it does:** Before dispatch, Huginn rejects tool calls whose arguments
 JSON exceeds 1 MiB, are not a JSON object, or omit/mis-type required fields
 (empty `run_shell.command`, missing `read_file.path`, …). Path arguments are
 capped at 4096 characters; shell commands at 32 KiB.
@@ -203,14 +203,14 @@ OS layers.
 
 ---
 
-## What Raven does NOT do
+## What Huginn does NOT do
 
-- **No container/VM isolation.** Raven does not require Docker or any
-  container runtime. If you need stronger isolation, run Raven inside a
+- **No container/VM isolation.** Huginn does not require Docker or any
+  container runtime. If you need stronger isolation, run Huginn inside a
   container or VM yourself.
 - **No network sandbox on macOS.** seccomp is Linux-only; macOS gets rlimits
   but not the network block.
-- **No protection against a malicious user.** If the user can run `raven`,
+- **No protection against a malicious user.** If the user can run `huginn`,
   they can run anything.
 
 ---
@@ -225,8 +225,8 @@ deployment is:
    `Landlock not enforced` warnings at startup.
 3. **Keep `confirm_shell` enabled** (the default). Do not use `--yolo` unless
    you fully trust the model and the workspace.
-4. **For the strongest isolation**, run Raven inside a container or VM. Raven
-   does not require this, but it adds a boundary that Raven itself does not
+4. **For the strongest isolation**, run Huginn inside a container or VM. Huginn
+   does not require this, but it adds a boundary that Huginn itself does not
    provide.
 
 ---
@@ -236,10 +236,10 @@ deployment is:
 Run the test suite to verify the confinement layers are active:
 
 ```bash
-cargo test -p raven-tools --lib confined_child
-cargo test -p raven-tools --lib open_beneath
-cargo test -p raven-tools --lib is_direct_exec_command
-cargo test -p raven-tools --lib validate::
+cargo test -p huginn-tools --lib confined_child
+cargo test -p huginn-tools --lib open_beneath
+cargo test -p huginn-tools --lib is_direct_exec_command
+cargo test -p huginn-tools --lib validate::
 ```
 
 These tests verify that a confined child cannot read outside the Landlock
@@ -250,8 +250,8 @@ and that `open_beneath` rejects traversal/symlink escapes.
 
 ## System scope (`--system`)
 
-Raven also ships an opt-in `--system` scope for OS administration
-(`raven --system "…"`). This scope is **fundamentally different** from the
+Huginn also ships an opt-in `--system` scope for OS administration
+(`huginn --system "…"`). This scope is **fundamentally different** from the
 repo default and must be understood as a separate trust posture:
 
 - **The sandbox is rooted at `/`.** Because the entire sandbox (`Sandbox.workspace`,
@@ -261,7 +261,7 @@ repo default and must be understood as a separate trust posture:
   `openat2/RESOLVE_BENEATH` become effectively no-ops, because every path is
   under `/`. The Landlock `/` RW grant unions over the usual read-only subpaths
   (`/etc`, `/usr`, …), so those are writable too. This is intentional: it is
-  what makes `raven --system` able to manage system configuration, packages,
+  what makes `huginn --system` able to manage system configuration, packages,
   and services.
 - **The real safety net is `confirm_shell`, not the sandbox.** Every `run_shell`
   command must be user-approved unless it matches an allowlist: the general
@@ -288,21 +288,21 @@ repo default and must be understood as a separate trust posture:
 - **Network access in shell commands is blocked by default** (seccomp
   AF_INET/AF_INET6 kill) in *both* scopes. Package installs, downloads, and
   DNS-touching diagnostics fail with a deterministic SIGSYS kill unless the
-  user opts out explicitly with `RAVEN_SANDBOX_NETWORK_BLOCK=0` (e.g. in
-  `~/.raven/.env`). The opt-out is environment-level, deliberate, and
+  user opts out explicitly with `HUGINN_SANDBOX_NETWORK_BLOCK=0` (e.g. in
+  `~/.huginn/.env`). The opt-out is environment-level, deliberate, and
   survives `--yolo`: the network block is a separate layer from the
   confirmation gate.
 - **Sessions persist as an audit trail.** System-scope sessions (TUI or
-  headless one-shot) are written to `~/.raven/system/sessions/` — deliberately
+  headless one-shot) are written to `~/.huginn/system/sessions/` — deliberately
   outside `/`-rooted paths and matching the system-memory convention
-  (`~/.raven/system/MEMORY.md`). Transcripts therefore record exactly which
+  (`~/.huginn/system/MEMORY.md`). Transcripts therefore record exactly which
   commands the privileged agent ran, with the user's approval decisions
   implicit in what executed. Treat this directory as sensitive: it can contain
   the output of privileged commands.
 - **Scope is a first-class axis through the standard harness**: the TUI,
   headless one-shot runner, plan flow, and session tooling (`/new`,
   `/cleanup`, `/export`, `--resume`) all work in system scope against the
-  system store; `raven --system` with no prompt opens the same TUI as the
+  system store; `huginn --system` with no prompt opens the same TUI as the
   repo default, with the OS-administration prompt and write-anywhere sandbox.
 
 **Recommendation:** use `--system` only on a trusted, single-user machine. It
@@ -313,7 +313,7 @@ gate entirely (the denylist and network block remain); treat it as appropriate
 only where the user is the sole operator of the machine and accepts the blast
 radius. For stronger isolation of system-administration work, run it inside a
 container or VM, or audit the session transcripts under
-`~/.raven/system/sessions/` afterward.
+`~/.huginn/system/sessions/` afterward.
 
 See `docs/omarchy.md` for how the system scope complements the repo default on
 an Omarchy machine.
