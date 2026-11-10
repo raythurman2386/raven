@@ -206,7 +206,7 @@ def init_git(repo: Path) -> None:
     env.setdefault("GIT_COMMITTER_NAME", "huginn-eval")
     env.setdefault("GIT_COMMITTER_EMAIL", "eval@huginn.local")
     subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
-    # Keep planted `.env` / `.raven/` / `data/` untracked in the seed.
+    # Keep planted `.env` / `.huginn/` / `data/` untracked in the seed.
     # `git add -A` would otherwise bake them into the initial commit.
     subprocess.run(
         ["git", "add", "-A", "--", ".", ":!.env", ":!.env.*", ":!.huginn/", ":!data/"],
