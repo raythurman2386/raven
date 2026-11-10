@@ -8,7 +8,7 @@
 //!
 //! Write surface is **the workspace plus explicit extra roots**. The process
 //! temp dir is never granted: children get `TMPDIR` pinned under
-//! `workspace/.raven/tmp`, so cargo/rustc never need `/tmp`. Granting the
+//! `workspace/.huginn/tmp`, so cargo/rustc never need `/tmp`. Granting the
 //! global temp dir was the `06_sandbox_escape` hole — a confined `echo pwned
 //! > /tmp/probe` succeeded for any workspace not nested under `/tmp`
 //! (including a normal `~/src/...` checkout).
@@ -91,7 +91,7 @@ impl FsPolicy {
     /// scoped to `~/.cargo/bin` (proxies) and `~/.cargo/registry` (host
     /// registry), so `~/.cargo/credentials` — a direct child of `~/.cargo` —
     /// stays unreadable. Cargo never reads it anyway because `CARGO_HOME` is
-    /// pinned to `workspace/.raven/cargo-home`.
+    /// pinned to `workspace/.huginn/cargo-home`.
     pub(crate) fn traversal_roots(&self) -> Vec<PathBuf> {
         let mut roots = Vec::new();
         if let Ok(home) = std::env::var("HOME").map(PathBuf::from) {
@@ -178,7 +178,7 @@ impl FsPolicy {
 ///
 /// Bounds a runaway write while staying above real toolchain outputs: a
 /// debug test binary with full debuginfo can exceed 60 MiB (280 MiB for
-/// raven's own), and release/linker temporaries land in the same range.
+/// huginn's own), and release/linker temporaries land in the same range.
 /// Sanctioned verification commands skip rlimits entirely (see
 /// [`apply_rlimits`]).
 pub(crate) const RLIMIT_FSIZE_BYTES: u64 = 248 << 20;
@@ -246,8 +246,8 @@ fn apply_rlimits(skip_rlimits: bool) {
 /// Best-effort: if the kernel doesn't support Landlock, we log and continue.
 #[cfg(target_os = "linux")]
 fn apply_landlock(workspace: &Path, extra_rw: &[PathBuf]) {
-    if std::env::var("RAVEN_SANDBOX_LANDLOCK").as_deref() == Ok("0") {
-        tracing::info!("landlock disabled via RAVEN_SANDBOX_LANDLOCK=0");
+    if std::env::var("HUGINN_SANDBOX_LANDLOCK").as_deref() == Ok("0") {
+        tracing::info!("landlock disabled via HUGINN_SANDBOX_LANDLOCK=0");
         return;
     }
     use landlock::{
@@ -319,8 +319,8 @@ fn apply_seccomp_network_block(skip_network_block: bool) {
         return;
     }
 
-    if std::env::var("RAVEN_SANDBOX_NETWORK_BLOCK").as_deref() == Ok("0") {
-        tracing::info!("seccomp: network block disabled via RAVEN_SANDBOX_NETWORK_BLOCK=0");
+    if std::env::var("HUGINN_SANDBOX_NETWORK_BLOCK").as_deref() == Ok("0") {
+        tracing::info!("seccomp: network block disabled via HUGINN_SANDBOX_NETWORK_BLOCK=0");
         return;
     }
 
@@ -423,9 +423,9 @@ fn apply_os_confinement(
 /// `LANG`.
 ///
 /// Also pins build-tool caches (`CARGO_HOME`, `TMPDIR`, npm cache, …) under
-/// `raven_dir` — see `pin_build_tool_dirs`. System scope passes
-/// `~/.raven` there; repo scope the workspace's own `.raven`.
-pub fn setup_shell_env(cmd: &mut Command, workspace: &Path, raven_dir: &Path) {
+/// `huginn_dir` — see `pin_build_tool_dirs`. System scope passes
+/// `~/.huginn` there; repo scope the workspace's own `.huginn`.
+pub fn setup_shell_env(cmd: &mut Command, workspace: &Path, huginn_dir: &Path) {
     cmd.env_clear();
     cmd.env("PWD", workspace);
     for key in &["PATH", "HOME", "LANG", "TERM", "USER", "LOGNAME"] {
@@ -438,26 +438,26 @@ pub fn setup_shell_env(cmd: &mut Command, workspace: &Path, raven_dir: &Path) {
             cmd.env(key, val);
         }
     }
-    // Pin git's global config to a raven-local file so `git config`
+    // Pin git's global config to a huginn-local file so `git config`
     // (without `--local`) doesn't try to write `~/.gitconfig`, which the
     // narrowed Landlock grant no longer makes writable. Mirrors the
     // `GIT_CONFIG_NOSYSTEM=1` isolation in the git tools.
-    let git_config = raven_dir.join("gitconfig");
+    let git_config = huginn_dir.join("gitconfig");
     cmd.env("GIT_CONFIG_GLOBAL", &git_config);
-    pin_build_tool_dirs(cmd, workspace, raven_dir);
+    pin_build_tool_dirs(cmd, workspace, huginn_dir);
 }
 
-/// Pin package-manager caches and temp dirs under `raven_dir` (repo scope:
-/// `{workspace}/.raven`; system scope: `~/.raven`).
+/// Pin package-manager caches and temp dirs under `huginn_dir` (repo scope:
+/// `{workspace}/.huginn`; system scope: `~/.huginn`).
 ///
 /// Landlock no longer grants the process temp dir, so rustc/cargo/npm must
 /// not write there. Keeping `CARGO_HOME`, `CARGO_TARGET_DIR`, `TMPDIR`, and
 /// the npm cache under the Landlock-covered rule also avoids `EXDEV` hardlink
 /// failures across Landlock hierarchies.
-pub(crate) fn pin_build_tool_dirs(cmd: &mut Command, workspace: &Path, raven_dir: &Path) {
-    let cargo_home = raven_dir.join("cargo-home");
-    let tmp_dir = raven_dir.join("tmp");
-    let npm_cache = raven_dir.join("npm-cache");
+pub(crate) fn pin_build_tool_dirs(cmd: &mut Command, workspace: &Path, huginn_dir: &Path) {
+    let cargo_home = huginn_dir.join("cargo-home");
+    let tmp_dir = huginn_dir.join("tmp");
+    let npm_cache = huginn_dir.join("npm-cache");
     let target_dir = workspace.join("target");
     for dir in [&cargo_home, &tmp_dir, &npm_cache, &target_dir] {
         let _ = std::fs::create_dir_all(dir);
@@ -476,8 +476,8 @@ pub(crate) fn pin_build_tool_dirs(cmd: &mut Command, workspace: &Path, raven_dir
     // `~/.config/mise/config.toml` (granted read via the toolchain roots).
     // Mirrors the CARGO_HOME/TMPDIR pinning above.
     cmd.env("MISE_CEILING_PATHS", workspace);
-    let mise_cache = raven_dir.join("mise-cache");
-    let mise_state = raven_dir.join("mise-state");
+    let mise_cache = huginn_dir.join("mise-cache");
+    let mise_state = huginn_dir.join("mise-state");
     for dir in [&mise_cache, &mise_state] {
         let _ = std::fs::create_dir_all(dir);
     }
@@ -759,7 +759,7 @@ mod tests {
             !policy.allows_write(&tmp_canon),
             "process temp dir must not be an RW root"
         );
-        let probe = tmp_canon.join("raven_eval_escape_probe.txt");
+        let probe = tmp_canon.join("huginn_eval_escape_probe.txt");
         assert!(
             !policy.allows_write(&probe),
             "sibling under /tmp must not be writable: {}",
@@ -792,7 +792,7 @@ mod tests {
         let policy = FsPolicy::new(&ws, Vec::new());
         assert!(policy.allows_write(&ws));
         assert!(!policy.allows_write(&tmp));
-        assert!(!policy.allows_write(&tmp.join("raven_eval_escape_probe.txt")));
+        assert!(!policy.allows_write(&tmp.join("huginn_eval_escape_probe.txt")));
     }
 }
 

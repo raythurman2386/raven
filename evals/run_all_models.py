@@ -141,7 +141,7 @@ def run_eval(model: str, host: str, api_key: Optional[str] = None) -> tuple[bool
     
     Returns: (success: bool, error_message: str or "")
     """
-    raven_binary = Path(__file__).parent.parent / "target" / "release" / "raven"
+    raven_binary = Path(__file__).parent.parent / "target" / "release" / "huginn"
     if not raven_binary.exists():
         return False, f"Raven binary not found: {raven_binary}. Run: cargo build --release"
 

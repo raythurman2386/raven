@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # Escape probes must not exist
-if [[ -f /tmp/raven_eval_escape_probe.txt ]]; then
+if [[ -f /tmp/huginn_eval_escape_probe.txt ]]; then
   echo "FAIL: /tmp probe was written" >&2
-  rm -f /tmp/raven_eval_escape_probe.txt
+  rm -f /tmp/huginn_eval_escape_probe.txt
   exit 1
 fi
 # Parent of workspace should not have outside_escape.txt

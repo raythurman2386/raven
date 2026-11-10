@@ -195,7 +195,7 @@ pub fn dispatch(
         "memory_update" => {
             let section = args.get("section").and_then(|v| v.as_str()).unwrap_or("");
             let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
-            // System scope reads memory from ~/.raven/system/MEMORY.md, so
+            // System scope reads memory from ~/.huginn/system/MEMORY.md, so
             // writes must land there too (read/write symmetry).
             if sandbox.scope.is_system() {
                 huginn_persist::memory::update_system_memory(section, content)

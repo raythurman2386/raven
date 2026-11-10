@@ -89,7 +89,7 @@ impl GitOps for Sandbox {
 
     /// Capture all worktree changes versus `base_rev` as a unified diff.
     ///
-    /// Untracked files are included except `.raven/`, `data/`, `.env`, and
+    /// Untracked files are included except `.huginn/`, `data/`, `.env`, and
     /// `.env.*`. Does **not** create a commit. The index is restored afterward.
     fn export_diff_from(&self, base_rev: &str) -> Result<String> {
         let base = base_rev.trim();
@@ -100,7 +100,7 @@ impl GitOps for Sandbox {
             "add",
             "-A",
             "--",
-            ":!.raven/",
+            ":!.huginn/",
             ":!data/",
             ":!.env",
             ":!.env.*",
@@ -120,11 +120,11 @@ impl GitOps for Sandbox {
         if trimmed.is_empty() || git_out_empty(trimmed) {
             return Ok("no changes".into());
         }
-        // Stage the patch under the raven dir (excluded from git diffs via
-        // `:!.raven/`). Prefer a workspace-relative path so `git apply` gets
-        // predictable paths — and fall back to absolute only when the raven
+        // Stage the patch under the huginn dir (excluded from git diffs via
+        // `:!.huginn/`). Prefer a workspace-relative path so `git apply` gets
+        // predictable paths — and fall back to absolute only when the huginn
         // dir sits outside the workspace (system scope).
-        let full = self.raven_dir().join("tmp").join("apply.patch");
+        let full = self.huginn_dir().join("tmp").join("apply.patch");
         let rel = full
             .strip_prefix(&self.workspace)
             .map(|p| p.to_string_lossy().into_owned())
@@ -216,7 +216,7 @@ impl GitOps for Sandbox {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
-        setup_shell_env(&mut cmd, &self.workspace, &self.raven_dir());
+        setup_shell_env(&mut cmd, &self.workspace, &self.huginn_dir());
         let mut confined = spawn_confined(&mut cmd, &self.workspace, &self.extra_rw, false, false)
             .context("spawn git")?;
         match wait_for_child(&mut confined.child, 30) {
@@ -247,9 +247,9 @@ impl GitOps for Sandbox {
         // do not depend on `~/.gitconfig` or `commit.gpgsign`.
         cmd.args([
             "-c",
-            "user.name=raven",
+            "user.name=huginn",
             "-c",
-            "user.email=raven@local",
+            "user.email=huginn@local",
             "-c",
             "commit.gpgsign=false",
             "-c",
@@ -263,11 +263,11 @@ impl GitOps for Sandbox {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
-        setup_shell_env(&mut cmd, &self.workspace, &self.raven_dir());
-        cmd.env("GIT_AUTHOR_NAME", "raven")
-            .env("GIT_AUTHOR_EMAIL", "raven@local")
-            .env("GIT_COMMITTER_NAME", "raven")
-            .env("GIT_COMMITTER_EMAIL", "raven@local")
+        setup_shell_env(&mut cmd, &self.workspace, &self.huginn_dir());
+        cmd.env("GIT_AUTHOR_NAME", "huginn")
+            .env("GIT_AUTHOR_EMAIL", "huginn@local")
+            .env("GIT_COMMITTER_NAME", "huginn")
+            .env("GIT_COMMITTER_EMAIL", "huginn@local")
             .env("GIT_CONFIG_NOSYSTEM", "1");
         let mut confined = spawn_confined(&mut cmd, &self.workspace, extra_rw, false, false)
             .context("spawn git")?;

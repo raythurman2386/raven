@@ -738,7 +738,7 @@ async fn model_switch_updates_settings_compact_and_header_blocks() {
     // Seed the header blocks the way TuiState::new does.
     state.blocks = vec![
         BlockKind::System(SystemBlock::new(format!(
-            "raven v{} · {} · {}",
+            "huginn v{} · {} · {}",
             env!("CARGO_PKG_VERSION"),
             settings.model,
             settings.provider.name
@@ -1210,7 +1210,7 @@ fn session_with_updated_at(workspace: &Path, store: &SessionStore, date: &str) -
     let mut s = store.create("gemma4:latest").unwrap();
     s.summary.updated_at = format!("{date}T00:00:00");
     let dir = workspace
-        .join(".raven")
+        .join(".huginn")
         .join("sessions")
         .join(&s.summary.id);
     std::fs::write(

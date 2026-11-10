@@ -1,7 +1,7 @@
 //! Shared test utilities, available to every `#[cfg(test)]` module.
 //!
 //! The most important helper is [`outer_sandbox_restrictive`],
-//! which detects when raven's own test process is running inside a *nested*
+//! which detects when huginn's own test process is running inside a *nested*
 //! sandbox (CI, a harness, or this agent's own confinement) that applies its
 //! own seccomp network block and a low RLIMIT_FSIZE. In that environment,
 //! tests that exercise the inner sandbox's network/rlimit exemptions (or that

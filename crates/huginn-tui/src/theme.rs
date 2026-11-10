@@ -21,7 +21,7 @@ pub struct Theme {
     pub fg: Color,
     /// Muted / secondary foreground (metadata, gutters, faded tools).
     pub dim: Color,
-    /// Hero accent (Raven tag, headings, links, usage readout).
+    /// Hero accent (Huginn tag, headings, links, usage readout).
     pub accent: Color,
     /// User / "ready" accent.
     pub user: Color,

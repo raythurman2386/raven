@@ -44,7 +44,7 @@ pub(super) async fn dispatch_slash_command(
             state.log_dirty = true;
         }
         "new" => {
-            super::reset_session(state, session, store, settings, "raven", *compact_at)?;
+            super::reset_session(state, session, store, settings, "huginn", *compact_at)?;
         }
         "clear" => {
             state.blocks.clear();
@@ -114,7 +114,7 @@ pub(super) async fn dispatch_slash_command(
                 // Refresh the static header blocks (model + context/compact).
                 if let Some(BlockKind::System(b)) = state.blocks.get_mut(0) {
                     b.set_text(format!(
-                        "raven v{} · {} · {}",
+                        "huginn v{} · {} · {}",
                         env!("CARGO_PKG_VERSION"),
                         settings.model,
                         settings.provider.name
@@ -177,7 +177,7 @@ pub(super) async fn dispatch_slash_command(
                 // Refresh the static header blocks (model + context/compact).
                 if let Some(BlockKind::System(b)) = state.blocks.get_mut(0) {
                     b.set_text(format!(
-                        "raven v{} · {} · {}",
+                        "huginn v{} · {} · {}",
                         env!("CARGO_PKG_VERSION"),
                         settings.model,
                         settings.provider.name

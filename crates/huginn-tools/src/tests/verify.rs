@@ -55,8 +55,8 @@ edition = "2021"
         "must not hit EXDEV: {out}"
     );
     assert!(
-        tmp.path().join(".raven/cargo-home").is_dir(),
-        "CARGO_HOME should be pinned under workspace/.raven"
+        tmp.path().join(".huginn/cargo-home").is_dir(),
+        "CARGO_HOME should be pinned under workspace/.huginn"
     );
 }
 
@@ -168,7 +168,7 @@ fn is_verification_command_accepts_cd_prefix() {
     // leading `cd <dir> &&`. run_shell already forces cwd to the workspace,
     // so the prefix must not disqualify the exemption.
     let tests = [
-        "cd /home/ret/Work/raven && cargo test",
+        "cd /home/ret/Work/huginn && cargo test",
         "cd repo && cargo test --lib",
         "cd /tmp/x && cargo clippy --all-targets -- -D warnings",
         "cd app && npm test",
@@ -196,7 +196,7 @@ fn is_verification_command_accepts_piped_output_reader() {
         "npm test 2>&1 | grep 'FAIL'",
         // The exact form verification sessions use: cd anchor + env config +
         // piped tail. All inert prefixes/readers around a sanctioned command.
-        "cd /home/ret/Work/raven && CARGO_HOME=/home/ret/.cargo CARGO_INCREMENTAL=0 cargo test --lib 2>&1 | tail -25",
+        "cd /home/ret/Work/huginn && CARGO_HOME=/home/ret/.cargo CARGO_INCREMENTAL=0 cargo test --lib 2>&1 | tail -25",
         "CARGO_PROFILE_DEV_DEBUG=0 cargo test 2>&1 | tail -25",
     ];
     for cmd in tests {
@@ -338,7 +338,7 @@ fn seed_symlinks_host_registry_into_pinned_cargo_home() {
         return;
     }
     let tmp = tempfile::tempdir().unwrap();
-    let pinned = tmp.path().join(".raven").join("cargo-home");
+    let pinned = tmp.path().join(".huginn").join("cargo-home");
     let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
     // Touch the sandbox so pin_build_tool_dirs runs (any shell command does).
     let _ = sb.run_shell("exit 0", 30).expect("run_shell");

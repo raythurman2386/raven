@@ -93,7 +93,7 @@ pub enum AgentEvent {
     VerifyRequired,
     /// A recovery patch was written because work could not be merged.
     RecoveryPatch {
-        /// Workspace-relative path (e.g. `.raven/recovery-sub-0.patch`).
+        /// Workspace-relative path (e.g. `.huginn/recovery-sub-0.patch`).
         path: String,
         /// Why the patch was written (merge conflict, merge error, …).
         reason: String,

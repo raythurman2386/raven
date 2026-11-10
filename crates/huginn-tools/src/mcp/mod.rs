@@ -2,7 +2,7 @@
 //!
 //! ACP v1 requires agents to connect to `mcpServers` on `session/new` /
 //! `session/load` / `session/resume` (stdio transport is mandatory; HTTP/SSE
-//! are optional capabilities Raven does not advertise). The same client is
+//! are optional capabilities Huginn does not advertise). The same client is
 //! used for native `[mcp.servers]` entries in `config.toml`, so TUI and
 //! headless sessions can attach servers such as `sysmetrics-mcp`.
 

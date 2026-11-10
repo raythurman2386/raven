@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 publish.workspace = true
-description = "Shared protocol types for the Raven harness"
+description = "Shared protocol types for the Huginn harness"
 
 [dependencies]
 serde = { workspace = true }

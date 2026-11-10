@@ -139,16 +139,16 @@ fn run_shell_runs_node_under_confinement() {
 fn run_shell_uses_clean_environment() {
     let tmp = tempfile::tempdir().unwrap();
     let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
-    std::env::set_var("RAVEN_API_KEY", "raven-secret");
+    std::env::set_var("HUGINN_API_KEY", "huginn-secret");
     std::env::set_var("OLLAMA_API_KEY", "ollama-secret");
     let out = sb
-        .run_shell("echo RAVEN=$RAVEN_API_KEY OLLAMA=$OLLAMA_API_KEY", 10)
+        .run_shell("echo HUGINN=$HUGINN_API_KEY OLLAMA=$OLLAMA_API_KEY", 10)
         .unwrap();
-    std::env::remove_var("RAVEN_API_KEY");
+    std::env::remove_var("HUGINN_API_KEY");
     std::env::remove_var("OLLAMA_API_KEY");
     assert!(
-        !out.contains("raven-secret"),
-        "RAVEN_API_KEY should not leak: {}",
+        !out.contains("huginn-secret"),
+        "HUGINN_API_KEY should not leak: {}",
         out
     );
     assert!(
@@ -205,7 +205,7 @@ fn is_direct_exec_command_rejects_unknown_binary() {
 #[cfg(target_os = "linux")]
 fn confined_child_cannot_write_to_tmp_sibling_of_workspace() {
     // Regression for 06_sandbox_escape: when the workspace lives UNDER
-    // the global temp dir (e.g. `/tmp/raven-eval-.../workspace`), a
+    // the global temp dir (e.g. `/tmp/huginn-eval-.../workspace`), a
     // confined child must NOT be able to write an arbitrary sibling
     // under `/tmp`.
     let tmp = tempfile::tempdir().unwrap();
@@ -215,7 +215,7 @@ fn confined_child_cannot_write_to_tmp_sibling_of_workspace() {
         "test setup requires workspace under /tmp"
     );
     let probe = std::env::temp_dir().join(format!(
-        "raven_eval_escape_probe_{}.txt",
+        "huginn_eval_escape_probe_{}.txt",
         std::process::id()
     ));
     let _ = std::fs::remove_file(&probe);
@@ -236,7 +236,7 @@ fn confined_child_cannot_write_to_tmp_from_home_like_workspace() {
     // The live hole: a workspace under $HOME (or the crate itself) used
     // to get a RW Landlock grant on the whole process temp dir, so
     // `echo pwned > /tmp/probe` succeeded. TMPDIR is pinned under
-    // `.raven/tmp`; the global temp dir is never an RW root.
+    // `.huginn/tmp`; the global temp dir is never an RW root.
     let ws = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("target")
         .join(format!("sandbox-home-ws-{}", std::process::id()));
@@ -248,7 +248,7 @@ fn confined_child_cannot_write_to_tmp_from_home_like_workspace() {
         "test setup requires workspace outside process temp dir"
     );
     let probe = tmp.join(format!(
-        "raven_eval_escape_probe_home_{}.txt",
+        "huginn_eval_escape_probe_home_{}.txt",
         std::process::id()
     ));
     let _ = std::fs::remove_file(&probe);
@@ -275,7 +275,7 @@ fn confined_child_cannot_read_outside_workspace() {
     // directory of the workspace instead — that is genuinely outside the
     // allowlist (workspace, temp, HOME, /dev, /usr, /bin, /lib, /lib64,
     // /etc, /proc).
-    let sibling = tmp.path().parent().unwrap().join("raven-probe-outside");
+    let sibling = tmp.path().parent().unwrap().join("huginn-probe-outside");
     std::fs::create_dir_all(&sibling).unwrap();
     let probe = sibling.join("secret.txt");
     std::fs::write(&probe, "TOP SECRET").unwrap();

@@ -235,7 +235,7 @@ impl McpSession {
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {},
                 "clientInfo": {
-                    "name": "raven",
+                    "name": "huginn",
                     "version": env!("CARGO_PKG_VERSION")
                 }
             }),

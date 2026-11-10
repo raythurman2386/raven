@@ -6,7 +6,7 @@
 //! proxy requires.
 //!
 //! This module does **not** run an interactive login — users authenticate with
-//! `grok login` (or device-code) first. Raven reuses that session so
+//! `grok login` (or device-code) first. Huginn reuses that session so
 //! subscription billing flows through `https://cli-chat-proxy.grok.com/v1`.
 
 use serde::{Deserialize, Serialize};
@@ -27,7 +27,7 @@ const TOKEN_AUTH_VALUE: &str = "xai-grok-cli";
 /// Lowest `x-grok-client-version` the CLI chat proxy accepts.
 ///
 /// The proxy treats that header as a Grok CLI semver and returns HTTP 426
-/// below this floor. Raven's package version is not a Grok CLI version.
+/// below this floor. Huginn's package version is not a Grok CLI version.
 pub const GROK_PROXY_MIN_CLIENT_VERSION: &str = "1.0.13";
 
 /// Refresh this many seconds before `expires_at`.
@@ -91,9 +91,9 @@ pub enum GrokAuthError {
     },
 }
 
-/// Path to `auth.json`: `RAVEN_GROK_AUTH` > `$GROK_HOME/auth.json` > `~/.grok/auth.json`.
+/// Path to `auth.json`: `HUGINN_GROK_AUTH` > `$GROK_HOME/auth.json` > `~/.grok/auth.json`.
 pub fn auth_path() -> PathBuf {
-    if let Ok(p) = std::env::var("RAVEN_GROK_AUTH") {
+    if let Ok(p) = std::env::var("HUGINN_GROK_AUTH") {
         let trimmed = p.trim();
         if !trimmed.is_empty() {
             return PathBuf::from(trimmed);
@@ -111,9 +111,9 @@ pub fn auth_path() -> PathBuf {
         .join("auth.json")
 }
 
-/// Proxy base URL: `RAVEN_GROK_PROXY_BASE_URL` > `GROK_CLI_CHAT_PROXY_BASE_URL` > default.
+/// Proxy base URL: `HUGINN_GROK_PROXY_BASE_URL` > `GROK_CLI_CHAT_PROXY_BASE_URL` > default.
 pub fn proxy_base_url() -> String {
-    std::env::var("RAVEN_GROK_PROXY_BASE_URL")
+    std::env::var("HUGINN_GROK_PROXY_BASE_URL")
         .or_else(|_| std::env::var("GROK_CLI_CHAT_PROXY_BASE_URL"))
         .ok()
         .map(|s| s.trim().to_string())
@@ -123,21 +123,21 @@ pub fn proxy_base_url() -> String {
 
 /// Identity headers the CLI chat proxy requires (semver client version).
 ///
-/// `x-grok-client-version` is a Grok CLI semver, not Raven's package version.
-/// Precedence: `RAVEN_GROK_CLIENT_VERSION`, then `grok --version` when it
+/// `x-grok-client-version` is a Grok CLI semver, not Huginn's package version.
+/// Precedence: `HUGINN_GROK_CLIENT_VERSION`, then `grok --version` when it
 /// meets [`GROK_PROXY_MIN_CLIENT_VERSION`], then that floor. A parsed
 /// override is returned without spawning `grok`.
 pub fn client_headers() -> Vec<(String, String)> {
     vec![
         ("X-XAI-Token-Auth".into(), TOKEN_AUTH_VALUE.into()),
         ("x-grok-client-version".into(), proxy_client_version()),
-        ("x-grok-client-identifier".into(), "raven".into()),
+        ("x-grok-client-identifier".into(), "huginn".into()),
     ]
 }
 
 /// Semver sent as `x-grok-client-version`.
 fn proxy_client_version() -> String {
-    if let Ok(text) = std::env::var("RAVEN_GROK_CLIENT_VERSION") {
+    if let Ok(text) = std::env::var("HUGINN_GROK_CLIENT_VERSION") {
         if let Some(version) = first_semver_token(&text) {
             return version;
         }
@@ -821,15 +821,15 @@ mod tests {
         assert!(session
             .request_headers
             .iter()
-            .any(|(k, v)| k == "x-grok-client-identifier" && v == "raven"));
+            .any(|(k, v)| k == "x-grok-client-identifier" && v == "huginn"));
         let version = session
             .request_headers
             .iter()
             .find(|(k, _)| k == "x-grok-client-version")
             .map(|(_, v)| v.as_str())
             .unwrap();
-        assert!(!version.contains("raven"));
-        if std::env::var("RAVEN_GROK_CLIENT_VERSION").is_err() {
+        assert!(!version.contains("huginn"));
+        if std::env::var("HUGINN_GROK_CLIENT_VERSION").is_err() {
             assert!(version_at_least(version, GROK_PROXY_MIN_CLIENT_VERSION));
         }
     }
@@ -885,11 +885,11 @@ mod tests {
             .find(|(k, _)| k == "x-grok-client-version")
             .unwrap()
             .1;
-        // Proxy rejects non-semver values like "raven-0.6.5" and Raven's own
+        // Proxy rejects non-semver values like "huginn-0.6.5" and Huginn's own
         // package version when it sits below the Grok CLI floor.
         assert!(version.chars().next().unwrap().is_ascii_digit());
-        assert!(!version.contains("raven"));
-        if std::env::var("RAVEN_GROK_CLIENT_VERSION").is_err() {
+        assert!(!version.contains("huginn"));
+        if std::env::var("HUGINN_GROK_CLIENT_VERSION").is_err() {
             assert!(version_at_least(&version, GROK_PROXY_MIN_CLIENT_VERSION));
         }
     }

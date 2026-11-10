@@ -57,13 +57,13 @@ impl Sandbox {
         command
             .args(&args)
             .current_dir(&self.workspace)
-            // Null stdin: never inherit raven's stdio (see shell.rs — in ACP
+            // Null stdin: never inherit huginn's stdio (see shell.rs — in ACP
             // mode fd 0 is the live JSON-RPC pipe; a child reading it would
             // consume ACP frames and could cause a clean mid-turn EOF).
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
-        setup_shell_env(&mut command, &self.workspace, &self.raven_dir());
+        setup_shell_env(&mut command, &self.workspace, &self.huginn_dir());
         command.env("CI", "true");
         // Sanctioned test runner: skip the seccomp network block for npm
         // projects. vitest/v8 opens an AF_INET socket for V8 coverage + worker
@@ -252,13 +252,13 @@ impl Sandbox {
         command
             .args(&args)
             .current_dir(&self.workspace)
-            // Null stdin: never inherit raven's stdio (see shell.rs — in ACP
+            // Null stdin: never inherit huginn's stdio (see shell.rs — in ACP
             // mode fd 0 is the live JSON-RPC pipe; a child reading it would
             // consume ACP frames and could cause a clean mid-turn EOF).
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
-        setup_shell_env(&mut command, &self.workspace, &self.raven_dir());
+        setup_shell_env(&mut command, &self.workspace, &self.huginn_dir());
         // Linters (clippy/tsc/eslint) compile the project, so they need the
         // same rlimits exemption as `run_tests` (large linker outputs, long
         // clean builds). The network block stays on: linters don't need it.

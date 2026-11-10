@@ -1,8 +1,8 @@
-//! Shared protocol types for the Raven harness.
+//! Shared protocol types for the Huginn harness.
 //!
 //! Chat messages, tool calls, agent events, errors, plans, goals, and
 //! todos. Higher crates depend on this one; it depends on no other
-//! Raven crate.
+//! Huginn crate.
 
 mod chat;
 mod error;

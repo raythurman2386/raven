@@ -81,7 +81,7 @@ fn plugin_data_dir(plugin_root: &Path, plugin_name: &str) -> PathBuf {
     plugin_root
         .parent()
         .and_then(|plugins| plugins.parent())
-        .map(|raven| raven.join("plugin-data").join(plugin_name))
+        .map(|huginn| huginn.join("plugin-data").join(plugin_name))
         .unwrap_or_else(|| plugin_root.join(".plugin-data"))
 }
 
@@ -372,12 +372,12 @@ mod tests {
     #[test]
     fn mcp_specs_loads_stdio_and_skips_http() {
         let tmp = tempfile::tempdir().unwrap();
-        let plugins_dir = tmp.path().join(".raven").join("plugins");
+        let plugins_dir = tmp.path().join(".huginn").join("plugins");
         std::fs::create_dir_all(&plugins_dir).unwrap();
         let plugin = write_plugin(
             &plugins_dir,
-            "raven-test-metrics",
-            &minimal_manifest("raven-test-metrics"),
+            "huginn-test-metrics",
+            &minimal_manifest("huginn-test-metrics"),
         );
         write_mcp(
             &plugin,
@@ -398,13 +398,13 @@ mod tests {
             ),
         );
         let specs = mcp_specs(tmp.path());
-        let mine = named(&specs, "raven-test-metrics");
+        let mine = named(&specs, "huginn-test-metrics");
         assert_eq!(mine.len(), 1);
-        assert_eq!(mine[0].name, "raven-test-metrics__local");
+        assert_eq!(mine[0].name, "huginn-test-metrics__local");
         assert_eq!(mine[0].command, "sysmetrics-mcp");
         assert_eq!(mine[0].args[0], "--data");
         assert!(mine[0].args[1].ends_with("/cfg"));
-        assert!(mine[0].env["CONFIG"].contains("/plugin-data/raven-test-metrics/c"));
+        assert!(mine[0].env["CONFIG"].contains("/plugin-data/huginn-test-metrics/c"));
         assert_eq!(
             mine[0].cwd.as_ref().and_then(|p| p.canonicalize().ok()),
             plugin.canonicalize().ok()
@@ -416,50 +416,50 @@ mod tests {
     #[test]
     fn mcp_specs_unknown_top_level_disables_plugin_mcp() {
         let tmp = tempfile::tempdir().unwrap();
-        let plugins_dir = tmp.path().join(".raven").join("plugins");
+        let plugins_dir = tmp.path().join(".huginn").join("plugins");
         std::fs::create_dir_all(&plugins_dir).unwrap();
         let plugin = write_plugin(
             &plugins_dir,
-            "raven-test-x",
-            &minimal_manifest("raven-test-x"),
+            "huginn-test-x",
+            &minimal_manifest("huginn-test-x"),
         );
         write_mcp(
             &plugin,
             &format!(r#"{{"$schema": "{MCP_SCHEMA}", "mcpServers": {{}}, "extra": true}}"#),
         );
         let specs = mcp_specs(tmp.path());
-        assert!(named(&specs, "raven-test-x").is_empty());
+        assert!(named(&specs, "huginn-test-x").is_empty());
         assert!(discover_plugins(tmp.path())
             .iter()
-            .any(|p| p.name == "raven-test-x"));
+            .any(|p| p.name == "huginn-test-x"));
     }
 
     #[test]
     fn mcp_specs_schema_mismatch_disables_plugin_mcp() {
         let tmp = tempfile::tempdir().unwrap();
-        let plugins_dir = tmp.path().join(".raven").join("plugins");
+        let plugins_dir = tmp.path().join(".huginn").join("plugins");
         std::fs::create_dir_all(&plugins_dir).unwrap();
         let plugin = write_plugin(
             &plugins_dir,
-            "raven-test-y",
-            &minimal_manifest("raven-test-y"),
+            "huginn-test-y",
+            &minimal_manifest("huginn-test-y"),
         );
         write_mcp(
             &plugin,
             r#"{"$schema": "https://agent-plugins.org/schemas/9.9.9/mcp.schema.json", "mcpServers": {}}"#,
         );
-        assert!(named(&mcp_specs(tmp.path()), "raven-test-y").is_empty());
+        assert!(named(&mcp_specs(tmp.path()), "huginn-test-y").is_empty());
     }
 
     #[test]
     fn mcp_specs_rejects_escaping_command_and_cwd() {
         let tmp = tempfile::tempdir().unwrap();
-        let plugins_dir = tmp.path().join(".raven").join("plugins");
+        let plugins_dir = tmp.path().join(".huginn").join("plugins");
         std::fs::create_dir_all(&plugins_dir).unwrap();
         let plugin = write_plugin(
             &plugins_dir,
-            "raven-test-z",
-            &minimal_manifest("raven-test-z"),
+            "huginn-test-z",
+            &minimal_manifest("huginn-test-z"),
         );
         write_mcp(
             &plugin,
@@ -472,20 +472,20 @@ mod tests {
             ),
         );
         let specs = mcp_specs(tmp.path());
-        let mine = named(&specs, "raven-test-z");
+        let mine = named(&specs, "huginn-test-z");
         assert_eq!(mine.len(), 1);
-        assert_eq!(mine[0].name, "raven-test-z__ok");
+        assert_eq!(mine[0].name, "huginn-test-z__ok");
     }
 
     #[test]
     fn mcp_specs_rejects_reserved_env_override() {
         let tmp = tempfile::tempdir().unwrap();
-        let plugins_dir = tmp.path().join(".raven").join("plugins");
+        let plugins_dir = tmp.path().join(".huginn").join("plugins");
         std::fs::create_dir_all(&plugins_dir).unwrap();
         let plugin = write_plugin(
             &plugins_dir,
-            "raven-test-e",
-            &minimal_manifest("raven-test-e"),
+            "huginn-test-e",
+            &minimal_manifest("huginn-test-e"),
         );
         write_mcp(
             &plugin,
@@ -493,7 +493,7 @@ mod tests {
                 r#"{"bad": {"type": "stdio", "command": "echo", "env": {"PLUGIN_ROOT": "/tmp"}}}"#,
             ),
         );
-        assert!(named(&mcp_specs(tmp.path()), "raven-test-e").is_empty());
+        assert!(named(&mcp_specs(tmp.path()), "huginn-test-e").is_empty());
     }
 
     #[test]
@@ -510,12 +510,12 @@ mod tests {
             return;
         };
         let tmp = tempfile::tempdir().unwrap();
-        let plugins_dir = tmp.path().join(".raven").join("plugins");
+        let plugins_dir = tmp.path().join(".huginn").join("plugins");
         std::fs::create_dir_all(&plugins_dir).unwrap();
         let plugin = write_plugin(
             &plugins_dir,
-            "raven-test-echo",
-            &minimal_manifest("raven-test-echo"),
+            "huginn-test-echo",
+            &minimal_manifest("huginn-test-echo"),
         );
         let script =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/fake_mcp.py");
@@ -527,16 +527,16 @@ mod tests {
             )),
         );
         let specs = mcp_specs(tmp.path());
-        let mine: Vec<McpServerSpec> = named(&specs, "raven-test-echo")
+        let mine: Vec<McpServerSpec> = named(&specs, "huginn-test-echo")
             .into_iter()
             .cloned()
             .collect();
         assert_eq!(mine.len(), 1);
         let handle = crate::mcp::McpHandle::connect(&mine);
-        assert!(handle.has_tool("raven-test-echo__echo__echo_text"));
+        assert!(handle.has_tool("huginn-test-echo__echo__echo_text"));
         let out = handle
             .call(
-                "raven-test-echo__echo__echo_text",
+                "huginn-test-echo__echo__echo_text",
                 &serde_json::json!({"text": "from-plugin"}),
             )
             .unwrap();

@@ -1,6 +1,6 @@
 //! Project memory — cross-session Markdown memory files.
 //!
-//! Workspace memory at `.raven/MEMORY.md` is injected into the setup
+//! Workspace memory at `.huginn/MEMORY.md` is injected into the setup
 //! prompt after AGENTS.md (default ~8KB / 100 lines; leaner under
 //! `lean_prompt` or docs-oriented tasks). The agent can update memory via
 //! the `memory_update` tool.
@@ -86,7 +86,7 @@ const MEMORY_TEMPLATE: &str = r#"# Project Memory
 <!-- Project structure, constraints, environment notes -->
 "#;
 
-/// Load workspace memory from `.raven/MEMORY.md` with the standard budget.
+/// Load workspace memory from `.huginn/MEMORY.md` with the standard budget.
 ///
 /// Returns an empty string if the file doesn't exist.
 pub fn load_memory(workspace: &Path) -> String {
@@ -103,7 +103,7 @@ pub fn load_memory_budgeted(
     budget: MemoryBudget,
     relevance: Option<&str>,
 ) -> String {
-    let path = workspace.join(".raven").join("MEMORY.md");
+    let path = workspace.join(".huginn").join("MEMORY.md");
     match std::fs::read_to_string(&path) {
         Ok(content) => select_and_truncate_memory(&content, budget, relevance),
         Err(_) => String::new(),
@@ -111,17 +111,17 @@ pub fn load_memory_budgeted(
 }
 
 /// Load system-scope memory from the given home root's
-/// `.raven/system/MEMORY.md`.
+/// `.huginn/system/MEMORY.md`.
 ///
 /// Used by the `--system` scope (where the sandbox root is `/`, so the
-/// workspace-relative `.raven/MEMORY.md` path is not meaningful). Falls back
-/// to `<home>/.raven/MEMORY.md` when the system file is absent, so an existing
+/// workspace-relative `.huginn/MEMORY.md` path is not meaningful). Falls back
+/// to `<home>/.huginn/MEMORY.md` when the system file is absent, so an existing
 /// global memory file is still read. Returns an empty string if neither exists.
 fn load_system_memory_from(home: &Path) -> String {
-    let system = home.join(".raven").join("system").join("MEMORY.md");
+    let system = home.join(".huginn").join("system").join("MEMORY.md");
     let content = match std::fs::read_to_string(&system) {
         Ok(c) => Some(c),
-        Err(_) => std::fs::read_to_string(home.join(".raven").join("MEMORY.md")).ok(),
+        Err(_) => std::fs::read_to_string(home.join(".huginn").join("MEMORY.md")).ok(),
     };
     match content {
         Some(c) => select_and_truncate_memory(&c, MemoryBudget::standard(), None),
@@ -129,10 +129,10 @@ fn load_system_memory_from(home: &Path) -> String {
     }
 }
 
-/// Load system-scope memory from `~/.raven/system/MEMORY.md`.
+/// Load system-scope memory from `~/.huginn/system/MEMORY.md`.
 ///
 /// Reads the system file via the home-rooted loader and falls back to the
-/// global `~/.raven/MEMORY.md` when the system file is absent.
+/// global `~/.huginn/MEMORY.md` when the system file is absent.
 pub fn load_system_memory() -> String {
     match dirs::home_dir() {
         Some(home) => load_system_memory_from(&home),
@@ -204,14 +204,14 @@ fn truncate_memory(content: &str, budget: MemoryBudget) -> String {
 /// Creates the file with a template if it doesn't exist.
 pub fn update_memory(workspace: &Path, section: &str, content: &str) -> Result<String> {
     update_memory_at(
-        &workspace.join(".raven").join("MEMORY.md"),
+        &workspace.join(".huginn").join("MEMORY.md"),
         section,
         content,
     )
 }
 
 /// Append content to a section of the system-scope memory file
-/// (`~/.raven/system/MEMORY.md`), mirroring where `load_system_memory` reads.
+/// (`~/.huginn/system/MEMORY.md`), mirroring where `load_system_memory` reads.
 pub fn update_system_memory(section: &str, content: &str) -> Result<String> {
     let home = dirs::home_dir().context("cannot determine home directory")?;
     update_system_memory_from(&home, section, content)
@@ -221,7 +221,7 @@ pub fn update_system_memory(section: &str, content: &str) -> Result<String> {
 /// deterministic without mutating the process-wide `HOME` (mirrors
 /// [`load_system_memory_from`]).
 fn update_system_memory_from(home: &Path, section: &str, content: &str) -> Result<String> {
-    let path = home.join(".raven").join("system").join("MEMORY.md");
+    let path = home.join(".huginn").join("system").join("MEMORY.md");
     update_memory_at(&path, section, content)
 }
 
@@ -271,7 +271,7 @@ fn update_memory_at(path: &Path, section: &str, content: &str) -> Result<String>
 
 /// Search workspace memory for snippets matching `query`.
 ///
-/// Keyword-scans `.raven/MEMORY.md` (the same file injected into the system
+/// Keyword-scans `.huginn/MEMORY.md` (the same file injected into the system
 /// prompt), scoring each line by how many of the query's tokens appear.
 /// Returns the top-scoring lines as `path:line — content` snippets, capped.
 ///
@@ -282,10 +282,10 @@ const MAX_SEARCH_RESULTS: usize = 10;
 const MAX_SNIPPET_CHARS: usize = 200;
 
 pub fn search_memory(workspace: &Path, query: &str) -> String {
-    let path = workspace.join(".raven").join("MEMORY.md");
+    let path = workspace.join(".huginn").join("MEMORY.md");
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => c,
-        Err(_) => return "No memory file found (.raven/MEMORY.md).".into(),
+        Err(_) => return "No memory file found (.huginn/MEMORY.md).".into(),
     };
 
     let tokens: Vec<String> = query
@@ -341,10 +341,10 @@ mod tests {
         // guard to drop it mid-test) and doesn't collide across parallel tests.
         static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("raven_mem_test_{}_{n}", std::process::id()));
-        let raven = dir.join(".raven");
-        std::fs::create_dir_all(&raven).unwrap();
-        std::fs::write(raven.join("MEMORY.md"), body).unwrap();
+        let dir = std::env::temp_dir().join(format!("huginn_mem_test_{}_{n}", std::process::id()));
+        let huginn = dir.join(".huginn");
+        std::fs::create_dir_all(&huginn).unwrap();
+        std::fs::write(huginn.join("MEMORY.md"), body).unwrap();
         dir
     }
 
@@ -400,7 +400,7 @@ mod tests {
         let ws = workspace_with_memory("## Decisions\n- Use Rust\n");
         let result = update_memory(&ws, "Decisions", "Use Rust").unwrap();
         assert!(result.contains("already contains"));
-        let content = std::fs::read_to_string(ws.join(".raven").join("MEMORY.md")).unwrap();
+        let content = std::fs::read_to_string(ws.join(".huginn").join("MEMORY.md")).unwrap();
         assert_eq!(content.matches("- Use Rust").count(), 1);
     }
 
@@ -409,7 +409,7 @@ mod tests {
         let ws = workspace_with_memory("## Decisions\n- Use Rust\n");
         let result = update_memory(&ws, "Decisions", "Deploy via Docker").unwrap();
         assert!(result.contains("Updated memory"));
-        let content = std::fs::read_to_string(ws.join(".raven").join("MEMORY.md")).unwrap();
+        let content = std::fs::read_to_string(ws.join(".huginn").join("MEMORY.md")).unwrap();
         assert!(content.contains("- Deploy via Docker"));
     }
 
@@ -418,7 +418,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let result = update_memory(tmp.path(), "Decisions", "Use Rust").unwrap();
         assert!(result.contains("Updated memory"));
-        let content = std::fs::read_to_string(tmp.path().join(".raven").join("MEMORY.md")).unwrap();
+        let content =
+            std::fs::read_to_string(tmp.path().join(".huginn").join("MEMORY.md")).unwrap();
         assert!(content.contains("## Decisions"));
         assert!(content.contains("- Use Rust"));
     }
@@ -429,14 +430,15 @@ mod tests {
         update_memory(tmp.path(), "Decisions", "Use Rust").unwrap();
         let result = update_memory(tmp.path(), "Decisions", "Use Rust").unwrap();
         assert!(result.contains("already contains"));
-        let content = std::fs::read_to_string(tmp.path().join(".raven").join("MEMORY.md")).unwrap();
+        let content =
+            std::fs::read_to_string(tmp.path().join(".huginn").join("MEMORY.md")).unwrap();
         assert_eq!(content.matches("- Use Rust").count(), 1);
     }
 
     #[test]
     fn load_system_memory_reads_global_system_file_when_home_present() {
         let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path().join(".raven").join("system");
+        let dir = tmp.path().join(".huginn").join("system");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("MEMORY.md"), "## System\n- Installed docker\n").unwrap();
         // Use the explicit home-root variant so the test is deterministic on
@@ -449,7 +451,7 @@ mod tests {
     fn update_system_memory_writes_under_home_system() {
         let home = tempfile::tempdir().unwrap();
         update_system_memory_from(home.path(), "Conventions", "Prefer omarchy CLI").unwrap();
-        let path = home.path().join(".raven").join("system").join("MEMORY.md");
+        let path = home.path().join(".huginn").join("system").join("MEMORY.md");
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("Prefer omarchy CLI"), "got: {content}");
         assert!(content.contains("## Conventions"), "template created");

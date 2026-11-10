@@ -36,8 +36,8 @@ fn export_diff_from_includes_uncommitted_work_not_env() {
     sb.write_file("src/lib.rs", "pub fn square() {}\n").unwrap();
     sb.write_file("src/new.rs", "pub fn new() {}\n").unwrap();
     std::fs::write(sb.workspace.join(".env"), "SECRET=nope\n").unwrap();
-    std::fs::create_dir_all(sb.workspace.join(".raven")).unwrap();
-    std::fs::write(sb.workspace.join(".raven/skip.txt"), "skip").unwrap();
+    std::fs::create_dir_all(sb.workspace.join(".huginn")).unwrap();
+    std::fs::write(sb.workspace.join(".huginn/skip.txt"), "skip").unwrap();
 
     let diff = sb.export_diff_from(&base).unwrap();
     assert!(diff.contains("square"), "diff should include edit: {diff}");
@@ -51,7 +51,7 @@ fn export_diff_from_includes_uncommitted_work_not_env() {
     );
     assert!(
         !diff.contains("skip.txt"),
-        ".raven/ must be excluded: {diff}"
+        ".huginn/ must be excluded: {diff}"
     );
     assert!(!sb.is_working_tree_clean(), "export must not commit");
 }
@@ -67,7 +67,7 @@ fn apply_git_patch_does_not_create_a_commit() {
 
     let wt_dir = tempfile::tempdir().unwrap();
     let wt_path = wt_dir.path().join("sub-a");
-    sb.create_worktree("raven-sub-a", &wt_path).unwrap();
+    sb.create_worktree("huginn-sub-a", &wt_path).unwrap();
     let sb_a = Sandbox::with_extra_rw(wt_path, vec![main_ws]);
 
     sb_a.write_file("f.txt", "from sub-a\n").unwrap();
@@ -91,7 +91,7 @@ fn apply_git_patch_does_not_create_a_commit() {
     assert!(!sb.is_working_tree_clean(), "parent tree should stay dirty");
 
     sb.remove_worktree(&wt_dir.path().join("sub-a")).unwrap();
-    sb.delete_branch("raven-sub-a").unwrap();
+    sb.delete_branch("huginn-sub-a").unwrap();
 }
 
 #[test]
@@ -105,8 +105,8 @@ fn worktree_isolates_uncommitted_edits() {
     let wt_dir = tempfile::tempdir().unwrap();
     let wt_path_a = wt_dir.path().join("sub-a");
     let wt_path_b = wt_dir.path().join("sub-b");
-    sb.create_worktree("raven-sub-a", &wt_path_a).unwrap();
-    sb.create_worktree("raven-sub-b", &wt_path_b).unwrap();
+    sb.create_worktree("huginn-sub-a", &wt_path_a).unwrap();
+    sb.create_worktree("huginn-sub-b", &wt_path_b).unwrap();
 
     let sb_a = Sandbox::with_extra_rw(wt_path_a, vec![main_ws.clone()]);
     let sb_b = Sandbox::with_extra_rw(wt_path_b, vec![main_ws.clone()]);
@@ -137,8 +137,8 @@ fn worktree_isolates_uncommitted_edits() {
 
     sb.remove_worktree(&wt_dir.path().join("sub-a")).unwrap();
     sb.remove_worktree(&wt_dir.path().join("sub-b")).unwrap();
-    sb.delete_branch("raven-sub-a").unwrap();
-    sb.delete_branch("raven-sub-b").unwrap();
+    sb.delete_branch("huginn-sub-a").unwrap();
+    sb.delete_branch("huginn-sub-b").unwrap();
 }
 
 #[test]
@@ -149,20 +149,20 @@ fn worktree_must_be_removed_before_branch_can_be_deleted() {
 
     let wt_dir = tempfile::tempdir().unwrap();
     let wt_path = wt_dir.path().join("sub-a");
-    sb.create_worktree("raven-sub-a", &wt_path).unwrap();
+    sb.create_worktree("huginn-sub-a", &wt_path).unwrap();
 
-    let _ = sb.delete_branch("raven-sub-a");
-    let branches = sb.run_git(&["branch", "--list", "raven-sub-a"]).unwrap();
+    let _ = sb.delete_branch("huginn-sub-a");
+    let branches = sb.run_git(&["branch", "--list", "huginn-sub-a"]).unwrap();
     assert!(
-        branches.contains("raven-sub-a"),
+        branches.contains("huginn-sub-a"),
         "branch should still exist after failed delete while worktree present, got: {branches}"
     );
 
     sb.remove_worktree(&wt_path).unwrap();
-    let _ = sb.delete_branch("raven-sub-a");
-    let branches_after = sb.run_git(&["branch", "--list", "raven-sub-a"]).unwrap();
+    let _ = sb.delete_branch("huginn-sub-a");
+    let branches_after = sb.run_git(&["branch", "--list", "huginn-sub-a"]).unwrap();
     assert!(
-        !branches_after.contains("raven-sub-a"),
+        !branches_after.contains("huginn-sub-a"),
         "branch should be gone after worktree removal + delete, got: {branches_after}"
     );
 }
@@ -180,8 +180,8 @@ fn disjoint_hunks_apply_without_commit() {
     let wt_dir = tempfile::tempdir().unwrap();
     let wt_path_a = wt_dir.path().join("sub-a");
     let wt_path_b = wt_dir.path().join("sub-b");
-    sb.create_worktree("raven-sub-a", &wt_path_a).unwrap();
-    sb.create_worktree("raven-sub-b", &wt_path_b).unwrap();
+    sb.create_worktree("huginn-sub-a", &wt_path_a).unwrap();
+    sb.create_worktree("huginn-sub-b", &wt_path_b).unwrap();
 
     let sb_a = Sandbox::with_extra_rw(wt_path_a, vec![main_ws.clone()]);
     let sb_b = Sandbox::with_extra_rw(wt_path_b, vec![main_ws.clone()]);
@@ -203,8 +203,8 @@ fn disjoint_hunks_apply_without_commit() {
 
     sb.remove_worktree(&wt_dir.path().join("sub-a")).unwrap();
     sb.remove_worktree(&wt_dir.path().join("sub-b")).unwrap();
-    sb.delete_branch("raven-sub-a").unwrap();
-    sb.delete_branch("raven-sub-b").unwrap();
+    sb.delete_branch("huginn-sub-a").unwrap();
+    sb.delete_branch("huginn-sub-b").unwrap();
 }
 
 #[test]
@@ -216,7 +216,7 @@ fn worktree_cleanup_removes_worktrees() {
     let wt_dir = tempfile::tempdir().unwrap();
     let wt_path = wt_dir.path().join("sub-x");
 
-    sb.create_worktree("raven-sub-x", &wt_path).unwrap();
+    sb.create_worktree("huginn-sub-x", &wt_path).unwrap();
     assert!(wt_path.exists());
 
     sb.remove_worktree(&wt_path).unwrap();
@@ -236,8 +236,8 @@ fn conflicting_patches_fail_apply_without_commit() {
     let wt_dir = tempfile::tempdir().unwrap();
     let wt_path_a = wt_dir.path().join("sub-a");
     let wt_path_b = wt_dir.path().join("sub-b");
-    sb.create_worktree("raven-sub-a", &wt_path_a).unwrap();
-    sb.create_worktree("raven-sub-b", &wt_path_b).unwrap();
+    sb.create_worktree("huginn-sub-a", &wt_path_a).unwrap();
+    sb.create_worktree("huginn-sub-b", &wt_path_b).unwrap();
 
     let sb_a = Sandbox::with_extra_rw(wt_path_a, vec![main_ws.clone()]);
     let sb_b = Sandbox::with_extra_rw(wt_path_b, vec![main_ws.clone()]);
@@ -262,8 +262,8 @@ fn conflicting_patches_fail_apply_without_commit() {
 
     sb.remove_worktree(&wt_dir.path().join("sub-a")).unwrap();
     sb.remove_worktree(&wt_dir.path().join("sub-b")).unwrap();
-    sb.delete_branch("raven-sub-a").unwrap();
-    sb.delete_branch("raven-sub-b").unwrap();
+    sb.delete_branch("huginn-sub-a").unwrap();
+    sb.delete_branch("huginn-sub-b").unwrap();
 }
 
 #[test]

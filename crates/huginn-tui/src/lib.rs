@@ -1,6 +1,6 @@
-//! Interactive TUI — Grok Build–inspired layout for Raven.
+//! Interactive TUI — Grok Build–inspired layout for Huginn.
 //!
-//! ┌─ raven ─ qwen2.5-coder:14b ──────────── 12.4K/128K 10% ─ plan:on ─┐
+//! ┌─ huginn ─ qwen2.5-coder:14b ──────────── 12.4K/128K 10% ─ plan:on ─┐
 //! │ You                                                                  │
 //! │   add auth middleware                                                │
 //! │                                                                      │
@@ -513,7 +513,7 @@ pub async fn run_tui(
     let mut compact_at = ((settings.context_window - settings.context_window / 8) as f32
         * settings.compact_threshold) as usize;
 
-    let app_name = "raven";
+    let app_name = "huginn";
 
     let mut state = TuiState::new(&settings, app_name, compact_at);
     if let Some(mcp) = mcp {
@@ -1311,7 +1311,7 @@ pub async fn run_tui(
                                 let _ = store.update_summary(&mut session, None);
                                 if store.snapshot_patch(&session).unwrap_or(false) {
                                     state.push_system(format!(
-                                        "diff snapshot → .raven/sessions/{}/last.patch",
+                                        "diff snapshot → .huginn/sessions/{}/last.patch",
                                         session.summary.id
                                     ));
                                 }
@@ -2492,7 +2492,7 @@ fn reset_session(
     state.pending_question_text = None;
     state.pending_permission = None;
     state.push_system(format!(
-        "raven v{} · {} · {}",
+        "huginn v{} · {} · {}",
         env!("CARGO_PKG_VERSION"),
         settings.model,
         settings.provider.name

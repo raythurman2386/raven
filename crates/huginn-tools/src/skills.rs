@@ -1,8 +1,8 @@
 //! Skills — user-defined SKILL.md files the agent can discover and load.
 //!
 //! Mirrors Grok Build's skills system (`xai-grok-tools/.../skills/`) in a
-//! dependency-light form: discover `SKILL.md` files under `.raven/skills/`
-//! (workspace) and `~/.raven/skills/` (global), parse their YAML frontmatter's
+//! dependency-light form: discover `SKILL.md` files under `.huginn/skills/`
+//! (workspace) and `~/.huginn/skills/` (global), parse their YAML frontmatter's
 //! `name`/`description`, and let the agent find a skill by keyword
 //! (`skill_search`) or load its body as a `<skill>` envelope (`skill_load`).
 //!
@@ -114,10 +114,10 @@ fn unescape(s: &str) -> String {
     out
 }
 
-/// Discover all SKILL.md files under `.raven/skills/` in `dir`, recursively.
+/// Discover all SKILL.md files under `.huginn/skills/` in `dir`, recursively.
 fn find_skill_md(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    let skills_dir = dir.join(".raven").join("skills");
+    let skills_dir = dir.join(".huginn").join("skills");
     if skills_dir.is_dir() {
         walk_skills(&skills_dir, &mut out, 0);
     }
@@ -214,7 +214,7 @@ pub fn discover(workspace: &Path) -> Vec<Skill> {
         let (mut name, description, _body) = parse_skill_file(&content);
         if name.is_empty() {
             // No frontmatter name — fall back to the skill directory name
-            // (e.g. `.raven/skills/hello-style/SKILL.md` → "hello-style").
+            // (e.g. `.huginn/skills/hello-style/SKILL.md` → "hello-style").
             // Skills written as plain markdown without YAML are still valid.
             name = path
                 .parent()
@@ -257,7 +257,7 @@ pub fn search(workspace: &Path, query: &str) -> String {
     let q = query.trim().to_lowercase();
     let skills = discover(workspace);
     if skills.is_empty() {
-        return "No skills found. Drop SKILL.md files in .raven/skills/ or ~/.raven/skills/."
+        return "No skills found. Drop SKILL.md files in .huginn/skills/ or ~/.huginn/skills/."
             .into();
     }
 
@@ -323,7 +323,7 @@ mod tests {
     static HOME_LOCK: StdMutex<()> = StdMutex::new(());
 
     /// Run `f` with HOME pointed at an empty temp dir, so the home-dir skill
-    /// scan (`~/.raven/skills/`) contributes nothing. `discover` merges
+    /// scan (`~/.huginn/skills/`) contributes nothing. `discover` merges
     /// workspace + home skills, so exact-count assertions are otherwise
     /// environment-dependent (fail on any machine with real home skills).
     fn with_hermetic_home<R>(f: impl FnOnce() -> R) -> R {
@@ -340,7 +340,7 @@ mod tests {
     }
 
     fn write_skill(dir: &Path, sub: &str, name: &str, desc: &str, body: &str) {
-        let d = dir.join(".raven").join("skills").join(sub);
+        let d = dir.join(".huginn").join("skills").join(sub);
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(
             d.join("SKILL.md"),
@@ -371,7 +371,7 @@ mod tests {
     fn discover_falls_back_to_directory_name_without_frontmatter() {
         with_hermetic_home(|| {
             let tmp = tempfile::tempdir().unwrap();
-            let d = tmp.path().join(".raven").join("skills").join("nope");
+            let d = tmp.path().join(".huginn").join("skills").join("nope");
             std::fs::create_dir_all(&d).unwrap();
             std::fs::write(d.join("SKILL.md"), "no frontmatter here").unwrap();
             let skills = discover(tmp.path());
@@ -535,7 +535,7 @@ mod tests {
                 "---\nname: router\ndescription: >\n  Folded router skill.\n---\n\nbody\n",
             )
             .unwrap();
-            let skills_dir = tmp.path().join(".raven").join("skills");
+            let skills_dir = tmp.path().join(".huginn").join("skills");
             std::fs::create_dir_all(&skills_dir).unwrap();
             std::os::unix::fs::symlink(&target, skills_dir.join("router")).unwrap();
             let skills = discover(tmp.path());

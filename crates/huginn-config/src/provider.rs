@@ -3,7 +3,7 @@
 //!
 //! The provider model is bundled here so switching providers is a single unit
 //! (`--provider`, `/provider`, `provider = "…"` in config.toml). API keys are
-//! resolved per provider: config-file `api_key` (if set) → `RAVEN_API_KEY`
+//! resolved per provider: config-file `api_key` (if set) → `HUGINN_API_KEY`
 //! (universal override) → the provider's declared `api_key_env` (or built-in
 //! mapping, e.g. `OPENROUTER_API_KEY` / `OLLAMA_API_KEY`). The built-in
 //! `grok` provider instead resolves a SpaceXAI session from `~/.grok/auth.json`
@@ -60,14 +60,14 @@ impl Provider {
                 request_headers: vec![
                     (
                         "HTTP-Referer".into(),
-                        "https://github.com/raythurman2386/raven".into(),
+                        "https://github.com/raythurman2386/huginn".into(),
                     ),
-                    ("X-Title".into(), "Raven".into()),
+                    ("X-Title".into(), "Huginn".into()),
                 ],
             }),
             "opencode-go" => Some(Provider {
                 name: name.into(),
-                // OpenAI-compatible chat completions root (Raven appends
+                // OpenAI-compatible chat completions root (Huginn appends
                 // /chat/completions). See https://opencode.ai/zen/go/v1/models
                 base_url: "https://opencode.ai/zen/go/v1".into(),
                 api_key: None,
@@ -78,7 +78,7 @@ impl Provider {
             "grok" => Some(Provider {
                 name: name.into(),
                 // Subscription proxy (not api.x.ai). Override with
-                // RAVEN_GROK_PROXY_BASE_URL / GROK_CLI_CHAT_PROXY_BASE_URL or
+                // HUGINN_GROK_PROXY_BASE_URL / GROK_CLI_CHAT_PROXY_BASE_URL or
                 // `[providers.grok] base_url`.
                 base_url: grok_auth::proxy_base_url(),
                 api_key: None,
@@ -114,12 +114,12 @@ impl Provider {
     ///
     /// Precedence (first non-empty wins):
     /// 1. Config-file `api_key` already on `self` — **not** overridden by env
-    /// 2. `RAVEN_API_KEY` (universal override)
+    /// 2. `HUGINN_API_KEY` (universal override)
     /// 3. For `grok`: SpaceXAI session from `~/.grok/auth.json` (refreshed)
     /// 4. Provider-scoped var (`api_key_env` or built-in / conventional name)
     ///
     /// Empty/whitespace env values are treated as absent — an empty
-    /// `RAVEN_API_KEY` must NOT shadow the provider-scoped var. Prefer env vars
+    /// `HUGINN_API_KEY` must NOT shadow the provider-scoped var. Prefer env vars
     /// over a committed config `api_key` so secrets stay out of the file; once
     /// a literal `api_key` is set in TOML it wins for that provider.
     pub fn resolve_key(mut self) -> Provider {
@@ -127,7 +127,7 @@ impl Provider {
             self.request_headers = grok_auth::client_headers();
         }
         if self.api_key.is_none() {
-            let universal = std::env::var("RAVEN_API_KEY").ok();
+            let universal = std::env::var("HUGINN_API_KEY").ok();
             let scoped = {
                 let env = self.key_env_var();
                 if env.is_empty() {
@@ -180,14 +180,14 @@ impl Provider {
             return None;
         }
         Some(format!(
-            "No Grok session in {}. Run `raven login` (or `grok login`), then start raven again.",
+            "No Grok session in {}. Run `huginn login` (or `grok login`), then start huginn again.",
             super::grok_auth::auth_path().display()
         ))
     }
 
     /// Re-read `~/.grok/auth.json` when this provider is grok and has no token.
     ///
-    /// A long-lived ACP process starts before `raven login`. The next prompt
+    /// A long-lived ACP process starts before `huginn login`. The next prompt
     /// picks up the new session without restarting Zed's agent.
     pub fn refresh_grok_session(&mut self) -> bool {
         if self.name != "grok" {
@@ -271,7 +271,7 @@ impl ProviderConfig {
 }
 
 /// Resolve the active provider from an explicit CLI name, the config file,
-/// and env. Precedence: `explicit` (CLI) > `RAVEN_PROVIDER` env >
+/// and env. Precedence: `explicit` (CLI) > `HUGINN_PROVIDER` env >
 /// `cfg.provider` > built-in default `grok`.
 ///
 /// The named provider is looked up in `cfg.providers` first, then the
@@ -279,7 +279,7 @@ impl ProviderConfig {
 /// warning (never a hard error — a bad name shouldn't brick the session).
 pub fn resolve_provider(cfg: &ConfigFile, explicit: Option<String>) -> Provider {
     let name = explicit
-        .or_else(|| std::env::var("RAVEN_PROVIDER").ok())
+        .or_else(|| std::env::var("HUGINN_PROVIDER").ok())
         .or_else(|| cfg.provider.clone())
         .unwrap_or_else(|| "grok".into());
 
@@ -427,7 +427,7 @@ mod tests {
         assert!(or
             .request_headers
             .iter()
-            .any(|(k, v)| k == "HTTP-Referer" && v == "https://github.com/raythurman2386/raven"));
+            .any(|(k, v)| k == "HTTP-Referer" && v == "https://github.com/raythurman2386/huginn"));
         assert!(or.request_headers.iter().any(|(k, _)| k == "X-Title"));
         assert!(
             or.api_key.is_none(),
@@ -453,7 +453,7 @@ mod tests {
             .request_headers
             .iter()
             .any(|(k, _)| k == "X-XAI-Token-Auth"));
-        assert!(grok.grok_login_required().unwrap().contains("raven login"));
+        assert!(grok.grok_login_required().unwrap().contains("huginn login"));
         assert!(ollama.grok_login_required().is_none());
     }
 
@@ -564,7 +564,7 @@ mod tests {
 
     #[test]
     fn pick_key_empty_universal_does_not_shadow_provider_scoped() {
-        // An empty/whitespace RAVEN_API_KEY must NOT block the provider-scoped
+        // An empty/whitespace HUGINN_API_KEY must NOT block the provider-scoped
         // var from being used.
         assert_eq!(
             Provider::pick_key(Some("   ".into()), Some("sk-or".into())),
@@ -700,7 +700,7 @@ mod tests {
         let original_home = std::env::var_os("HOME");
         let home = tempfile::tempdir().unwrap();
         std::env::set_var("HOME", home.path());
-        let global_dir = home.path().join(".raven");
+        let global_dir = home.path().join(".huginn");
         std::fs::create_dir_all(&global_dir).unwrap();
         std::fs::write(
             global_dir.join("config.toml"),
@@ -714,7 +714,7 @@ default_model = "gemma4:latest"
         .unwrap();
 
         let ws = tempfile::tempdir().unwrap();
-        let ws_dir = ws.path().join(".raven");
+        let ws_dir = ws.path().join(".huginn");
         std::fs::create_dir_all(&ws_dir).unwrap();
         std::fs::write(
             ws_dir.join("config.toml"),

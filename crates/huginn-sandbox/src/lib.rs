@@ -288,7 +288,7 @@ pub struct Sandbox {
     /// is never implied (see `confinement::FsPolicy`).
     pub extra_rw: Vec<PathBuf>,
     /// The operational scope. System scope (workspace `/`) redirects
-    /// `.raven` scratch/state dirs to `~/.raven` via [`Sandbox::raven_dir`].
+    /// `.huginn` scratch/state dirs to `~/.huginn` via [`Sandbox::huginn_dir`].
     pub scope: huginn_proto::Scope,
     /// When true, `read_file` numbers every 10th line (and the first line of
     /// the range) instead of every line.
@@ -318,18 +318,18 @@ impl Sandbox {
         }
     }
 
-    /// The `.raven` directory for scratch/state (pinned caches, temp dir,
+    /// The `.huginn` directory for scratch/state (pinned caches, temp dir,
     /// patch staging). Repo scope keeps it in the workspace; system scope
-    /// moves it under `$HOME/.raven` because the workspace is `/` and
-    /// `/.raven` is neither writable nor meaningful for a per-user agent.
-    pub fn raven_dir(&self) -> PathBuf {
+    /// moves it under `$HOME/.huginn` because the workspace is `/` and
+    /// `/.huginn` is neither writable nor meaningful for a per-user agent.
+    pub fn huginn_dir(&self) -> PathBuf {
         if self.scope.is_system() {
             match std::env::var_os("HOME") {
-                Some(home) => PathBuf::from(home).join(".raven"),
-                None => self.workspace.join(".raven"),
+                Some(home) => PathBuf::from(home).join(".huginn"),
+                None => self.workspace.join(".huginn"),
             }
         } else {
-            self.workspace.join(".raven")
+            self.workspace.join(".huginn")
         }
     }
 
@@ -360,7 +360,7 @@ pub fn truncate_output(s: &str, max: usize) -> String {
 }
 
 impl Sandbox {
-    /// Return `body` inline, or write it under `.raven/tool-output` and return
+    /// Return `body` inline, or write it under `.huginn/tool-output` and return
     /// the path, size, and a short tail.
     ///
     /// Truncating drops data the model may need later and the tail-only form
@@ -369,7 +369,7 @@ impl Sandbox {
         if body.chars().count() <= MAX_TOOL_OUTPUT {
             return body;
         }
-        let dir = self.raven_dir().join("tool-output");
+        let dir = self.huginn_dir().join("tool-output");
         let seq = SPILL_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let millis = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

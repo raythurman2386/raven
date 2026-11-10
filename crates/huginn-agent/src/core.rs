@@ -157,7 +157,7 @@ const SYSTEM_BASE: &str = r#"You are an efficient coding agent. You help with so
 <output>
 - Answer the user's question directly with text when you have enough information. You do NOT need to call a tool for every response; sometimes just text is the right answer.
 - Narrate work minimally. Do not announce routine tool calls ("Let me inspect…", "Continuing with task 2…"); let the tool activity speak. Reserve text for decisions, findings, and results the user needs.
-- If you're stuck or a tool returns an error, explain what happened in one or two sentences and adjust course. Never restate or paraphrase <raven_reminder> messages back to the user — they are internal steering, not conversation.
+- If you're stuck or a tool returns an error, explain what happened in one or two sentences and adjust course. Never restate or paraphrase <huginn_reminder> messages back to the user — they are internal steering, not conversation.
 - When asked to continue mid-task, resume work directly instead of restating the goal, plan, or progress.
 - After reading a file you have its contents for the requested line range. read_file only returns up to 400 lines by default; if the output ends with "... [truncated]", you have NOT seen the whole file — call read_file again with a larger max_lines or a start_line to read the rest before concluding.
 - The <repo_map> in this prompt is the workspace structure. Do not list the workspace root unless you need a specific subdirectory that is not in the map.
@@ -178,7 +178,7 @@ read_file returns at most 400 lines. A result that ends with a truncation marker
 
 goal_set stores the objective for a multi-step task. todo_write stores a task list of three or more steps. delegate_task runs a self-contained sub-task in a fresh context and returns a summary.
 
-Claims about file contents, command output, and test results come from tool results in this conversation. If a tool result is missing or errored, say so. <raven_reminder> blocks are harness steering, not conversation to quote back. A request to continue resumes the work.
+Claims about file contents, command output, and test results come from tool results in this conversation. If a tool result is missing or errored, say so. <huginn_reminder> blocks are harness steering, not conversation to quote back. A request to continue resumes the work.
 
 Answer in text when you already have the information.
 "#;
@@ -427,12 +427,12 @@ fn working_tree_note(settings: &Settings) -> Option<String> {
     }
     match sandbox.git_status() {
         Ok(status) if status.contains("No changes") => {
-            Some("<raven_context>\nWorking tree: clean\n".into())
+            Some("<huginn_context>\nWorking tree: clean\n".into())
         }
         Ok(status) => {
             let lines: Vec<&str> = status.lines().take(10).collect();
             Some(format!(
-                "<raven_context>\nWorking tree: dirty ({} changed)\n{}\n",
+                "<huginn_context>\nWorking tree: dirty ({} changed)\n{}\n",
                 status.lines().count(),
                 lines.join("\n")
             ))
@@ -444,7 +444,7 @@ fn working_tree_note(settings: &Settings) -> Option<String> {
 /// Build the system message for the `Scope::System` administration scope.
 ///
 /// Roots the prompt at the whole OS instead of a repo: injects system memory
-/// from `~/.raven/system/MEMORY.md` and the machine model/provider, and skips
+/// from `~/.huginn/system/MEMORY.md` and the machine model/provider, and skips
 /// the repo-only blocks (workspace root, git status, repo map, AGENTS.md).
 fn build_system_scope_message(settings: &Settings) -> ChatMessage {
     let mut system = SYSTEM_SCOPE_BASE.to_string();
@@ -1028,7 +1028,7 @@ impl Agent {
         let compact_paused =
             self.compact_thrash_count >= MAX_COMPACT_THRASH && !iter.is_multiple_of(4);
         if !compact_paused {
-            let transcript_dir = self.sandbox.raven_dir().join("compact");
+            let transcript_dir = self.sandbox.huginn_dir().join("compact");
             if let Some(report) = compact_if_needed_llm(
                 &mut self.messages,
                 self.settings.context_window,
@@ -1077,7 +1077,7 @@ impl Agent {
         let reminder_tokens: usize = reminders
             .iter()
             .map(|r| {
-                count_tokens(&format!("<raven_reminder>\n{r}\n</raven_reminder>")) + MSG_OVERHEAD
+                count_tokens(&format!("<huginn_reminder>\n{r}\n</huginn_reminder>")) + MSG_OVERHEAD
             })
             .sum();
         let context_tokens = self
@@ -1110,7 +1110,7 @@ impl Agent {
         for text in &reminders {
             request_messages.push(ChatMessage::plain(
                 "user",
-                Some(format!("<raven_reminder>\n{text}\n</raven_reminder>")),
+                Some(format!("<huginn_reminder>\n{text}\n</huginn_reminder>")),
             ));
         }
         let tools = self.tools_value();
@@ -1416,7 +1416,7 @@ impl Agent {
                                     provider: self.settings.provider.name.clone(),
                                     status,
                                     body: format!(
-                                        "{e}. Run `grok login` (or `raven login`), then retry."
+                                        "{e}. Run `grok login` (or `huginn login`), then retry."
                                     ),
                                 });
                             }
@@ -1744,14 +1744,14 @@ mod setup_body_tests {
     #[test]
     fn setup_body_order_is_constraint_then_goal_then_todos() {
         let tmp = std::env::temp_dir().join(format!(
-            "raven_setup_body_{}_{}",
+            "huginn_setup_body_{}_{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
         ));
-        let sessions = tmp.join(".raven/sessions");
+        let sessions = tmp.join(".huginn/sessions");
         let sid = "20260925T120000Z-1-1";
         std::fs::create_dir_all(sessions.join(sid)).unwrap();
         let dir = session_state_dir(&sessions, sid);

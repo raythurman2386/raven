@@ -379,17 +379,17 @@ fn dispatch_run_lint_on_cargo_project() {
 }
 
 #[test]
-fn sandbox_raven_dir_repo_is_under_workspace() {
+fn sandbox_huginn_dir_repo_is_under_workspace() {
     let tmp = tempfile::tempdir().unwrap();
     let sb = Sandbox::new(tmp.path().canonicalize().unwrap());
     assert_eq!(
-        sb.raven_dir(),
-        tmp.path().canonicalize().unwrap().join(".raven")
+        sb.huginn_dir(),
+        tmp.path().canonicalize().unwrap().join(".huginn")
     );
 }
 
 #[test]
-fn sandbox_raven_dir_system_is_under_home() {
+fn sandbox_huginn_dir_system_is_under_home() {
     let home = tempfile::tempdir().unwrap();
     let original_home = std::env::var_os("HOME");
     std::env::set_var("HOME", home.path());
@@ -397,28 +397,28 @@ fn sandbox_raven_dir_system_is_under_home() {
         std::path::PathBuf::from("/"),
         huginn_config::Scope::System,
     );
-    let dir = sb.raven_dir();
+    let dir = sb.huginn_dir();
     match original_home {
         Some(h) => std::env::set_var("HOME", h),
         None => std::env::remove_var("HOME"),
     }
-    assert_eq!(dir, home.path().join(".raven"));
+    assert_eq!(dir, home.path().join(".huginn"));
 }
 
 #[test]
-fn sandbox_raven_dir_system_falls_back_without_home() {
+fn sandbox_huginn_dir_system_falls_back_without_home() {
     let original_home = std::env::var_os("HOME");
     std::env::remove_var("HOME");
     let sb = crate::sandbox::Sandbox::with_scope(
         std::path::PathBuf::from("/"),
         huginn_config::Scope::System,
     );
-    let dir = sb.raven_dir();
+    let dir = sb.huginn_dir();
     match original_home {
         Some(h) => std::env::set_var("HOME", h),
         None => std::env::remove_var("HOME"),
     }
-    assert_eq!(dir, std::path::PathBuf::from("/.raven"));
+    assert_eq!(dir, std::path::PathBuf::from("/.huginn"));
 }
 
 #[test]

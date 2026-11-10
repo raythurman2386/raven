@@ -5,7 +5,7 @@
 //! of a wall of plain text. This is the "own the rendering" half of the
 //! design: `pulldown-cmark` does the parsing (the genuinely hard, boring
 //! part), and this module owns how the AST becomes terminal lines — the part
-//! that is raven's aesthetic.
+//! that is huginn's aesthetic.
 //!
 //! The renderer is deliberately streaming-friendly: re-parsing a partial
 //! document is cheap, and `pulldown-cmark` degrades unclosed tokens (e.g. a

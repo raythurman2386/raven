@@ -1,7 +1,7 @@
 //! Session persistence — save/load conversation history as JSONL.
 //!
-//! Sessions are stored per-workspace under `.raven/sessions/` (repo scope) or
-//! under `~/.raven/system/sessions/` (system scope). Each session is a
+//! Sessions are stored per-workspace under `.huginn/sessions/` (repo scope) or
+//! under `~/.huginn/system/sessions/` (system scope). Each session is a
 //! directory containing:
 //!   - `summary.json`   — metadata (id, model, timestamps, title) — the marker file
 //!   - `messages.jsonl`  — append-only conversation (one ChatMessage per line)
@@ -60,9 +60,9 @@ pub struct SessionStore {
 
 impl SessionStore {
     /// Create a session store for the given workspace.
-    /// Sessions live in `{workspace}/.raven/sessions/`.
+    /// Sessions live in `{workspace}/.huginn/sessions/`.
     pub fn for_workspace(workspace: &Path) -> Result<Self> {
-        let sessions_dir = workspace.join(".raven").join("sessions");
+        let sessions_dir = workspace.join(".huginn").join("sessions");
         std::fs::create_dir_all(&sessions_dir)?;
         Ok(Self {
             sessions_dir,
@@ -72,14 +72,14 @@ impl SessionStore {
 
     /// Create a session store matching the settings' scope.
     ///
-    /// Repo scope roots the store at `{workspace}/.raven/sessions/` as before.
-    /// System scope (workspace `/`) roots it at `~/.raven/system/sessions/`,
+    /// Repo scope roots the store at `{workspace}/.huginn/sessions/` as before.
+    /// System scope (workspace `/`) roots it at `~/.huginn/system/sessions/`,
     /// matching the system-memory convention, so the privileged scope gets an
     /// on-disk audit trail instead of writing under `/`.
     pub fn for_settings(settings: &Settings) -> Result<Self> {
         if settings.scope.is_system() {
             let home = dirs::home_dir().context("cannot determine home directory")?;
-            let sessions_dir = home.join(".raven").join("system").join("sessions");
+            let sessions_dir = home.join(".huginn").join("system").join("sessions");
             std::fs::create_dir_all(&sessions_dir)?;
             Ok(Self {
                 sessions_dir,
@@ -297,8 +297,8 @@ impl SessionStore {
         Ok(dest_dir.to_path_buf())
     }
 
-    /// Default export directory for a session: `{workspace}/.raven/exports/{id}/`
-    /// (system scope: `~/.raven/system/exports/{id}/` — derived from the
+    /// Default export directory for a session: `{workspace}/.huginn/exports/{id}/`
+    /// (system scope: `~/.huginn/system/exports/{id}/` — derived from the
     /// sessions dir's parent so it stays next to the store it exports from).
     pub fn default_export_dir(&self, session: &Session) -> PathBuf {
         self.sessions_dir
@@ -310,7 +310,7 @@ impl SessionStore {
 
     /// Snapshot the current repo diff for this session as a patch file.
     ///
-    /// This creates a reviewable artifact in `.raven/sessions/<id>/last.patch`
+    /// This creates a reviewable artifact in `.huginn/sessions/<id>/last.patch`
     /// without sending anything remotely; it is suitable for auditing or
     /// rollback decisions after a task completes.
     ///
@@ -406,14 +406,14 @@ impl SessionStore {
 
 /// Validate and migrate a session summary to the current format version.
 ///
-/// Returns an error if the session was written by a newer version of Raven
+/// Returns an error if the session was written by a newer version of Huginn
 /// (version > CURRENT_SESSION_FORMAT_VERSION). Sessions with a lower version
 /// are migrated through the version chain.
 fn migrate_summary(mut summary: SessionSummary) -> Result<SessionSummary> {
     if summary.version > CURRENT_SESSION_FORMAT_VERSION {
         bail!(
             "Session format version {} is newer than this build ({}). \
-             Upgrade Raven to load this session.",
+             Upgrade Huginn to load this session.",
             summary.version,
             CURRENT_SESSION_FORMAT_VERSION
         );
@@ -433,7 +433,7 @@ fn migrate_summary(mut summary: SessionSummary) -> Result<SessionSummary> {
 /// Render a session as readable Markdown for a local export bundle.
 fn render_session_markdown(session: &Session) -> String {
     let mut out = String::new();
-    out.push_str(&format!("# Raven session {}\n\n", session.summary.id));
+    out.push_str(&format!("# Huginn session {}\n\n", session.summary.id));
     out.push_str(&format!("- Model: {}\n", session.summary.model));
     out.push_str(&format!("- Created: {}\n", session.summary.created_at));
     out.push_str(&format!("- Updated: {}\n", session.summary.updated_at));
@@ -587,7 +587,7 @@ mod tests {
         let store = SessionStore::for_settings(&settings).unwrap();
         assert_eq!(
             store.sessions_dir,
-            tmp.path().join(".raven").join("sessions")
+            tmp.path().join(".huginn").join("sessions")
         );
         assert_eq!(store.workspace, tmp.path());
     }
@@ -611,7 +611,7 @@ mod tests {
         let store = result.unwrap();
         assert_eq!(
             store.sessions_dir,
-            home.path().join(".raven").join("system").join("sessions")
+            home.path().join(".huginn").join("system").join("sessions")
         );
         assert_eq!(store.workspace, home.path());
     }
@@ -648,13 +648,13 @@ mod tests {
         assert_eq!(
             ws_store.default_export_dir(&session),
             tmp.path()
-                .join(".raven")
+                .join(".huginn")
                 .join("exports")
                 .join(&session.summary.id)
         );
 
-        // System scope: exports land under ~/.raven/system/exports, next to
-        // the system sessions dir (not directly under ~/.raven).
+        // System scope: exports land under ~/.huginn/system/exports, next to
+        // the system sessions dir (not directly under ~/.huginn).
         let _guard = huginn_testutil::home_env_lock();
         let home = tempfile::tempdir().unwrap();
         let original_home = std::env::var_os("HOME");
@@ -669,7 +669,7 @@ mod tests {
         assert_eq!(
             sys_store.default_export_dir(&session),
             home.path()
-                .join(".raven")
+                .join(".huginn")
                 .join("system")
                 .join("exports")
                 .join(&session.summary.id)
