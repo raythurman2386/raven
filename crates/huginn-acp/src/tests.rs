@@ -1,12 +1,12 @@
 //! Offline ACP protocol + in-process client tests.
 
 use super::protocol::{
-    agent_capabilities, auth_methods, extract_prompt_text, map_event, permission_allowed,
-    tool_kind, Incoming, StopReason, AUTH_METHOD_ID,
+    agent_capabilities, auth_methods, extract_prompt_text, map_event, model_config_option,
+    permission_allowed, tool_kind, Incoming, StopReason, AUTH_METHOD_ID,
 };
 use super::server::{dispatch, AcpServer, FrameWrite};
 use huginn_agent::AgentEvent;
-use huginn_config::{ConfigFile, Mode, Provider, Scope, Settings};
+use huginn_config::{ConfigFile, Mode, Provider, ProviderConfig, Scope, Settings};
 use huginn_proto::{Plan, PlanStep, PlanStepStatus};
 use serde_json::{json, Value};
 use std::io::Write;
@@ -328,6 +328,43 @@ async fn session_new_advertises_model_config_option() {
             "option must be provider-qualified: {value}"
         );
     }
+}
+
+#[test]
+fn model_config_option_uses_configured_lists() {
+    let mut cfg = ConfigFile::default();
+    for (name, models) in [
+        ("grok", vec!["grok-4.7"]),
+        ("openrouter", vec!["x-ai/grok-4.7", "z-ai/glm-5.3-flash"]),
+        ("ollama", vec!["glm-5.3-flash:cloud"]),
+        ("opencode-go", vec!["deepseek-v4-flash"]),
+    ] {
+        cfg.providers.insert(
+            name.into(),
+            ProviderConfig {
+                models: models.into_iter().map(str::to_string).collect(),
+                ..Default::default()
+            },
+        );
+    }
+
+    let option = model_config_option(&cfg, "grok/grok-4.7");
+    let values: Vec<&str> = option["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|opt| opt["value"].as_str())
+        .collect();
+    assert_eq!(
+        values,
+        vec![
+            "grok/grok-4.7",
+            "ollama/glm-5.3-flash:cloud",
+            "opencode-go/deepseek-v4-flash",
+            "openrouter/x-ai/grok-4.7",
+            "openrouter/z-ai/glm-5.3-flash",
+        ]
+    );
 }
 
 #[tokio::test]

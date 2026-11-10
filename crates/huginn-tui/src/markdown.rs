@@ -25,11 +25,13 @@ struct InlineStyle {
     italic: bool,
     strike: bool,
     code: bool,
+    heading: bool,
 }
 
 impl InlineStyle {
     fn to_style(self, theme: Theme) -> Style {
-        let mut s = Style::default().fg(theme.fg);
+        let color = if self.heading { theme.accent } else { theme.fg };
+        let mut s = Style::default().fg(color);
         if self.bold {
             s = s.add_modifier(Modifier::BOLD);
         }
@@ -40,6 +42,7 @@ impl InlineStyle {
             s = s.add_modifier(Modifier::CROSSED_OUT);
         }
         if self.code {
+            // Color only. A background chip fights whatever theme is active.
             s = s.fg(theme.tool);
         }
         s
@@ -153,20 +156,18 @@ impl Renderer {
     fn code_block(&mut self, code: &str, lang: Option<String>) {
         self.flush();
         let label = lang.unwrap_or_else(|| "code".to_string());
-        self.lines.push(Line::from(Span::styled(
-            format!("┌─ {label}"),
-            Style::default().fg(self.theme.dim),
-        )));
+        let gutter = Style::default().fg(self.theme.dim);
+        let code_style = Style::default().fg(self.theme.tool);
+        self.lines
+            .push(Line::from(Span::styled(format!("┌─ {label}"), gutter)));
         for line in code.lines() {
-            self.lines.push(Line::from(Span::styled(
-                format!("│ {line}"),
-                Style::default().fg(self.theme.tool),
-            )));
+            self.lines.push(Line::from(vec![
+                Span::styled("│ ", gutter),
+                Span::styled(line.to_string(), code_style),
+            ]));
         }
-        self.lines.push(Line::from(Span::styled(
-            "└─".to_string(),
-            Style::default().fg(self.theme.dim),
-        )));
+        self.lines
+            .push(Line::from(Span::styled("└─".to_string(), gutter)));
         self.lines.push(Line::from(""));
     }
 
@@ -248,6 +249,7 @@ impl Renderer {
                 self.cur
                     .push(Span::styled(marker, Style::default().fg(self.theme.accent)));
                 self.inline.bold = true;
+                self.inline.heading = true;
             }
             Tag::BlockQuote(_) => {
                 self.in_quote = true;
@@ -334,6 +336,7 @@ impl Renderer {
             }
             TagEnd::Heading(_) => {
                 self.inline.bold = false;
+                self.inline.heading = false;
                 self.flush();
             }
             TagEnd::BlockQuote(_) => {
@@ -404,10 +407,13 @@ mod tests {
         let lines = render("# Title");
         let first = &lines[0];
         assert!(first.to_string().contains("Title"));
-        assert!(first
+        let title = first
             .spans
             .iter()
-            .any(|s| s.style.add_modifier.contains(Modifier::BOLD)));
+            .find(|s| s.content.as_ref() == "Title")
+            .expect("title span");
+        assert_eq!(title.style.fg, Some(Theme::RAVENWOOD.accent));
+        assert!(title.style.add_modifier.contains(Modifier::BOLD));
     }
 
     #[test]
@@ -438,6 +444,10 @@ mod tests {
             .find(|s| s.content.as_ref() == "cargo test")
             .expect("code span");
         assert_eq!(code.style.fg, Some(Theme::RAVENWOOD.tool));
+        assert!(
+            code.style.bg.is_none(),
+            "inline code must not paint a background"
+        );
     }
 
     #[test]
@@ -447,6 +457,14 @@ mod tests {
         assert!(text.iter().any(|l| l.contains("┌─ rust")));
         assert!(text.iter().any(|l| l.contains("fn main() {}")));
         assert!(text.iter().any(|l| l.contains("└─")));
+        let code_line = lines
+            .iter()
+            .find(|l| l.to_string().contains("fn main() {}"))
+            .expect("code line");
+        assert_eq!(code_line.spans[0].content.as_ref(), "│ ");
+        assert_eq!(code_line.spans[0].style.fg, Some(Theme::RAVENWOOD.dim));
+        assert_eq!(code_line.spans[1].style.fg, Some(Theme::RAVENWOOD.tool));
+        assert!(code_line.spans[1].style.bg.is_none());
     }
 
     #[test]

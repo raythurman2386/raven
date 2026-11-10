@@ -82,7 +82,8 @@ default_model = "qwen2.5-coder:14b"
 
 [providers.openrouter]
 base_url = "https://openrouter.ai/api/v1"
-default_model = "deepseek-v4-pro:cloud"
+default_model = "x-ai/grok-4.7"
+models = ["x-ai/grok-4.7", "x-ai/grok-4.6", "anthropic/claude-sonnet-5.5"]
 # api_key = "sk-..."   # prefer an env var (see below)
 ```
 
@@ -92,6 +93,7 @@ Each provider table supports:
 |---|---|
 | `base_url` | OpenAI-compatible `/v1` endpoint. |
 | `default_model` | Model used when no `--model` / `/model` override is set. |
+| `models` | Optional list of model ids for `/model` and the ACP picker. When non-empty, this list **replaces** the live `/models` catalog for that provider. Omit it to keep the live catalog (capped at 200 in the editor picker). |
 | `api_key` | Literal key in the config file. **Prefer `api_key_env`** so the secret stays out of the file. |
 | `api_key_env` | **Name** of the env var holding this provider's key (e.g. `GROQ_API_KEY`). Only the name is stored in config — the secret itself lives in the environment. |
 

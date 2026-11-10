@@ -1242,7 +1242,7 @@ checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
 
 [[package]]
 name = "huginn"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -1270,7 +1270,7 @@ dependencies = [
 
 [[package]]
 name = "huginn-acp"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "huginn-agent",
@@ -1287,7 +1287,7 @@ dependencies = [
 
 [[package]]
 name = "huginn-agent"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -1306,7 +1306,7 @@ dependencies = [
 
 [[package]]
 name = "huginn-config"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "dirs",
@@ -1325,7 +1325,7 @@ dependencies = [
 
 [[package]]
 name = "huginn-persist"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "dirs",
@@ -1340,7 +1340,7 @@ dependencies = [
 
 [[package]]
 name = "huginn-proto"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1350,7 +1350,7 @@ dependencies = [
 
 [[package]]
 name = "huginn-sandbox"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "huginn-proto",
@@ -1367,14 +1367,14 @@ dependencies = [
 
 [[package]]
 name = "huginn-testutil"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "huginn-tokenizer"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "huginn-proto",
  "regex",
@@ -1384,7 +1384,7 @@ dependencies = [
 
 [[package]]
 name = "huginn-tools"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anydoc",
  "anyhow",
@@ -1406,7 +1406,7 @@ dependencies = [
 
 [[package]]
 name = "huginn-tui"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "crossterm",

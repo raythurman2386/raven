@@ -67,14 +67,14 @@ pub fn commands() -> Vec<CommandSpec> {
         CommandSpec {
             name: "model",
             aliases: &["m"],
-            summary: "Switch the model for subsequent turns: /model <name>",
-            arg_help: Some("<model>"),
+            summary: "Switch the model with the picker, /model <name>, or /model <provider>/<model>",
+            arg_help: Some("[name | provider/model]"),
         },
         CommandSpec {
             name: "provider",
             aliases: &["p"],
             summary:
-                "Switch the provider for subsequent turns: /provider <name> (or /provider to list)",
+                "Switch the provider with /provider <name>, or open the model picker (provider/model)",
             arg_help: Some("[name]"),
         },
         CommandSpec {

@@ -90,45 +90,28 @@ pub(super) async fn dispatch_slash_command(
         "model" => {
             let name = pc.args.trim();
             if name.is_empty() {
-                state.push_system(format!(
-                    "current model: {}  (try /model <name>)",
-                    settings.model
-                ));
-                state.log_dirty = true;
+                if !state.open_model_picker(config_file, &settings.provider.name, &settings.model) {
+                    state.push_system("answer the prompt before switching models");
+                    state.log_dirty = true;
+                }
             } else {
-                settings.model = name.to_string();
-                // Match startup behaviour: prefer the live Ollama `/api/show`
-                // value, falling back to the name heuristic when unreachable.
-                settings.context_window = huginn_agent::context::fetch_context_window(
-                    &settings.provider,
-                    &settings.model,
-                )
-                .await;
-                settings.max_tokens = Settings::derived_max_tokens(settings.context_window);
-                *compact_at = ((settings.context_window - settings.context_window / 8) as f32
-                    * settings.compact_threshold) as usize;
-
-                // Persist the new model on the session so a resume shows it.
-                let _ = store.update_model(session, &settings.model);
-
-                // Refresh the static header blocks (model + context/compact).
-                if let Some(BlockKind::System(b)) = state.blocks.get_mut(0) {
-                    b.set_text(format!(
-                        "huginn v{} · {} · {}",
-                        env!("CARGO_PKG_VERSION"),
-                        settings.model,
-                        settings.provider.name
-                    ));
+                // `<provider>/<model>` switches both when the prefix is a known
+                // provider. Anything else, including `x-ai/grok-4.7`, stays a
+                // model id on the current provider (same rule as ACP).
+                if let Some((provider_name, model)) = name.split_once('/') {
+                    if huginn_config::is_known_provider(config_file, provider_name) {
+                        settings.provider = huginn_config::resolve_provider(
+                            config_file,
+                            Some(provider_name.to_string()),
+                        );
+                        settings.model = model.to_string();
+                    } else {
+                        settings.model = name.to_string();
+                    }
+                } else {
+                    settings.model = name.to_string();
                 }
-                if let Some(BlockKind::System(b)) = state.blocks.get_mut(1) {
-                    b.set_text(format!(
-                        "workspace {} · context {} · compact ~{}",
-                        settings.workspace.display(),
-                        super::fmt_tokens(settings.context_window as u64),
-                        super::fmt_tokens(*compact_at as u64),
-                    ));
-                }
-
+                sync_model_budget(state, settings, store, session, compact_at).await;
                 state.push_system(format!(
                     "model → {} · context {} · max_tokens {}",
                     settings.model, settings.context_window, settings.max_tokens
@@ -139,15 +122,12 @@ pub(super) async fn dispatch_slash_command(
         "provider" => {
             let name = pc.args.trim();
             if name.is_empty() {
-                let names = huginn_config::known_provider_names(config_file);
-                state.push_system(format!(
-                    "current provider: {}\navailable: {}",
-                    settings.provider.name,
-                    names.join(", ")
-                ));
-                state.log_dirty = true;
+                if !state.open_model_picker(config_file, &settings.provider.name, &settings.model) {
+                    state.push_system("answer the prompt before switching models");
+                    state.log_dirty = true;
+                }
             } else if !huginn_config::is_known_provider(config_file, name) {
-                state.push_system(format!("unknown provider {name:?} — try /provider to list"));
+                state.push_system(format!("unknown provider {name:?} — try /provider"));
                 state.log_dirty = true;
             } else {
                 // Re-resolve the provider from config + env. If the current
@@ -160,38 +140,7 @@ pub(super) async fn dispatch_slash_command(
                     settings.model = new_provider.default_model.clone();
                 }
                 settings.provider = new_provider;
-                // Match startup behaviour: prefer the live provider API value,
-                // falling back to the name heuristic when unreachable.
-                settings.context_window = huginn_agent::context::fetch_context_window(
-                    &settings.provider,
-                    &settings.model,
-                )
-                .await;
-                settings.max_tokens = Settings::derived_max_tokens(settings.context_window);
-                *compact_at = ((settings.context_window - settings.context_window / 8) as f32
-                    * settings.compact_threshold) as usize;
-
-                // Persist the new model on the session so a resume shows it.
-                let _ = store.update_model(session, &settings.model);
-
-                // Refresh the static header blocks (model + context/compact).
-                if let Some(BlockKind::System(b)) = state.blocks.get_mut(0) {
-                    b.set_text(format!(
-                        "huginn v{} · {} · {}",
-                        env!("CARGO_PKG_VERSION"),
-                        settings.model,
-                        settings.provider.name
-                    ));
-                }
-                if let Some(BlockKind::System(b)) = state.blocks.get_mut(1) {
-                    b.set_text(format!(
-                        "workspace {} · context {} · compact ~{}",
-                        settings.workspace.display(),
-                        super::fmt_tokens(settings.context_window as u64),
-                        super::fmt_tokens(*compact_at as u64),
-                    ));
-                }
-
+                sync_model_budget(state, settings, store, session, compact_at).await;
                 state.push_system(format!(
                     "provider → {} · model {} · context {} · max_tokens {}",
                     settings.provider.name,
@@ -465,6 +414,78 @@ pub(super) async fn dispatch_slash_command(
         }
     }
     Ok(true)
+}
+
+/// Recompute the context window, output budget, compaction point, persisted
+/// session model, and the two header blocks after the active model changes.
+async fn sync_model_budget(
+    state: &mut TuiState,
+    settings: &mut Settings,
+    store: &SessionStore,
+    session: &mut Session,
+    compact_at: &mut usize,
+) {
+    // Match startup behaviour: prefer the live provider API value, falling
+    // back to the name heuristic when unreachable.
+    settings.context_window =
+        huginn_agent::context::fetch_context_window(&settings.provider, &settings.model).await;
+    settings.max_tokens = Settings::derived_max_tokens(settings.context_window);
+    *compact_at = ((settings.context_window - settings.context_window / 8) as f32
+        * settings.compact_threshold) as usize;
+
+    let _ = store.update_model(session, &settings.model);
+
+    if let Some(BlockKind::System(b)) = state.blocks.get_mut(0) {
+        b.set_text(format!(
+            "huginn v{} · {} · {}",
+            env!("CARGO_PKG_VERSION"),
+            settings.model,
+            settings.provider.name
+        ));
+    }
+    if let Some(BlockKind::System(b)) = state.blocks.get_mut(1) {
+        b.set_text(format!(
+            "workspace {} · context {} · compact ~{}",
+            settings.workspace.display(),
+            super::fmt_tokens(settings.context_window as u64),
+            super::fmt_tokens(*compact_at as u64),
+        ));
+    }
+}
+
+/// Apply the picker's highlighted provider and model, then close it.
+///
+/// A filter that matches nothing closes the picker and leaves settings unchanged.
+pub(super) async fn confirm_model_picker(
+    state: &mut TuiState,
+    settings: &mut Settings,
+    store: &SessionStore,
+    session: &mut Session,
+    compact_at: &mut usize,
+    config_file: &huginn_config::ConfigFile,
+) {
+    let Some(entry) = state
+        .model_picker
+        .as_ref()
+        .and_then(|picker| picker.confirm())
+    else {
+        state.model_picker = None;
+        state.input_dirty = true;
+        return;
+    };
+    state.model_picker = None;
+    state.input_dirty = true;
+    let super::picker::ModelEntry {
+        provider, model, ..
+    } = entry;
+    settings.provider = huginn_config::resolve_provider(config_file, Some(provider));
+    settings.model = model;
+    sync_model_budget(state, settings, store, session, compact_at).await;
+    state.push_system(format!(
+        "model → {} · {}",
+        settings.provider.name, settings.model
+    ));
+    state.log_dirty = true;
 }
 
 /// Return the ISO date prefix `YYYY-MM-DD` for `days` days before the given

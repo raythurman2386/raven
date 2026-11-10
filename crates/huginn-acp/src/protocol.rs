@@ -181,23 +181,28 @@ pub const ACP_MAX_MODELS_PER_PROVIDER: usize = 200;
 /// provider's models as provider-qualified ids (`<provider>/<model>`).
 ///
 /// `current_value` is the active `provider/model` id (or a plain model on the
-/// active provider). Each provider's list comes from its live `/models`
-/// endpoint when reachable, else its curated `fallback_models`. Options are
-/// sorted by provider then model and deduped, and per-provider bounded by
+/// active provider). A non-empty `[providers.<name>] models` list is that
+/// provider's catalog. Otherwise the list comes from its live `/models`
+/// endpoint when reachable, else its `fallback_models`. Options are sorted
+/// by provider then model and deduped, and per-provider bounded by
 /// [`ACP_MAX_MODELS_PER_PROVIDER`].
 pub fn model_config_option(cfg: &huginn_config::ConfigFile, current_value: &str) -> Value {
     let mut options: Vec<Value> = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
 
     for name in huginn_config::known_provider_names(cfg) {
-        // Resolve the provider (config table or built-in) to reach its
-        // endpoint + key, then fetch its live model list.
-        let provider = huginn_config::resolve_provider(cfg, Some(name.clone()));
-        let models = huginn_config::fetch_live_provider_models(&provider);
-        let models = if models.is_empty() {
-            huginn_config::fallback_models(&name)
+        // A configured list is the catalog. Skip the live fetch so a pinned
+        // OpenRouter set does not pull the whole public catalog.
+        let models = if let Some(curated) = huginn_config::curated_models(cfg, &name) {
+            curated
         } else {
-            models
+            let provider = huginn_config::resolve_provider(cfg, Some(name.clone()));
+            let live = huginn_config::fetch_live_provider_models(&provider);
+            if live.is_empty() {
+                huginn_config::fallback_models(&name)
+            } else {
+                live
+            }
         };
         for model in models.into_iter().take(ACP_MAX_MODELS_PER_PROVIDER) {
             let value = format!("{name}/{model}");

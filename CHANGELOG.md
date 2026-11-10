@@ -12,6 +12,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+## [0.7.1] - 2026-11-10
+
+### Added
+
+- **Model picker** — Alt+M, or `/model` and `/provider` with no arguments, opens one filterable list of every known provider's models. Arrow keys move, typing filters, and Enter applies the highlighted provider and model together. The highlight stays on that row when earlier rows drop out of the filter. `/model openrouter/x-ai/grok-4.7` still switches both when the prefix is a known provider; any other slash stays a model id on the current provider. A permission, question, or plan prompt closes the picker and keeps Enter and Esc.
+
+### Changed
+
+- **Curated model lists** — a `[providers.<name>].models` list with a real id replaces the live `/models` catalog for `/model` completion and the ACP model picker. An empty list, or a workspace overlay that is only blank strings, keeps the list underneath it. Builtin grok and OpenRouter fallbacks now start at `grok-4.7`.
+- **Chat scrollback** — user lines use a left bar, assistant lines a diamond, and tools one compact row that keeps the call snippet. The `You` and `Huginn` headers are gone. A wide character that is wider than the remaining columns still lands, so a narrow log cannot stall the wrap.
+
 ## [0.7.0] - 2026-11-10
 
 **Raven is now Huginn.** This is a clean rename with no compatibility layer: no `raven` alias or shim, no `RAVEN_*` fallback, no automatic move of `~/.raven`, and no deprecation period. `raven`, `RAVEN_*`, and `.raven` are not read. `raven self update` from 0.6.x cannot reach this release; install fresh with the install script. Release signatures use the same Ed25519 key as before.
