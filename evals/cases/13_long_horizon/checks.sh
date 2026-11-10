@@ -6,13 +6,13 @@ grep -q 'sum / xs.len()' src/stats.rs
 grep -q '(v\[mid - 1\] + v\[mid\]) / 2.0' src/stats.rs
 grep -q 'w.to_lowercase()' src/strings.rs
 grep -q 'principal \* r / denom' src/finance.rs
-# Goal/todo state is session-scoped under .raven/sessions/<id>/state/
-# (workspace-global .raven/state/ is a legacy read path only).
+# Goal/todo state is session-scoped under .huginn/sessions/<id>/state/
+# (workspace-global .huginn/state/ is a legacy read path only).
 # Select a matching session deliberately — do not rely on glob order.
 shopt -s nullglob
 goal_file=""
 todo_file=""
-for g in .raven/sessions/*/state/goal.json; do
+for g in .huginn/sessions/*/state/goal.json; do
   t="$(dirname "$g")/todos.json"
   [[ -f "$t" ]] || continue
   if grep -qiE 'test|fix' "$g" && grep -q 'mean' "$t"; then
@@ -24,7 +24,7 @@ done
 # Fall back to the newest paired goal/todos by mtime when keywords differ.
 if [[ -z "$goal_file" ]]; then
   newest=0
-  for g in .raven/sessions/*/state/goal.json; do
+  for g in .huginn/sessions/*/state/goal.json; do
     t="$(dirname "$g")/todos.json"
     [[ -f "$t" ]] || continue
     m=$(stat -c %Y "$g" 2>/dev/null || stat -f %m "$g")

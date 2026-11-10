@@ -19,7 +19,7 @@ use huginn_tokenizer::{TokenUsage, UsageCalibration};
 /// Prefix of the user-role setup message that sits after the stable system
 /// prompt and before the conversation. Compaction keeps it with the system
 /// message so a summary cannot drop the repo map, rules, or goal.
-pub const SETUP_PREFIX: &str = "<raven_setup>\n";
+pub const SETUP_PREFIX: &str = "<huginn_setup>\n";
 
 /// Whether `msg` is the pinned setup message.
 pub fn is_setup_message(msg: &ChatMessage) -> bool {
@@ -714,7 +714,7 @@ fn plan_transcript_path(
     let shown = workspace
         .and_then(|ws| abs.strip_prefix(ws).ok())
         .map(|p| p.display().to_string())
-        .unwrap_or_else(|| format!(".raven/compact/{name}"));
+        .unwrap_or_else(|| format!(".huginn/compact/{name}"));
     (abs, shown)
 }
 
@@ -1200,7 +1200,7 @@ mod tests {
     #[tokio::test]
     async fn compaction_transcript_is_workspace_relative_and_skipped_when_not_kept() {
         let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path().join(".raven").join("compact");
+        let dir = tmp.path().join(".huginn").join("compact");
         let mut msgs = vec![msg("system", "sys")];
         for i in 0..80 {
             msgs.push(msg(
@@ -1230,7 +1230,7 @@ mod tests {
             .find(|c| c.contains("Full transcript"))
             .unwrap_or("");
         assert!(
-            summary.contains(".raven/compact/compact-"),
+            summary.contains(".huginn/compact/compact-"),
             "pointer should be workspace-relative, got {summary}"
         );
         assert!(!summary.contains(tmp.path().to_str().unwrap_or("")));

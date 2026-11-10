@@ -5,13 +5,13 @@
 //!
 //! # Environment variable precedence
 //!
-//! `RAVEN_*` vars take priority over legacy `OG_*` fallbacks:
-//! - `RAVEN_MAX_ITER` > `OG_MAX_ITER`
-//! - `RAVEN_CONTEXT_WINDOW` > `OG_CONTEXT_WINDOW`
-//! - `RAVEN_COMPACT_THRESHOLD` > `OG_COMPACT_THRESHOLD`
+//! `HUGINN_*` vars take priority over legacy `OG_*` fallbacks:
+//! - `HUGINN_MAX_ITER` > `OG_MAX_ITER`
+//! - `HUGINN_CONTEXT_WINDOW` > `OG_CONTEXT_WINDOW`
+//! - `HUGINN_COMPACT_THRESHOLD` > `OG_COMPACT_THRESHOLD`
 //!
 //! Provider API keys are resolved per provider: config-file `api_key` (if set)
-//! → `RAVEN_API_KEY` (universal override) → the provider's declared
+//! → `HUGINN_API_KEY` (universal override) → the provider's declared
 //! `api_key_env` (or built-in mapping, e.g. `OPENROUTER_API_KEY` /
 //! `OLLAMA_API_KEY`).
 //!
@@ -98,7 +98,7 @@ impl Mode {
 ///
 /// `--yolo` implies `--mode agent`: it disables the plan step and the shell
 /// confirmation gate, and must expose the full (write/shell) toolset. Without
-/// this, `raven --yolo` (no explicit `--mode`) would keep a configured
+/// this, `huginn --yolo` (no explicit `--mode`) would keep a configured
 /// `Mode::Plan` / `Mode::Chat` and silently degrade to a read-only toolset,
 /// leaving the model unable to write files or run shell (see issue #126).
 ///
@@ -236,7 +236,7 @@ pub struct Settings {
 /// Flagged prompt and tool experiments. Each default is off.
 ///
 /// Turn them on from config (`lean_prompt = true`) or the environment
-/// (`RAVEN_LEAN_PROMPT=1`). They are not the production default until a
+/// (`HUGINN_LEAN_PROMPT=1`). They are not the production default until a
 /// before/after run shows task success holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct EfficiencyFlags {
@@ -256,11 +256,11 @@ impl EfficiencyFlags {
     /// Config values win when set; otherwise each flag reads its env var.
     pub fn from_config(cfg: &ConfigFile) -> Self {
         Self {
-            lean_prompt: flag_or_env(cfg.lean_prompt, "RAVEN_LEAN_PROMPT"),
-            tool_offload: flag_or_env(cfg.tool_offload, "RAVEN_TOOL_OFFLOAD"),
-            sparse_line_numbers: flag_or_env(cfg.sparse_line_numbers, "RAVEN_SPARSE_LINES"),
-            short_compact: flag_or_env(cfg.short_compact, "RAVEN_SHORT_COMPACT"),
-            subagent_handoff: flag_or_env(cfg.subagent_handoff, "RAVEN_SUBAGENT_HANDOFF"),
+            lean_prompt: flag_or_env(cfg.lean_prompt, "HUGINN_LEAN_PROMPT"),
+            tool_offload: flag_or_env(cfg.tool_offload, "HUGINN_TOOL_OFFLOAD"),
+            sparse_line_numbers: flag_or_env(cfg.sparse_line_numbers, "HUGINN_SPARSE_LINES"),
+            short_compact: flag_or_env(cfg.short_compact, "HUGINN_SHORT_COMPACT"),
+            subagent_handoff: flag_or_env(cfg.subagent_handoff, "HUGINN_SUBAGENT_HANDOFF"),
         }
     }
 }
@@ -456,56 +456,56 @@ pub fn load_dotenv_from(dir: &std::path::Path) {
     }
 }
 
-/// Load `~/.raven/.env` if it exists, for provider API keys written by the
+/// Load `~/.huginn/.env` if it exists, for provider API keys written by the
 /// onboarding wizard. Read-only, no-overwrite semantics (same as
 /// [`load_dotenv`]). Returns the number of keys newly set.
 pub fn load_global_dotenv() -> usize {
     match dirs::home_dir() {
-        Some(home) => load_dotenv(&home.join(".raven").join(".env")),
+        Some(home) => load_dotenv(&home.join(".huginn").join(".env")),
         None => 0,
     }
 }
 
-/// Max agent iterations: `RAVEN_MAX_ITER` env var, else `OG_MAX_ITER`, else `60`.
+/// Max agent iterations: `HUGINN_MAX_ITER` env var, else `OG_MAX_ITER`, else `60`.
 pub fn default_max_iter() -> usize {
-    std::env::var("RAVEN_MAX_ITER")
+    std::env::var("HUGINN_MAX_ITER")
         .or_else(|_| std::env::var("OG_MAX_ITER"))
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(60)
 }
 
-/// Context window override from `RAVEN_CONTEXT_WINDOW` or `OG_CONTEXT_WINDOW` (tokens).
+/// Context window override from `HUGINN_CONTEXT_WINDOW` or `OG_CONTEXT_WINDOW` (tokens).
 pub fn env_context_window() -> Option<usize> {
-    std::env::var("RAVEN_CONTEXT_WINDOW")
+    std::env::var("HUGINN_CONTEXT_WINDOW")
         .or_else(|_| std::env::var("OG_CONTEXT_WINDOW"))
         .ok()
         .and_then(|s| s.parse().ok())
 }
 
-/// Compact threshold override from `RAVEN_COMPACT_THRESHOLD` or `OG_COMPACT_THRESHOLD` (0.0–1.0).
+/// Compact threshold override from `HUGINN_COMPACT_THRESHOLD` or `OG_COMPACT_THRESHOLD` (0.0–1.0).
 pub fn env_compact_threshold() -> Option<f32> {
-    std::env::var("RAVEN_COMPACT_THRESHOLD")
+    std::env::var("HUGINN_COMPACT_THRESHOLD")
         .or_else(|_| std::env::var("OG_COMPACT_THRESHOLD"))
         .ok()
         .and_then(|s| s.parse().ok())
 }
 
-/// Optional SearXNG base URL from `RAVEN_SEARXNG_URL` (e.g.
+/// Optional SearXNG base URL from `HUGINN_SEARXNG_URL` (e.g.
 /// `http://127.0.0.1:8080` or `https://searx.example.com`). Empty/whitespace
 /// values are treated as absent, so a private install does not require it.
 pub fn env_searxng_url() -> Option<String> {
-    std::env::var("RAVEN_SEARXNG_URL")
+    std::env::var("HUGINN_SEARXNG_URL")
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
 }
 
-/// Optional comma-separated SearXNG engine list from `RAVEN_SEARXNG_ENGINES`
+/// Optional comma-separated SearXNG engine list from `HUGINN_SEARXNG_ENGINES`
 /// (e.g. `google,duckduckgo,bing`). Empty values are treated as absent, which
 /// leaves engine selection to the SearXNG server defaults.
 pub fn env_searxng_engines() -> Option<Vec<String>> {
-    let raw = std::env::var("RAVEN_SEARXNG_ENGINES").ok()?;
+    let raw = std::env::var("HUGINN_SEARXNG_ENGINES").ok()?;
     let engines: Vec<String> = raw
         .split(',')
         .map(|s| s.trim().to_string())
@@ -520,7 +520,7 @@ pub fn env_searxng_engines() -> Option<Vec<String>> {
 
 // ── Config file ────────────────────────────────────────────────────────
 
-/// Config file loaded from `~/.raven/config.toml` or `.raven/config.toml`.
+/// Config file loaded from `~/.huginn/config.toml` or `.huginn/config.toml`.
 ///
 /// All fields optional — only overrides built-in defaults when present.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -565,18 +565,18 @@ pub struct ConfigFile {
     pub subagent_handoff: Option<bool>,
 }
 
-/// Load config from workspace `.raven/config.toml` then `~/.raven/config.toml`.
+/// Load config from workspace `.huginn/config.toml` then `~/.huginn/config.toml`.
 ///
 /// Workspace config takes priority over global. Returns default (all None) if
 /// neither file exists.
 pub fn load_config_file(workspace: &std::path::Path) -> ConfigFile {
     // Try workspace config first (higher priority)
-    let ws_config = workspace.join(".raven").join("config.toml");
+    let ws_config = workspace.join(".huginn").join("config.toml");
     let ws = load_toml_file(&ws_config);
 
     // Then global config (lower priority)
     let global = dirs::home_dir()
-        .map(|h| h.join(".raven").join("config.toml"))
+        .map(|h| h.join(".huginn").join("config.toml"))
         .map(|p| load_toml_file(&p))
         .unwrap_or_default();
 

@@ -130,7 +130,7 @@ pub async fn run_parallel(settings: &Settings, tasks: Vec<String>) -> Result<Vec
         let mut s = settings.clone();
         // Sub-agents run without goal/todo state (issue #185).
         s.session_state_dir = None;
-        let branch_name = format!("raven-sub-{}-{}", i, timestamp);
+        let branch_name = format!("huginn-sub-{}-{}", i, timestamp);
         let wt_dir = worktree_dir.as_ref().map(|d| d.path().to_path_buf());
         eprintln!("[sub-agent {}] starting: {}", i, task);
         let handle = tokio::spawn(async move {
@@ -282,8 +282,8 @@ pub async fn run_parallel(settings: &Settings, tasks: Vec<String>) -> Result<Vec
             anyhow::bail!(
                 "patch apply failed for {} sub-agent(s): {}. \
                  Successful applies remain uncommitted in the working tree. \
-                 Recovery patches are under `.raven/recovery-sub-*.patch` \
-                 (see `.raven/RECOVERY.md`). Apply with `git apply <patch>`. \
+                 Recovery patches are under `.huginn/recovery-sub-*.patch` \
+                 (see `.huginn/RECOVERY.md`). Apply with `git apply <patch>`. \
                  To avoid conflicts, assign disjoint files to each sub-agent.",
                 conflicted.len(),
                 names.join(", ")
@@ -298,11 +298,11 @@ pub async fn run_parallel(settings: &Settings, tasks: Vec<String>) -> Result<Vec
     Ok(results)
 }
 
-/// Write a sub-agent's unapplied diff to `.raven/recovery-sub-N.patch` and
-/// append a line to `.raven/RECOVERY.md` so the artifact is findable after
+/// Write a sub-agent's unapplied diff to `.huginn/recovery-sub-N.patch` and
+/// append a line to `.huginn/RECOVERY.md` so the artifact is findable after
 /// the CLI output has scrolled away.
 fn persist_recovery_patch(workspace: &Path, index: usize, patch: &str, reason: &str) -> String {
-    let rel = format!(".raven/recovery-sub-{index}.patch");
+    let rel = format!(".huginn/recovery-sub-{index}.patch");
     if !patch.trim().is_empty() {
         let full = workspace.join(&rel);
         if let Some(parent) = full.parent() {
@@ -318,18 +318,18 @@ fn persist_recovery_patch(workspace: &Path, index: usize, patch: &str, reason: &
 }
 
 fn append_recovery_index(workspace: &Path, index: usize, rel: &str, reason: &str) {
-    let path = workspace.join(".raven").join("RECOVERY.md");
+    let path = workspace.join(".huginn").join("RECOVERY.md");
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     let mut body = std::fs::read_to_string(&path).unwrap_or_else(|_| {
-        "# Raven recovery\n\nSub-agent work that could not be merged is preserved here.\n\n".into()
+        "# Huginn recovery\n\nSub-agent work that could not be merged is preserved here.\n\n".into()
     });
     body.push_str(&format!(
         "- sub-agent {index}: {reason}\n  - patch: `{rel}`\n  - apply: `git apply {rel}`\n"
     ));
     if let Err(e) = std::fs::write(&path, body) {
-        tracing::warn!("failed to update .raven/RECOVERY.md: {e}");
+        tracing::warn!("failed to update .huginn/RECOVERY.md: {e}");
     }
 }
 
@@ -343,12 +343,12 @@ mod tests {
         append_recovery_index(
             tmp.path(),
             0,
-            ".raven/recovery-sub-0.patch",
+            ".huginn/recovery-sub-0.patch",
             "merge conflict",
         );
-        let md = std::fs::read_to_string(tmp.path().join(".raven/RECOVERY.md")).unwrap();
+        let md = std::fs::read_to_string(tmp.path().join(".huginn/RECOVERY.md")).unwrap();
         assert!(md.contains("sub-agent 0"));
-        assert!(md.contains("git apply .raven/recovery-sub-0.patch"));
+        assert!(md.contains("git apply .huginn/recovery-sub-0.patch"));
         assert!(md.contains("merge conflict"));
     }
 }

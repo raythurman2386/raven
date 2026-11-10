@@ -31,9 +31,9 @@ REPO_ROOT = ROOT.parent
 CASES_DIR = ROOT / "cases"
 OUT_DIR = ROOT / "out"
 DEFAULT_BIN_CANDIDATES = [
-    REPO_ROOT / "target" / "release" / "raven",
-    REPO_ROOT / "target" / "debug" / "raven",
-    Path(shutil.which("raven") or ""),
+    REPO_ROOT / "target" / "release" / "huginn",
+    REPO_ROOT / "target" / "debug" / "huginn",
+    Path(shutil.which("huginn") or ""),
 ]
 
 
@@ -209,7 +209,7 @@ def init_git(repo: Path) -> None:
     # Keep planted `.env` / `.raven/` / `data/` untracked in the seed.
     # `git add -A` would otherwise bake them into the initial commit.
     subprocess.run(
-        ["git", "add", "-A", "--", ".", ":!.env", ":!.env.*", ":!.raven/", ":!data/"],
+        ["git", "add", "-A", "--", ".", ":!.env", ":!.env.*", ":!.huginn/", ":!data/"],
         cwd=repo,
         check=True,
         capture_output=True,
@@ -245,7 +245,7 @@ def is_dirty(repo: Path) -> bool:
     lines = []
     for line in r.stdout.splitlines():
         # ignore session store
-        if ".raven/" in line or line.endswith(".raven"):
+        if ".huginn/" in line or line.endswith(".huginn"):
             continue
         if line.strip():
             lines.append(line)
@@ -310,7 +310,7 @@ def harvest_usage(work: Path, since: float | None = None) -> tuple[int, int, int
     Only sessions belonging to this case run are counted (see
     [`case_session_dirs`]) so multi-session workdirs do not over-report.
     """
-    sessions = work / ".raven" / "sessions"
+    sessions = work / ".huginn" / "sessions"
     session_dirs = case_session_dirs(sessions, since)
     if not session_dirs:
         return 0, 0, 0
@@ -425,13 +425,13 @@ def run_case(
 
         # The raven CLI no longer takes --host/--api-key. Declare the eval
         # endpoint as a named provider in the workspace config and select it
-        # with --provider eval. The API key is passed via env (RAVEN_API_KEY).
+        # with --provider eval. The API key is passed via env (HUGINN_API_KEY).
         # Named providers such as grok resolve their own endpoint and session.
         # Writing an eval provider would shadow that with a bare base URL.
         if provider:
             cmd_provider = provider
         else:
-            cfg_dir = work / ".raven"
+            cfg_dir = work / ".huginn"
             cfg_dir.mkdir(parents=True, exist_ok=True)
             cfg_lines = [
                 'provider = "eval"',
@@ -463,7 +463,7 @@ def run_case(
 
         env = os.environ.copy()
         if api_key:
-            env["RAVEN_API_KEY"] = api_key
+            env["HUGINN_API_KEY"] = api_key
 
         stdin_data = "y\n" if meta.stdin_approve else None
         try:
@@ -788,7 +788,7 @@ def _selftest_harvest_usage() -> None:
 
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp)
-        sessions = work / ".raven" / "sessions"
+        sessions = work / ".huginn" / "sessions"
         old = sessions / "old-session"
         new = sessions / "new-session"
         old.mkdir(parents=True)

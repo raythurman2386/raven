@@ -1,4 +1,4 @@
-//! # Raven
+//! # Huginn
 //!
 //! An opinionated, personal coding-agent harness for [Ollama](https://ollama.com)
 //! and any OpenAI-compatible `/v1/chat/completions` endpoint. Linux (x86_64,
@@ -72,16 +72,16 @@ impl From<ModeArg> for Mode {
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "raven",
+    name = "huginn",
     version,
     about = "Opinionated personal coding-agent harness for Linux and Raspberry Pi (Ollama / OpenAI-compatible endpoints)"
 )]
 struct Cli {
     /// Task description (positional args, joined with spaces).
     ///
-    /// Only the first word is captured when unquoted — `raven add a test`
+    /// Only the first word is captured when unquoted — `huginn add a test`
     /// captures just `add` (the rest are parsed as flags/unknown args).
-    /// Use quotes (`raven "add a test"`) or `-p` (`raven -p "add a test"`)
+    /// Use quotes (`huginn "add a test"`) or `-p` (`huginn -p "add a test"`)
     /// for multi-word tasks.
     task: Vec<String>,
 
@@ -94,11 +94,11 @@ struct Cli {
     model: Option<String>,
 
     /// Reasoning effort for models that accept it (none, minimal, low, medium, high, xhigh).
-    #[arg(long, env = "RAVEN_REASONING_EFFORT")]
+    #[arg(long, env = "HUGINN_REASONING_EFFORT")]
     effort: Option<String>,
 
     /// Named provider to use (e.g. ollama, openrouter). See config.toml [providers.*].
-    #[arg(long, env = "RAVEN_PROVIDER")]
+    #[arg(long, env = "HUGINN_PROVIDER")]
     provider: Option<String>,
 
     /// Working directory
@@ -141,13 +141,13 @@ struct Cli {
     rules: Option<String>,
 
     /// Override the model's context window size (tokens). Auto-inferred from model name when absent.
-    /// Env: RAVEN_CONTEXT_WINDOW (or legacy OG_CONTEXT_WINDOW).
-    #[arg(long, env = "RAVEN_CONTEXT_WINDOW")]
+    /// Env: HUGINN_CONTEXT_WINDOW (or legacy OG_CONTEXT_WINDOW).
+    #[arg(long, env = "HUGINN_CONTEXT_WINDOW")]
     context_window: Option<usize>,
 
     /// Fraction of the context window at which compaction triggers (0.0–1.0, default 0.75).
-    /// Env: RAVEN_COMPACT_THRESHOLD (or legacy OG_COMPACT_THRESHOLD).
-    #[arg(long, env = "RAVEN_COMPACT_THRESHOLD")]
+    /// Env: HUGINN_COMPACT_THRESHOLD (or legacy OG_COMPACT_THRESHOLD).
+    #[arg(long, env = "HUGINN_COMPACT_THRESHOLD")]
     compact_threshold: Option<f32>,
 
     /// Disable streaming and use a single non-streaming request instead.
@@ -170,11 +170,11 @@ struct Cli {
     ///
     /// With no ID, exports the most recent session. Optional value is a
     /// session ID (same as `--resume`). Writes to
-    /// `{workspace}/.raven/exports/{id}/` unless `--export-dir` is set.
+    /// `{workspace}/.huginn/exports/{id}/` unless `--export-dir` is set.
     #[arg(long, num_args = 0..=1)]
     export: Option<Option<String>>,
 
-    /// Destination directory for `--export` (default: `.raven/exports/<id>/`).
+    /// Destination directory for `--export` (default: `.huginn/exports/<id>/`).
     #[arg(long)]
     export_dir: Option<PathBuf>,
 
@@ -182,7 +182,7 @@ struct Cli {
     #[arg(long)]
     acp: bool,
 
-    /// Manage raven itself (update / rollback).
+    /// Manage huginn itself (update / rollback).
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -190,20 +190,20 @@ struct Cli {
 /// Top-level subcommands.
 #[derive(clap::Subcommand, Debug)]
 enum Command {
-    /// Manage raven itself (update / rollback).
+    /// Manage huginn itself (update / rollback).
     #[command(name = "self")]
     SelfCmd {
         #[command(subcommand)]
         cmd: SelfSubcommand,
     },
-    /// Sign in through Grok Build (`grok login`) so raven can use the subscription.
+    /// Sign in through Grok Build (`grok login`) so huginn can use the subscription.
     Login,
 }
 
-/// Subcommands under `raven self`.
+/// Subcommands under `huginn self`.
 #[derive(clap::Subcommand, Debug)]
 enum SelfSubcommand {
-    /// Update raven to the latest (or a pinned) release.
+    /// Update huginn to the latest (or a pinned) release.
     Update(huginn::update::UpdateArgs),
 }
 
@@ -226,13 +226,13 @@ fn run_grok_login() -> Result<()> {
             );
             Ok(())
         }
-        Err(e) => anyhow::bail!("login finished but raven could not read the session: {e}"),
+        Err(e) => anyhow::bail!("login finished but huginn could not read the session: {e}"),
     }
 }
 
 /// Initialize tracing: default filter `warn` when `RUST_LOG` is unset.
 ///
-/// When stdout is a TTY, append to `~/.raven/raven.log` — stderr shares that
+/// When stdout is a TTY, append to `~/.huginn/huginn.log` — stderr shares that
 /// TTY with the TUI alternate screen, so a log line would paint at the cursor
 /// (the input bar). When stdout is piped, write to stderr instead.
 fn init_tracing() {
@@ -246,9 +246,9 @@ fn init_tracing() {
     let use_file = std::io::stdout().is_terminal();
     if use_file {
         if let Some(home) = dirs::home_dir() {
-            let dir = home.join(".raven");
+            let dir = home.join(".huginn");
             if std::fs::create_dir_all(&dir).is_ok() {
-                let path = dir.join("raven.log");
+                let path = dir.join("huginn.log");
                 if let Ok(file) = std::fs::OpenOptions::new()
                     .create(true)
                     .append(true)
@@ -276,7 +276,7 @@ fn init_tracing() {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Load repo/CWD `.env` before clap reads RAVEN_* defaults so cloud keys
+    // Load repo/CWD `.env` before clap reads HUGINN_* defaults so cloud keys
     // in a local file work without exporting them in the shell. Does not
     // override already-exported variables.
     if let Ok(cwd) = std::env::current_dir() {
@@ -287,7 +287,7 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    // `raven self update` / `raven self update --rollback` are handled before
+    // `huginn self update` / `huginn self update --rollback` are handled before
     // any agent setup: they replace the running binary and exit.
     if let Some(command) = &cli.command {
         match command {
@@ -304,15 +304,15 @@ async fn main() -> Result<()> {
         .map(|p| p.canonicalize().unwrap_or(p))
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-    // Also load workspace `.env` (no-overwrite) for `raven --workspace …`.
+    // Also load workspace `.env` (no-overwrite) for `huginn --workspace …`.
     load_dotenv_from(&workspace);
 
-    // Load API keys written to ~/.raven/.env by the onboarding wizard (and any
+    // Load API keys written to ~/.huginn/.env by the onboarding wizard (and any
     // keys the user placed there). No-overwrite: already-exported vars win.
     load_global_dotenv();
 
     // First-run onboarding: interactive + unconfigured + un-overridden → run
-    // the wizard, which writes ~/.raven/config.toml (+ ~/.raven/.env key) and
+    // the wizard, which writes ~/.huginn/config.toml (+ ~/.huginn/.env key) and
     // returns the resulting config. Skips automatically for --headless/--yolo/
     // --acp/CI (non-TTY) and any existing config or explicit provider/model.
     let cfg = load_config_file(&workspace);
@@ -320,11 +320,11 @@ async fn main() -> Result<()> {
         &cfg,
         cli.model.clone(),
         cli.provider.clone(),
-        std::env::var("RAVEN_PROVIDER").ok(),
+        std::env::var("HUGINN_PROVIDER").ok(),
         runner::stdin_is_tty(),
     ) {
         let cfg = run_onboarding().await?;
-        // The wizard may have just written an API key to ~/.raven/.env. Reload
+        // The wizard may have just written an API key to ~/.huginn/.env. Reload
         // it now so resolve_provider()/resolve_key() below picks up the key in
         // this same session (otherwise a keyed provider starts unauthenticated
         // until the next run). No-overwrite: an already-exported var still wins.
@@ -342,7 +342,7 @@ async fn main() -> Result<()> {
     let cfg_for_acp = cfg.clone();
     let efficiency = EfficiencyFlags::from_config(&cfg);
 
-    // Resolve the active provider: CLI --provider > RAVEN_PROVIDER env >
+    // Resolve the active provider: CLI --provider > HUGINN_PROVIDER env >
     // config `provider` > builtin `ollama`. Endpoint + auth come from the
     // provider (config `[providers.*]` table + provider-scoped key env vars).
     let provider = resolve_provider(&cfg, cli.provider);
@@ -466,7 +466,7 @@ async fn main() -> Result<()> {
                 .as_ref()
                 .map(|p| {
                     format!(
-                        "\n  ⚠ recovery patch: {p}\n    apply with: git apply {p}\n    index: .raven/RECOVERY.md"
+                        "\n  ⚠ recovery patch: {p}\n    apply with: git apply {p}\n    index: .huginn/RECOVERY.md"
                     )
                 })
                 .unwrap_or_default();
@@ -493,7 +493,7 @@ async fn main() -> Result<()> {
             println!("No saved sessions in this workspace.");
         } else {
             if settings.scope.is_system() {
-                println!("System sessions (~/.raven/system/sessions):\n");
+                println!("System sessions (~/.huginn/system/sessions):\n");
             } else {
                 println!("Sessions in {}:\n", settings.workspace.display());
             }
@@ -605,9 +605,9 @@ async fn headless_run(
         * settings.compact_threshold) as usize;
 
     if settings.scope.is_system() {
-        println!("Raven (system scope)");
+        println!("Huginn (system scope)");
     } else {
-        println!("Raven (headless)");
+        println!("Huginn (headless)");
     }
     println!("Model:     {}", settings.model);
     if let Some(effort) = &settings.reasoning_effort {

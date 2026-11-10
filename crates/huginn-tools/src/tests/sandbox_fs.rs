@@ -467,7 +467,7 @@ fn present_output_spills_large_body_and_keeps_a_tail() {
     assert!(out.contains("Full output saved to"));
     assert!(out.contains("Tail:"));
     assert!(out.contains("line"));
-    let saved = std::fs::read_dir(tmp.path().join(".raven/tool-output")).unwrap();
+    let saved = std::fs::read_dir(tmp.path().join(".huginn/tool-output")).unwrap();
     assert_eq!(saved.count(), 1);
     assert!(!out.contains(&body), "the full body must not be inlined");
 }

@@ -107,7 +107,7 @@ impl McpServerSpec {
     /// Parse ACP `mcpServers` from a session lifecycle request.
     ///
     /// Stdio entries (no `type`, or `type: "stdio"`) are returned. HTTP/SSE
-    /// entries are skipped because Raven does not advertise those transports.
+    /// entries are skipped because Huginn does not advertise those transports.
     pub fn from_acp_params(params: &Value) -> Vec<Self> {
         let Some(arr) = params.get("mcpServers").and_then(|v| v.as_array()) else {
             return Vec::new();

@@ -1,6 +1,6 @@
 //! ACP v1 wire helpers: JSON-RPC envelopes, capabilities, and event mapping.
 //!
-//! Kept small on purpose — Raven speaks ACP v1 over stdio (text prompts,
+//! Kept small on purpose — Huginn speaks ACP v1 over stdio (text prompts,
 //! session lifecycle, config options, stdio MCP). Client `fs/*` /
 //! `terminal/*` are unused; HTTP/SSE MCP transports are not advertised.
 //! See <https://agentclientprotocol.com/protocol/overview>.
@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use huginn_agent::AgentEvent;
 use huginn_proto::{Plan, PlanStepStatus};
 
-/// ACP protocol major version Raven implements.
+/// ACP protocol major version Huginn implements.
 pub const PROTOCOL_VERSION: u16 = 1;
 
 /// JSON-RPC error codes used by this adapter.
@@ -106,7 +106,7 @@ pub fn agent_capabilities() -> Value {
 
 /// Auth methods advertised in `initialize`.
 ///
-/// Raven authenticates to its model provider using credentials already
+/// Huginn authenticates to its model provider using credentials already
 /// resolved in-process (env vars / config / `.env`) before the ACP loop
 /// starts — it has no interactive OAuth flow to run over the wire. So it
 /// advertises a single `agent`-type method: the agent handles authentication
@@ -120,7 +120,7 @@ pub fn auth_methods() -> Value {
     json!([{
         "id": AUTH_METHOD_ID,
         "name": "Agent auth",
-        "description": "Uses provider credentials already on this machine (Grok session from `raven login`, or a provider API key)",
+        "description": "Uses provider credentials already on this machine (Grok session from `huginn login`, or a provider API key)",
         "type": "agent"
     }])
 }
@@ -128,13 +128,13 @@ pub fn auth_methods() -> Value {
 /// Implementation info sent in `initialize`.
 pub fn agent_info() -> Value {
     json!({
-        "name": "raven",
-        "title": "Raven",
+        "name": "huginn",
+        "title": "Huginn",
         "version": env!("CARGO_PKG_VERSION")
     })
 }
 
-/// Session modes Raven can switch between via `session/set_mode`.
+/// Session modes Huginn can switch between via `session/set_mode`.
 ///
 /// Kept for clients that only speak the older modes API. Clients that
 /// support [`configOptions`](https://agentclientprotocol.com/protocol/session-config-options)
@@ -290,7 +290,7 @@ pub fn extract_prompt_text(prompt: &[Value]) -> Result<String, String> {
     }
 }
 
-/// Map a Raven tool name to an ACP `ToolKind`.
+/// Map a Huginn tool name to an ACP `ToolKind`.
 pub fn tool_kind(name: &str) -> &'static str {
     match name {
         "read_file" | "list_dir" => "read",
@@ -306,7 +306,7 @@ pub fn tool_kind(name: &str) -> &'static str {
     }
 }
 
-/// Map a Raven [`Plan`] to an ACP `plan` update.
+/// Map a Huginn [`Plan`] to an ACP `plan` update.
 pub fn plan_update(plan: &Plan) -> Value {
     let entries: Vec<Value> = plan
         .steps

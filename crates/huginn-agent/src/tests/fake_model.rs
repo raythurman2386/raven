@@ -906,7 +906,7 @@ fn system_message_stays_free_of_workspace_and_git_status() {
     assert!(!sys.contains("Working tree"), "{sys}");
     assert!(sys.contains("--- Mode ---"), "{sys}");
     let setup = agent.messages[1].content.as_deref().unwrap_or_default();
-    assert!(setup.starts_with("<raven_setup>"), "{setup}");
+    assert!(setup.starts_with("<huginn_setup>"), "{setup}");
     assert!(setup.contains("Workspace root"), "{setup}");
 }
 

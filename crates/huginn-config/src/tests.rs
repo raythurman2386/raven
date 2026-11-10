@@ -50,7 +50,7 @@ fn resolve_scope_rejects_workspace() {
 
 #[test]
 fn resolve_mode_yolo_forces_agent_when_no_explicit_mode() {
-    // Regression for issue #126: `raven --yolo` (no --mode) must expose the
+    // Regression for issue #126: `huginn --yolo` (no --mode) must expose the
     // full (non-read-only) toolset, i.e. resolve to Mode::Agent.
     let mode = resolve_mode(None, None, true);
     assert_eq!(mode, Mode::Agent);
@@ -274,8 +274,8 @@ fn load_agents_md_no_marker_at_exact_limit() {
 fn load_dotenv_sets_missing_keys_only() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join(".env");
-    let unique = format!("RAVEN_TEST_DOTENV_{}", std::process::id());
-    let unique_pre = format!("RAVEN_TEST_DOTENV_PRE_{}", std::process::id());
+    let unique = format!("HUGINN_TEST_DOTENV_{}", std::process::id());
+    let unique_pre = format!("HUGINN_TEST_DOTENV_PRE_{}", std::process::id());
     std::fs::write(
         &path,
         format!("{unique}=from_file\n{unique_pre}=from_file\n# comment\nEMPTY=\n"),
@@ -294,7 +294,7 @@ fn load_dotenv_sets_missing_keys_only() {
 fn load_dotenv_strips_quotes() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join(".env");
-    let unique = format!("RAVEN_TEST_DOTENV_Q_{}", std::process::id());
+    let unique = format!("HUGINN_TEST_DOTENV_Q_{}", std::process::id());
     std::fs::write(&path, format!("{unique}=\"quoted value\"\n")).unwrap();
     super::load_dotenv(&path);
     assert_eq!(std::env::var(&unique).unwrap(), "quoted value");
@@ -304,7 +304,7 @@ fn load_dotenv_strips_quotes() {
 #[test]
 fn config_file_parses_toml() {
     let tmp = tempfile::tempdir().unwrap();
-    let cfg_dir = tmp.path().join(".raven");
+    let cfg_dir = tmp.path().join(".huginn");
     std::fs::create_dir_all(&cfg_dir).unwrap();
     std::fs::write(
         cfg_dir.join("config.toml"),
@@ -323,7 +323,7 @@ max_iterations = 10
 #[test]
 fn config_file_parses_no_stream() {
     let tmp = tempfile::tempdir().unwrap();
-    let cfg_dir = tmp.path().join(".raven");
+    let cfg_dir = tmp.path().join(".huginn");
     std::fs::create_dir_all(&cfg_dir).unwrap();
     std::fs::write(cfg_dir.join("config.toml"), "no_stream = true\n").unwrap();
     let cfg = load_config_file(tmp.path());
@@ -332,7 +332,7 @@ fn config_file_parses_no_stream() {
 
 #[test]
 fn config_file_missing_returns_defaults() {
-    // Isolate HOME so a real user global config (~/.raven/config.toml)
+    // Isolate HOME so a real user global config (~/.huginn/config.toml)
     // doesn't leak into this test.
     let _home = huginn_testutil::home_env_lock();
     let original_home = std::env::var_os("HOME");
@@ -353,7 +353,7 @@ fn config_file_missing_returns_defaults() {
 #[test]
 fn config_file_parses_theme() {
     let tmp = tempfile::tempdir().unwrap();
-    let cfg_dir = tmp.path().join(".raven");
+    let cfg_dir = tmp.path().join(".huginn");
     std::fs::create_dir_all(&cfg_dir).unwrap();
     std::fs::write(cfg_dir.join("config.toml"), "theme = \"nord\"\n").unwrap();
     let cfg = load_config_file(tmp.path());
@@ -363,7 +363,7 @@ fn config_file_parses_theme() {
 #[test]
 fn config_file_parses_mcp_servers() {
     let tmp = tempfile::tempdir().unwrap();
-    let cfg_dir = tmp.path().join(".raven");
+    let cfg_dir = tmp.path().join(".huginn");
     std::fs::create_dir_all(&cfg_dir).unwrap();
     std::fs::write(
         cfg_dir.join("config.toml"),
@@ -390,7 +390,7 @@ args = ["--temp-unit", "celsius", "--max-processes", "10"]
 #[test]
 fn config_file_parses_searxng() {
     let tmp = tempfile::tempdir().unwrap();
-    let cfg_dir = tmp.path().join(".raven");
+    let cfg_dir = tmp.path().join(".huginn");
     std::fs::create_dir_all(&cfg_dir).unwrap();
     std::fs::write(
         cfg_dir.join("config.toml"),
@@ -408,33 +408,33 @@ fn config_file_parses_searxng() {
 #[test]
 fn env_searxng_url_parses() {
     // Save any user-set value so this test never clobbers it for the run.
-    let original = std::env::var("RAVEN_SEARXNG_URL").ok();
-    std::env::set_var("RAVEN_SEARXNG_URL", "http://searx.example.com");
+    let original = std::env::var("HUGINN_SEARXNG_URL").ok();
+    std::env::set_var("HUGINN_SEARXNG_URL", "http://searx.example.com");
     assert_eq!(
         env_searxng_url().as_deref(),
         Some("http://searx.example.com")
     );
-    std::env::set_var("RAVEN_SEARXNG_URL", "  ");
+    std::env::set_var("HUGINN_SEARXNG_URL", "  ");
     assert!(env_searxng_url().is_none());
     match original {
-        Some(v) => std::env::set_var("RAVEN_SEARXNG_URL", v),
-        None => std::env::remove_var("RAVEN_SEARXNG_URL"),
+        Some(v) => std::env::set_var("HUGINN_SEARXNG_URL", v),
+        None => std::env::remove_var("HUGINN_SEARXNG_URL"),
     }
 }
 
 #[test]
 fn env_searxng_engines_parses_list() {
-    let original = std::env::var("RAVEN_SEARXNG_ENGINES").ok();
-    std::env::set_var("RAVEN_SEARXNG_ENGINES", "google,  bing ,");
+    let original = std::env::var("HUGINN_SEARXNG_ENGINES").ok();
+    std::env::set_var("HUGINN_SEARXNG_ENGINES", "google,  bing ,");
     assert_eq!(
         env_searxng_engines(),
         Some(vec!["google".to_string(), "bing".to_string()])
     );
-    std::env::set_var("RAVEN_SEARXNG_ENGINES", "  , , ");
+    std::env::set_var("HUGINN_SEARXNG_ENGINES", "  , , ");
     assert!(env_searxng_engines().is_none());
     match original {
-        Some(v) => std::env::set_var("RAVEN_SEARXNG_ENGINES", v),
-        None => std::env::remove_var("RAVEN_SEARXNG_ENGINES"),
+        Some(v) => std::env::set_var("HUGINN_SEARXNG_ENGINES", v),
+        None => std::env::remove_var("HUGINN_SEARXNG_ENGINES"),
     }
 }
 
@@ -486,7 +486,7 @@ fn round_temperature_normalizes_negative_zero() {
 
 #[test]
 fn load_global_dotenv_reads_home_env() {
-    // Isolate HOME so a real user ~/.raven/.env doesn't leak in.
+    // Isolate HOME so a real user ~/.huginn/.env doesn't leak in.
     let _home = huginn_testutil::home_env_lock();
     let original_home = std::env::var_os("HOME");
     // Unset any pre-existing OLLAMA_API_KEY so the no-overwrite loader is the
@@ -495,13 +495,13 @@ fn load_global_dotenv_reads_home_env() {
     std::env::remove_var("OLLAMA_API_KEY");
     let home = tempfile::tempdir().unwrap();
     std::env::set_var("HOME", home.path());
-    let raven_dir = home.path().join(".raven");
-    std::fs::create_dir_all(&raven_dir).unwrap();
+    let huginn_dir = home.path().join(".huginn");
+    std::fs::create_dir_all(&huginn_dir).unwrap();
     // Use a non-secret-shaped sentinel: a sk-* value would be rewritten by
     // the agent/harness as «redacted:…», so a plain token proves the loader
     // round-trips the actual value without ambiguity.
     std::fs::write(
-        raven_dir.join(".env"),
+        huginn_dir.join(".env"),
         "OLLAMA_API_KEY=load-global-test-1\n",
     )
     .unwrap();

@@ -272,7 +272,7 @@ pub fn tool_definitions() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "web_search",
-                "description": "Search the web and return a ranked list of result titles and URLs (10 per page). Uses a self-hosted SearXNG instance when RAVEN_SEARXNG_URL is set, otherwise DuckDuckGo. No API key required. Use for current, factual, or unfamiliar topics. Use the page parameter to fetch subsequent pages. If the backend rate-limits you with a challenge error, wait a minute before retrying.",
+                "description": "Search the web and return a ranked list of result titles and URLs (10 per page). Uses a self-hosted SearXNG instance when HUGINN_SEARXNG_URL is set, otherwise DuckDuckGo. No API key required. Use for current, factual, or unfamiliar topics. Use the page parameter to fetch subsequent pages. If the backend rate-limits you with a challenge error, wait a minute before retrying.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -301,7 +301,7 @@ pub fn tool_definitions() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "skill_search",
-                "description": "List skills whose name or description matches a query, or all skills when the query is empty. Skills are SKILL.md files in .raven/skills/ or ~/.raven/skills/.",
+                "description": "List skills whose name or description matches a query, or all skills when the query is empty. Skills are SKILL.md files in .huginn/skills/ or ~/.huginn/skills/.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -329,7 +329,7 @@ pub fn tool_definitions() -> serde_json::Value {
             "type": "function",
             "function": {
                 "name": "memory_search",
-                "description": "Search project memory (.raven/MEMORY.md) for lines matching a query. Use to recall past decisions, conventions, or context stored in memory.",
+                "description": "Search project memory (.huginn/MEMORY.md) for lines matching a query. Use to recall past decisions, conventions, or context stored in memory.",
                 "parameters": {
                     "type": "object",
                     "properties": {

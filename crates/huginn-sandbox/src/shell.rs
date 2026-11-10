@@ -14,7 +14,7 @@ impl Sandbox {
     /// explicitly allowed vars (`PATH`, `HOME`, `PWD`, `LANG`) are passed
     /// through. The best-effort denylist (`dangerous_re`) blocks obviously
     /// destructive patterns. Output at or under 12 000 characters is inline;
-    /// larger output is written to `.raven/tool-output`.
+    /// larger output is written to `.huginn/tool-output`.
     ///
     /// The denylist is **not a security boundary** — it can always be
     /// bypassed. The `confirm_shell` setting (off with `--yolo`) provides
@@ -46,9 +46,9 @@ impl Sandbox {
         };
 
         cmd.current_dir(&self.workspace);
-        setup_shell_env(&mut cmd, &self.workspace, &self.raven_dir());
-        // Explicitly null stdin: the child must never inherit raven's own
-        // stdio. In ACP mode raven's fd 0 is the live JSON-RPC pipe — a child
+        setup_shell_env(&mut cmd, &self.workspace, &self.huginn_dir());
+        // Explicitly null stdin: the child must never inherit huginn's own
+        // stdio. In ACP mode huginn's fd 0 is the live JSON-RPC pipe — a child
         // that reads stdin would consume ACP frames, and a surviving
         // grandchild holding fd 0 open can corrupt pipe teardown. Both can
         // make the harness see a clean mid-turn EOF (exit 0).

@@ -146,10 +146,14 @@ fn tool_is_read_only_requires_explicit_hint() {
 
 #[test]
 fn missing_command_yields_empty_handle() {
-    let handle =
-        McpHandle::connect(&[McpServerSpec::new("gone", "/no/such/mcp-server-raven-test")]);
+    let handle = McpHandle::connect(&[McpServerSpec::new(
+        "gone",
+        "/no/such/mcp-server-huginn-test",
+    )]);
     assert!(handle.is_empty());
-    assert!(
-        connect_specs(&[McpServerSpec::new("gone", "/no/such/mcp-server-raven-test",)]).is_none()
-    );
+    assert!(connect_specs(&[McpServerSpec::new(
+        "gone",
+        "/no/such/mcp-server-huginn-test",
+    )])
+    .is_none());
 }

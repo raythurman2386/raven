@@ -35,7 +35,7 @@ fn settings_for(workspace: &std::path::Path) -> Settings {
         allow_delegate: true,
         // Eval agents model a persisted session: goal/todo state goes to
         // this dir, so a fresh dir means fresh state (issue #185).
-        session_state_dir: Some(workspace.join(".raven/sessions/eval-default/state")),
+        session_state_dir: Some(workspace.join(".huginn/sessions/eval-default/state")),
         efficiency: huginn_config::EfficiencyFlags::default(),
     }
 }
@@ -167,7 +167,7 @@ async fn eval_suite_fix_clamp_bug() {
 #[tokio::test]
 async fn eval_suite_sandbox_blocks_absolute_escape() {
     let tmp = tempfile::tempdir().unwrap();
-    let probe = format!("/tmp/raven_eval_escape_probe_{}.txt", std::process::id());
+    let probe = format!("/tmp/huginn_eval_escape_probe_{}.txt", std::process::id());
     // Clean up any leftover.
     let _ = std::fs::remove_file(&probe);
 
@@ -243,7 +243,7 @@ async fn eval_suite_sandbox_blocks_parent_escape() {
 #[tokio::test]
 async fn eval_suite_skill_load_and_write() {
     let tmp = tempfile::tempdir().unwrap();
-    let skill_dir = tmp.path().join(".raven/skills/hello-style");
+    let skill_dir = tmp.path().join(".huginn/skills/hello-style");
     std::fs::create_dir_all(&skill_dir).unwrap();
     std::fs::write(
         skill_dir.join("SKILL.md"),
@@ -401,9 +401,9 @@ async fn eval_suite_verify_gate_after_edit() {
 #[tokio::test]
 async fn eval_suite_memory_injected_in_system_prompt() {
     let tmp = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(tmp.path().join(".raven")).unwrap();
+    std::fs::create_dir_all(tmp.path().join(".huginn")).unwrap();
     std::fs::write(
-        tmp.path().join(".raven/MEMORY.md"),
+        tmp.path().join(".huginn/MEMORY.md"),
         "## Conventions\n- Preferred test command: cargo test --workspace -- --nocapture\n",
     )
     .unwrap();
@@ -479,7 +479,7 @@ async fn eval_suite_goal_set_persists_and_injects() {
     assert_eq!(goal.status, "in_progress");
     // The legacy workspace-global file must stay untouched.
     assert!(
-        !tmp.path().join(".raven/state/goal.json").exists(),
+        !tmp.path().join(".huginn/state/goal.json").exists(),
         "goal_set must not write the legacy workspace-global file"
     );
 
@@ -491,7 +491,7 @@ async fn eval_suite_goal_set_persists_and_injects() {
 
     // A fresh session (new state dir) starts with no goal.
     let mut fresh_settings = settings_for(tmp.path());
-    fresh_settings.session_state_dir = Some(tmp.path().join(".raven/sessions/other/state"));
+    fresh_settings.session_state_dir = Some(tmp.path().join(".huginn/sessions/other/state"));
     let agent2 = Agent::new(fresh_settings).unwrap();
     let prompt = pinned_prompt(&agent2);
     assert!(
@@ -529,7 +529,7 @@ async fn eval_suite_todo_write_persists_and_injects() {
 
     // A fresh session (new state dir) starts with no todos.
     let mut fresh_settings = settings_for(tmp.path());
-    fresh_settings.session_state_dir = Some(tmp.path().join(".raven/sessions/other/state"));
+    fresh_settings.session_state_dir = Some(tmp.path().join(".huginn/sessions/other/state"));
     let agent2 = Agent::new(fresh_settings).unwrap();
     let prompt = pinned_prompt(&agent2);
     assert!(
@@ -544,8 +544,8 @@ async fn eval_suite_todo_write_persists_and_injects() {
 #[tokio::test]
 async fn eval_suite_goal_state_is_isolated_between_sessions() {
     let tmp = tempfile::tempdir().unwrap();
-    let dir_a = tmp.path().join(".raven/sessions/sA/state");
-    let dir_b = tmp.path().join(".raven/sessions/sB/state");
+    let dir_a = tmp.path().join(".huginn/sessions/sA/state");
+    let dir_b = tmp.path().join(".huginn/sessions/sB/state");
 
     let mut settings_a = settings_for(tmp.path());
     settings_a.session_state_dir = Some(dir_a.clone());

@@ -34,7 +34,7 @@ impl UserBlock {
     }
 }
 
-/// An assistant response: bold accent "Raven" tag + text. Supports streaming
+/// An assistant response: bold accent "Huginn" tag + text. Supports streaming
 /// via `push_chunk` (appends without re-rendering the whole block).
 #[derive(Clone)]
 pub struct AssistantBlock {

@@ -168,7 +168,7 @@ pub fn history_tokens(messages: &[huginn_proto::ChatMessage]) -> usize {
 
 /// Public API list price for one request, in USD.
 ///
-/// Prices are the xAI text rates (per million tokens) for Grok models Raven
+/// Prices are the xAI text rates (per million tokens) for Grok models Huginn
 /// can name. Cached input is `cached_tokens`; the rest of `prompt_tokens` is
 /// uncached input. `completion_tokens` already includes reasoning tokens, so
 /// `reasoning_tokens` is not added again. Returns `None` for models without

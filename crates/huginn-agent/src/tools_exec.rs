@@ -969,7 +969,7 @@ mod tests {
 
     #[test]
     fn verification_passed_spilled_shell_keeps_exit_zero() {
-        let output = "exit=0\nFull output saved to .raven/tool-output/shell-1.log (20000 bytes, 400 lines).\nTail:\nok\n";
+        let output = "exit=0\nFull output saved to .huginn/tool-output/shell-1.log (20000 bytes, 400 lines).\nTail:\nok\n";
         assert!(verification_passed(output));
     }
 
@@ -1003,7 +1003,7 @@ mod tests {
         // Regression: a piped `cargo test | tail` reports the pipeline's
         // exit=0 while the payload shows the real linker death. The gate
         // must fail closed on the payload markers.
-        let output = "exit=0\ncollect2: fatal error: ld terminated with signal 25 [File size limit exceeded]\nerror: could not compile `raven` (lib test) due to 1 previous error\n";
+        let output = "exit=0\ncollect2: fatal error: ld terminated with signal 25 [File size limit exceeded]\nerror: could not compile `huginn` (lib test) due to 1 previous error\n";
         assert!(!verification_passed(output));
     }
 
@@ -1015,7 +1015,7 @@ mod tests {
 
     #[test]
     fn verification_passed_could_not_compile_is_not_verified() {
-        let output = "exit=0\nerror: could not compile `raven` due to 3 previous errors\n";
+        let output = "exit=0\nerror: could not compile `huginn` due to 3 previous errors\n";
         assert!(!verification_passed(output));
     }
 

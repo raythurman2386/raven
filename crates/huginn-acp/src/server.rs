@@ -1,6 +1,6 @@
 //! ACP v1 stdio agent: JSON-RPC over newline-delimited stdin/stdout.
 //!
-//! Editors spawn `raven --acp` and talk ACP. Raven owns its own sandbox and
+//! Editors spawn `huginn --acp` and talk ACP. Huginn owns its own sandbox and
 //! tools, and connects stdio MCP servers from `session/new` (merged with
 //! native `[mcp.servers]` config). Client `fs/*` / `terminal/*` are not used.
 //!
@@ -34,7 +34,7 @@ pub trait FrameWrite: Send {
     fn write_frame(&mut self, msg: &Value) -> Result<()>;
 }
 
-/// Stdout NDJSON writer used by `raven --acp`.
+/// Stdout NDJSON writer used by `huginn --acp`.
 pub struct StdoutWriter<W: Write + Send> {
     inner: W,
 }
@@ -916,7 +916,7 @@ async fn run_prompt_inner(
     let mut settings = settings;
     if settings.provider.name == "grok" && !settings.provider.refresh_grok_session() {
         let msg = format!(
-            "No Grok session in {}. Run `raven login` in a terminal, then send this message again.",
+            "No Grok session in {}. Run `huginn login` in a terminal, then send this message again.",
             huginn_config::grok_auth_path().display()
         );
         let _ = writer.lock().await.write_frame(&session_update(
@@ -1142,10 +1142,10 @@ where
             // path that yields exit code 0. Log it so a mid-turn EOF (e.g. the
             // harness closing the pipe) is visible in stderr instead of being
             // silent.
-            eprintln!("raven --acp: serve_io exiting cleanly (stdin EOF)");
+            eprintln!("huginn --acp: serve_io exiting cleanly (stdin EOF)");
         }
         Err(e) => {
-            eprintln!("raven --acp: serve_io error: {e:#}");
+            eprintln!("huginn --acp: serve_io error: {e:#}");
         }
     }
     result
@@ -1187,9 +1187,9 @@ async fn serve_io_loop(
     Ok(())
 }
 
-/// Run `raven --acp` on real stdin/stdout.
+/// Run `huginn --acp` on real stdin/stdout.
 pub async fn run_stdio(settings: Settings, cfg: huginn_config::ConfigFile) -> Result<()> {
-    tracing::info!("ACP serving (raven {})", env!("CARGO_PKG_VERSION"));
+    tracing::info!("ACP serving (huginn {})", env!("CARGO_PKG_VERSION"));
     let server = AcpServer::new(settings, cfg);
     let result = serve_io(
         server,

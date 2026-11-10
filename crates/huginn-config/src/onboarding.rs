@@ -11,9 +11,9 @@ use super::ConfigFile;
 /// (global config path, workspace config path)
 pub fn config_paths(workspace: &std::path::Path) -> (PathBuf, PathBuf) {
     let global = dirs::home_dir()
-        .map(|h| h.join(".raven").join("config.toml"))
+        .map(|h| h.join(".huginn").join("config.toml"))
         .unwrap_or_default();
-    (global, workspace.join(".raven").join("config.toml"))
+    (global, workspace.join(".huginn").join("config.toml"))
 }
 
 /// True only when the run is interactive, unconfigured, and un-overridden.
@@ -82,7 +82,7 @@ pub fn fallback_models(provider_name: &str) -> Vec<String> {
 }
 
 /// Serialize-only shape of the config we write. NO api_key field — the key
-/// lives in a separate ~/.raven/.env so config.toml stays secret-free.
+/// lives in a separate ~/.huginn/.env so config.toml stays secret-free.
 #[derive(serde::Serialize)]
 struct ProvidersTable {
     provider: String,
@@ -111,8 +111,8 @@ pub fn build_config_toml(name: &str, base_url: &str, model: &str) -> String {
     .expect("providers table is serializable")
 }
 
-/// Build the ~/.raven/.env line(s) for an API key, or empty string if none.
-/// Uses a provider-scoped var when known, else the universal RAVEN_API_KEY.
+/// Build the ~/.huginn/.env line(s) for an API key, or empty string if none.
+/// Uses a provider-scoped var when known, else the universal HUGINN_API_KEY.
 pub fn build_env_file(api_key: Option<String>, provider_name: &str) -> String {
     let Some(key) = api_key else {
         return String::new();
@@ -121,7 +121,7 @@ pub fn build_env_file(api_key: Option<String>, provider_name: &str) -> String {
         "openrouter" => "OPENROUTER_API_KEY",
         "ollama" => "OLLAMA_API_KEY",
         "opencode-go" => "OPENCODE_GO_API_KEY",
-        _ => "RAVEN_API_KEY",
+        _ => "HUGINN_API_KEY",
     };
     format!("{var}={key}\n")
 }
@@ -149,7 +149,7 @@ fn write_private(dir: &std::path::Path, file: &str, contents: &str) -> std::io::
         use std::io::Write;
         use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
         // Restrict the config dir itself to the owner so other local users
-        // can't stat/list ~/.raven even though the file contents are 0600.
+        // can't stat/list ~/.huginn even though the file contents are 0600.
         std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
         let mut f = std::fs::OpenOptions::new()
             .create(true)
@@ -168,14 +168,14 @@ fn write_private(dir: &std::path::Path, file: &str, contents: &str) -> std::io::
 }
 
 /// Run the interactive first-run wizard: pick a provider, model, and optional
-/// API key; persist a secret-free `~/.raven/config.toml` and the key (if any)
-/// to `~/.raven/.env`; return the resulting [`ConfigFile`].
+/// API key; persist a secret-free `~/.huginn/config.toml` and the key (if any)
+/// to `~/.huginn/.env`; return the resulting [`ConfigFile`].
 pub async fn run_onboarding() -> anyhow::Result<ConfigFile> {
     let home =
         dirs::home_dir().ok_or_else(|| anyhow::anyhow!("cannot determine home directory"))?;
-    let global_dir = home.join(".raven");
+    let global_dir = home.join(".huginn");
 
-    println!("Welcome to Raven — first-run setup\n");
+    println!("Welcome to Huginn — first-run setup\n");
 
     // 1. Provider menu: known providers + a trailing "custom" entry.
     let mut known = crate::known_provider_names(&super::ConfigFile::default());
@@ -422,8 +422,8 @@ mod tests {
     #[test]
     fn config_paths_global_and_ws() {
         let p = config_paths(std::path::Path::new("/tmp/ws"));
-        assert!(p.0.ends_with(".raven/config.toml"));
-        assert!(p.1.ends_with("/tmp/ws/.raven/config.toml"));
+        assert!(p.0.ends_with(".huginn/config.toml"));
+        assert!(p.1.ends_with("/tmp/ws/.huginn/config.toml"));
     }
 }
 
@@ -514,7 +514,7 @@ mod tests4 {
         assert!(build_env_file(Some("sk-x".into()), "ollama").contains("OLLAMA_API_KEY=sk-x"));
         assert!(build_env_file(Some("sk-ocg".into()), "opencode-go")
             .contains("OPENCODE_GO_API_KEY=sk-ocg"));
-        assert!(build_env_file(Some("sk-c".into()), "acme").contains("RAVEN_API_KEY=sk-c"));
+        assert!(build_env_file(Some("sk-c".into()), "acme").contains("HUGINN_API_KEY=sk-c"));
         assert!(build_env_file(None, "ollama").is_empty());
     }
 

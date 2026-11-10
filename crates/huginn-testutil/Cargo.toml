@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 publish.workspace = true
-description = "Shared test helpers for the Raven harness"
+description = "Shared test helpers for the Huginn harness"
 
 [dependencies]
 libc = { workspace = true }

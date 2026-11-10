@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Minimal stdio MCP server for Raven's offline tests."""
+"""Minimal stdio MCP server for Huginn's offline tests."""
 import json
 import sys
 

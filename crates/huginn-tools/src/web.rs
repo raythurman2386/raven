@@ -5,7 +5,7 @@
 //! `web_fetch` retrieves a page and strips markup to plain text.
 //!
 //! Optionally, `web_search` can use a self-hosted [SearXNG] instance via its
-//! JSON API when a base URL is configured (`RAVEN_SEARXNG_URL` or the
+//! JSON API when a base URL is configured (`HUGINN_SEARXNG_URL` or the
 //! `searxng_url` config key). SearXNG is tried first; on any HTTP error,
 //! empty results, or JSON parse failure the call falls back to DuckDuckGo so
 //! agents keep working when the local instance is down. No API key is needed
@@ -44,9 +44,9 @@ fn web_client() -> Result<&'static reqwest::Client> {
                 .timeout(WEB_TIMEOUT)
                 .connect_timeout(std::time::Duration::from_secs(10))
                 .user_agent(concat!(
-                    "raven/",
+                    "huginn/",
                     env!("CARGO_PKG_VERSION"),
-                    " (+https://github.com/raythurman2386/raven)"
+                    " (+https://github.com/raythurman2386/huginn)"
                 ))
                 .build()
                 .context("build web client")
@@ -308,8 +308,8 @@ pub struct SearxngConfig {
 }
 
 impl SearxngConfig {
-    /// Build a config from the environment (`RAVEN_SEARXNG_URL` and
-    /// `RAVEN_SEARXNG_ENGINES`). Returns a default (all `None`/empty) config
+    /// Build a config from the environment (`HUGINN_SEARXNG_URL` and
+    /// `HUGINN_SEARXNG_ENGINES`). Returns a default (all `None`/empty) config
     /// when no SearXNG base URL is configured, which disables the SearXNG path.
     pub fn from_env() -> Self {
         Self {
@@ -382,7 +382,7 @@ async fn ddg_search(query: &str, page: Option<u32>) -> String {
                 Err(e) => return format!("Error: failed to read search response: {e}"),
             };
             if is_ddg_challenge(&body) {
-                return "Error: DuckDuckGo returned a bot-detection challenge (rate-limited). Wait a minute before searching again, or configure a SearXNG instance (RAVEN_SEARXNG_URL) as the search backend.".into();
+                return "Error: DuckDuckGo returned a bot-detection challenge (rate-limited). Wait a minute before searching again, or configure a SearXNG instance (HUGINN_SEARXNG_URL) as the search backend.".into();
             }
             cap_text(&parse_ddg_results(&body))
         }
@@ -936,25 +936,25 @@ mod tests {
 
     #[test]
     fn searxng_config_from_env_respects_url() {
-        let original = std::env::var("RAVEN_SEARXNG_URL").ok();
-        std::env::set_var("RAVEN_SEARXNG_URL", "http://127.0.0.1:8080");
+        let original = std::env::var("HUGINN_SEARXNG_URL").ok();
+        std::env::set_var("HUGINN_SEARXNG_URL", "http://127.0.0.1:8080");
         let cfg = SearxngConfig::from_env();
         assert_eq!(cfg.base_url.as_deref(), Some("http://127.0.0.1:8080"));
         match original {
-            Some(v) => std::env::set_var("RAVEN_SEARXNG_URL", v),
-            None => std::env::remove_var("RAVEN_SEARXNG_URL"),
+            Some(v) => std::env::set_var("HUGINN_SEARXNG_URL", v),
+            None => std::env::remove_var("HUGINN_SEARXNG_URL"),
         }
     }
 
     #[test]
     fn searxng_config_from_env_empty_url_disables() {
-        let original = std::env::var("RAVEN_SEARXNG_URL").ok();
-        std::env::remove_var("RAVEN_SEARXNG_URL");
+        let original = std::env::var("HUGINN_SEARXNG_URL").ok();
+        std::env::remove_var("HUGINN_SEARXNG_URL");
         let cfg = SearxngConfig::from_env();
         assert!(cfg.base_url.is_none());
         match original {
-            Some(v) => std::env::set_var("RAVEN_SEARXNG_URL", v),
-            None => std::env::remove_var("RAVEN_SEARXNG_URL"),
+            Some(v) => std::env::set_var("HUGINN_SEARXNG_URL", v),
+            None => std::env::remove_var("HUGINN_SEARXNG_URL"),
         }
     }
 

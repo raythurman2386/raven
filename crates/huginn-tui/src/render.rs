@@ -48,7 +48,7 @@ pub fn render_blocks(blocks: &[BlockKind], tick: u64, theme: Theme) -> (Vec<Line
             BlockKind::Assistant(a) => {
                 last_assistant_start = Some(lines.len());
                 lines.push(Line::from(Span::styled(
-                    "Raven",
+                    "Huginn",
                     Style::default()
                         .fg(theme.accent)
                         .add_modifier(Modifier::BOLD),
@@ -184,11 +184,11 @@ fn tool_style(t: &ToolBlock, tick: u64, is_last_active: bool, theme: Theme) -> S
 }
 
 /// Render just one assistant text block into display lines (for streaming),
-/// including the "Raven" tag so the streaming patch matches `render_blocks`.
+/// including the "Huginn" tag so the streaming patch matches `render_blocks`.
 pub fn render_assistant_lines(text: &str, theme: Theme) -> Vec<Line<'static>> {
     let mut lines = Vec::with_capacity(text.lines().count().saturating_add(1));
     lines.push(Line::from(Span::styled(
-        "Raven",
+        "Huginn",
         Style::default()
             .fg(theme.accent)
             .add_modifier(Modifier::BOLD),
@@ -580,23 +580,23 @@ mod tests {
     }
 
     #[test]
-    fn render_blocks_adds_raven_tag() {
+    fn render_blocks_adds_huginn_tag() {
         let blocks = vec![BlockKind::Assistant(AssistantBlock::new("hi".to_string()))];
         let (lines, _tail) = render_blocks(&blocks, 0, Theme::RAVENWOOD);
         let first = lines[0].to_string();
         assert!(
-            first.contains("Raven"),
-            "assistant block should be tagged Raven, got {first:?}"
+            first.contains("Huginn"),
+            "assistant block should be tagged Huginn, got {first:?}"
         );
     }
 
     #[test]
-    fn render_assistant_lines_includes_raven_tag() {
+    fn render_assistant_lines_includes_huginn_tag() {
         // The streaming patch must match `render_blocks` (tag + text) so the
-        // "Raven" tag doesn't flicker out mid-stream.
+        // "Huginn" tag doesn't flicker out mid-stream.
         let lines = render_assistant_lines("hello\n\nworld", Theme::RAVENWOOD);
         assert_eq!(lines.len(), 3, "tag + 2 paragraph lines");
-        assert!(lines[0].to_string().contains("Raven"));
+        assert!(lines[0].to_string().contains("Huginn"));
         assert_eq!(lines[1].to_string(), "hello");
         assert_eq!(lines[2].to_string(), "world");
     }

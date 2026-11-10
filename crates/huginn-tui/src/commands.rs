@@ -86,7 +86,7 @@ pub fn commands() -> Vec<CommandSpec> {
         CommandSpec {
             name: "quit",
             aliases: &["q", "exit"],
-            summary: "Quit Raven",
+            summary: "Quit Huginn",
             arg_help: None,
         },
         CommandSpec {

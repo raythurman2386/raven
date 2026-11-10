@@ -1,4 +1,4 @@
-//! End-to-end smoke tests for the `raven` CLI binary.
+//! End-to-end smoke tests for the `huginn` CLI binary.
 //!
 //! These exercise the compiled binary (via `CARGO_BIN_EXE_huginn`) as a black
 //! box — no `[lib]` target is required. They cover the offline surface that
@@ -11,12 +11,12 @@ fn huginn_bin() -> &'static str {
     env!("CARGO_BIN_EXE_huginn")
 }
 
-/// Run `raven` with the given args and return its stdout + stderr + status.
+/// Run `huginn` with the given args and return its stdout + stderr + status.
 fn run(args: &[&str]) -> (String, String, std::process::ExitStatus) {
     let out = Command::new(huginn_bin())
         .args(args)
         .output()
-        .expect("failed to spawn raven");
+        .expect("failed to spawn huginn");
     (
         String::from_utf8_lossy(&out.stdout).into_owned(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
@@ -28,7 +28,7 @@ fn run(args: &[&str]) -> (String, String, std::process::ExitStatus) {
 fn help_succeeds_and_lists_flags() {
     let (out, _, status) = run(&["--help"]);
     assert!(status.success(), "--help should exit 0");
-    assert!(out.contains("raven"), "help should name the binary");
+    assert!(out.contains("huginn"), "help should name the binary");
     for flag in [
         "--mode",
         "--provider",
@@ -54,7 +54,7 @@ fn version_reports_package_version() {
     let (out, _, status) = run(&["--version"]);
     assert!(status.success(), "--version should exit 0");
     assert!(
-        out.contains(&format!("raven {}", env!("CARGO_PKG_VERSION"))),
+        out.contains(&format!("huginn {}", env!("CARGO_PKG_VERSION"))),
         "--version should print the package version, got: {out}"
     );
 }
@@ -98,7 +98,7 @@ fn session_persistence_roundtrip() {
     // the session metadata. Force agent mode to keep the run single-turn.
     // The provider's base_url comes from the workspace config (the old
     // --host flag was removed in favor of named providers).
-    let cfg_dir = ws.path().join(".raven");
+    let cfg_dir = ws.path().join(".huginn");
     std::fs::create_dir_all(&cfg_dir).unwrap();
     std::fs::write(
         cfg_dir.join("config.toml"),
@@ -123,7 +123,7 @@ fn session_persistence_roundtrip() {
         "128000",
     ]);
 
-    let sessions_dir = ws.path().join(".raven").join("sessions");
+    let sessions_dir = ws.path().join(".huginn").join("sessions");
     assert!(
         sessions_dir.is_dir(),
         "sessions dir should be created, got: {sessions_dir:?}\nstdout: {out}"

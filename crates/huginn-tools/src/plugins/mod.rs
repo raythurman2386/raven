@@ -3,9 +3,9 @@
 //! Loads `plugin.json` manifests, discovers Agent Skills from each plugin's
 //! fixed `skills/` location, and maps portable `mcp.json` stdio servers into
 //! [`crate::mcp::McpServerSpec`]. Streamable HTTP / SSE entries are skipped
-//! (Raven's MCP client is stdio-only). Client extensions are ignored per §8.
+//! (Huginn's MCP client is stdio-only). Client extensions are ignored per §8.
 //!
-//! Plugin roots are `~/.raven/plugins/` (global) and `.raven/plugins/`
+//! Plugin roots are `~/.huginn/plugins/` (global) and `.huginn/plugins/`
 //! (workspace). Each immediate child directory containing a `plugin.json` is a
 //! candidate plugin.
 
@@ -33,9 +33,9 @@ pub struct Plugin {
 
 /// The plugin roots visible to `workspace`: workspace-local then global.
 fn plugin_roots(workspace: &Path) -> Vec<PathBuf> {
-    let mut roots = vec![workspace.join(".raven").join("plugins")];
+    let mut roots = vec![workspace.join(".huginn").join("plugins")];
     if let Some(home) = dirs::home_dir() {
-        roots.push(home.join(".raven").join("plugins"));
+        roots.push(home.join(".huginn").join("plugins"));
     }
     roots
 }
@@ -398,7 +398,7 @@ mod tests {
     #[test]
     fn discover_plugins_finds_skills() {
         let tmp = tempfile::tempdir().unwrap();
-        let plugins_dir = tmp.path().join(".raven").join("plugins");
+        let plugins_dir = tmp.path().join(".huginn").join("plugins");
         std::fs::create_dir_all(&plugins_dir).unwrap();
         let plugin = write_plugin(&plugins_dir, "reports", &minimal_manifest("reports"));
         write_skill(
@@ -415,7 +415,7 @@ mod tests {
     #[test]
     fn discover_plugins_skips_directory_without_manifest() {
         let tmp = tempfile::tempdir().unwrap();
-        let plugins_dir = tmp.path().join(".raven").join("plugins");
+        let plugins_dir = tmp.path().join(".huginn").join("plugins");
         std::fs::create_dir_all(&plugins_dir).unwrap();
         std::fs::create_dir_all(plugins_dir.join("not-a-plugin")).unwrap();
         assert!(discover_plugins(tmp.path()).is_empty());
@@ -424,7 +424,7 @@ mod tests {
     #[test]
     fn discover_plugins_rejects_invalid_manifest() {
         let tmp = tempfile::tempdir().unwrap();
-        let plugins_dir = tmp.path().join(".raven").join("plugins");
+        let plugins_dir = tmp.path().join(".huginn").join("plugins");
         std::fs::create_dir_all(&plugins_dir).unwrap();
         write_plugin(&plugins_dir, "bad", r#"{"name": "no-schema"}"#);
         assert!(discover_plugins(tmp.path()).is_empty());
@@ -433,7 +433,7 @@ mod tests {
     #[test]
     fn discover_plugins_does_not_recurse_into_skill_subdirs() {
         let tmp = tempfile::tempdir().unwrap();
-        let plugins_dir = tmp.path().join(".raven").join("plugins");
+        let plugins_dir = tmp.path().join(".huginn").join("plugins");
         std::fs::create_dir_all(&plugins_dir).unwrap();
         let plugin = write_plugin(&plugins_dir, "deep", &minimal_manifest("deep"));
         // A SKILL.md nested two levels under skills/ must not be discovered.

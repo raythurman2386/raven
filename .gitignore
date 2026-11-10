@@ -14,12 +14,12 @@ target-local/
 Thumbs.db
 
 # Session storage (per-workspace)
-.raven/
-.raven/sessions/
-.raven/cargo-home/
-.raven/npm-cache/
-.raven/tmp/
-.raven/state/
+.huginn/
+.huginn/sessions/
+.huginn/cargo-home/
+.huginn/npm-cache/
+.huginn/tmp/
+.huginn/state/
 .ollama-grok/sessions/
 .hermes/
 
@@ -44,5 +44,5 @@ evals/__pycache__/
 .tmp/
 # Per-workspace memory file (agent-managed, like sessions) — the trailing
 # slash here only matches a directory, so keep both forms.
-.raven/MEMORY.md
-.raven/MEMORY.md/
+.huginn/MEMORY.md
+.huginn/MEMORY.md/

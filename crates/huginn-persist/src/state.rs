@@ -2,7 +2,7 @@
 //! constraint.
 //!
 //! State is scoped to the active session: the files live next to the
-//! session's `messages.jsonl` (`{workspace}/.raven/sessions/{id}/state/`),
+//! session's `messages.jsonl` (`{workspace}/.huginn/sessions/{id}/state/`),
 //! so a fresh session starts with no goal or todos and only `--resume`
 //! carries them forward. Memory (`MEMORY.md`) is the cross-session store
 //! and is unaffected. The current goal and pending todos are injected into
@@ -29,7 +29,7 @@ pub fn session_state_dir(sessions_dir: &Path, session_id: &str) -> PathBuf {
 }
 
 /// Read a goal/todo JSON file, falling back to the legacy workspace-global
-/// location (`.raven/state/`) for state written before goals became
+/// location (`.huginn/state/`) for state written before goals became
 /// session-scoped. The fallback is read-only: writes always land in the
 /// session directory so legacy files age out naturally.
 fn read_json_with_legacy<T: serde::de::DeserializeOwned>(
@@ -317,13 +317,13 @@ mod tests {
     fn ws() -> PathBuf {
         static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        std::env::temp_dir().join(format!("raven_state_test_{}_{n}", std::process::id()))
+        std::env::temp_dir().join(format!("huginn_state_test_{}_{n}", std::process::id()))
     }
 
     /// A session store root with two created session dirs, so state paths
     /// exist the way `SessionStore::create` leaves them.
     fn store_with_sessions(tmp: &Path) -> (PathBuf, String, String) {
-        let sessions = tmp.join(".raven/sessions");
+        let sessions = tmp.join(".huginn/sessions");
         let a = "20260910T090000Z-1-1".to_string();
         let b = "20260910T090000Z-1-2".to_string();
         std::fs::create_dir_all(sessions.join(&a)).unwrap();

@@ -241,7 +241,7 @@ mod tests {
             br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
   <w:body>
-    <w:p><w:r><w:t>Raven document extraction works</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Huginn document extraction works</w:t></w:r></w:p>
     <w:p><w:r><w:t>Second paragraph here</w:t></w:r></w:p>
   </w:body>
 </w:document>"#,
@@ -252,7 +252,7 @@ mod tests {
 
         let text = extract_document_text(path.to_str().unwrap()).unwrap();
         assert!(
-            text.contains("Raven document extraction works"),
+            text.contains("Huginn document extraction works"),
             "text: {text}"
         );
         assert!(text.contains("Second paragraph here"), "text: {text}");

@@ -248,7 +248,7 @@ async fn initialize_then_session_new_and_list() {
 
     let frames = frames_from(&buf);
     assert_eq!(frames[0]["result"]["protocolVersion"], 1);
-    assert_eq!(frames[0]["result"]["agentInfo"]["name"], "raven");
+    assert_eq!(frames[0]["result"]["agentInfo"]["name"], "huginn");
     assert_eq!(
         frames[0]["result"]["agentCapabilities"]["loadSession"],
         true
@@ -780,7 +780,7 @@ async fn session_new_accepts_mcp_servers_array() {
                 "cwd": ws.display().to_string(),
                 "mcpServers": [{
                     "name": "gone",
-                    "command": "/no/such/mcp-server-raven-test",
+                    "command": "/no/such/mcp-server-huginn-test",
                     "args": [],
                     "env": []
                 }]
