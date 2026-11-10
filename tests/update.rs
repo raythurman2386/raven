@@ -1,10 +1,10 @@
-//! Integration tests for `raven self update`.
+//! Integration tests for `huginn self update`.
 //!
 //! These serve a canned release layout over a local `TcpListener` (no network
 //! access) and exercise the full update path: download, signature verification,
 //! checksum verification, atomic replacement, and rollback. The pinned public
-//! key is overridden via `RAVEN_SIGNING_PUBLIC_KEY` (the same override pattern
-//! as `RAVEN_RELEASE_BASE_URL`) so the test can sign with a throwaway keypair.
+//! key is overridden via `HUGINN_SIGNING_PUBLIC_KEY` (the same override pattern
+//! as `HUGINN_RELEASE_BASE_URL`) so the test can sign with a throwaway keypair.
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -32,17 +32,17 @@ fn skip_if_outer_sandbox() -> bool {
     }
 }
 
-/// The raven binary filename on this platform.
-fn raven_name() -> String {
-    "raven".to_string()
+/// The huginn binary filename on this platform.
+fn huginn_name() -> String {
+    "huginn".to_string()
 }
 
-/// The `.old` backup filename for the raven binary.
-fn raven_backup_name() -> String {
-    "raven.old".to_string()
+/// The `.old` backup filename for the huginn binary.
+fn huginn_backup_name() -> String {
+    "huginn.old".to_string()
 }
 
-/// Copy the compiled raven binary to `dst`, ready to be executed.
+/// Copy the compiled huginn binary to `dst`, ready to be executed.
 ///
 /// Reads the source into memory and writes it out explicitly rather than using
 /// `std::fs::copy`, whose `copy_file_range` fast path can leave the destination
@@ -99,8 +99,8 @@ fn spawn_with_retry<F: Fn(&mut Command)>(
 /// Spawn `target` for a self-update test against the local release server.
 fn spawn_update(target: &Path, args: &[&str], base: &str, pubkey: &str) -> std::process::Output {
     spawn_with_retry(target, args, |cmd| {
-        cmd.env("RAVEN_RELEASE_BASE_URL", base)
-            .env("RAVEN_SIGNING_PUBLIC_KEY", pubkey);
+        cmd.env("HUGINN_RELEASE_BASE_URL", base)
+            .env("HUGINN_SIGNING_PUBLIC_KEY", pubkey);
     })
 }
 
@@ -179,10 +179,10 @@ impl ReleaseServer {
 
 /// Build a canned release directory with a signed checksums.txt.
 ///
-/// Returns the public key PEM (to pass via `RAVEN_SIGNING_PUBLIC_KEY`) and the
+/// Returns the public key PEM (to pass via `HUGINN_SIGNING_PUBLIC_KEY`) and the
 /// artifact name.
 fn build_release(dir: &Path, version: &str, triple: &str, binary: &[u8]) -> (String, String) {
-    let artifact = format!("raven-{version}-{triple}");
+    let artifact = format!("huginn-{version}-{triple}");
     std::fs::create_dir_all(dir.join(format!("v{version}"))).unwrap();
     std::fs::write(dir.join(format!("v{version}/{artifact}")), binary).unwrap();
 
@@ -226,7 +226,7 @@ fn self_update_replaces_and_rolls_back() {
         &release,
         "0.5.1",
         host_triple(),
-        b"#!/bin/sh\necho fake raven\n",
+        b"#!/bin/sh\necho fake huginn\n",
     );
 
     let server = ReleaseServer::start(&release).unwrap();
@@ -236,7 +236,7 @@ fn self_update_replaces_and_rolls_back() {
     // Copy the real binary to a temp location so we can observe replacement.
     let bin_dir = dir.path().join("bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
-    let target = bin_dir.join(raven_name());
+    let target = bin_dir.join(huginn_name());
     copy_binary(&target);
 
     let out = spawn_update(
@@ -258,11 +258,11 @@ fn self_update_replaces_and_rolls_back() {
     // The binary was replaced with the fake one.
     assert_eq!(
         std::fs::read(&target).unwrap(),
-        b"#!/bin/sh\necho fake raven\n",
+        b"#!/bin/sh\necho fake huginn\n",
         "binary should be replaced with the downloaded artifact"
     );
     // A `.old` backup of the original binary exists.
-    let backup = bin_dir.join(raven_backup_name());
+    let backup = bin_dir.join(huginn_backup_name());
     assert!(backup.exists(), "a .old backup should be kept");
     assert_eq!(
         std::fs::read(&backup).unwrap(),
@@ -279,10 +279,10 @@ fn rollback_restores_backup() {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
-    let target = dir.path().join(raven_name());
+    let target = dir.path().join(huginn_name());
     copy_binary(&target);
     // A fake "previous" binary stands in for the .old backup.
-    let backup = dir.path().join(raven_backup_name());
+    let backup = dir.path().join(huginn_backup_name());
     std::fs::write(&backup, b"previous binary").unwrap();
 
     let out = spawn_with_retry(&target, &["self", "update", "--rollback"], |_| {});
@@ -310,7 +310,7 @@ fn self_update_fails_closed_on_bad_signature() {
         &release,
         "0.5.1",
         host_triple(),
-        b"#!/bin/sh\necho fake raven\n",
+        b"#!/bin/sh\necho fake huginn\n",
     );
 
     // Tamper with checksums.txt after signing so the signature no longer
@@ -326,7 +326,7 @@ fn self_update_fails_closed_on_bad_signature() {
 
     let bin_dir = dir.path().join("bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
-    let target = bin_dir.join(raven_name());
+    let target = bin_dir.join(huginn_name());
     copy_binary(&target);
 
     let out = spawn_update(
@@ -360,7 +360,7 @@ fn rollback_without_backup_fails() {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
-    let target = dir.path().join(raven_name());
+    let target = dir.path().join(huginn_name());
     copy_binary(&target);
 
     let out = spawn_with_retry(&target, &["self", "update", "--rollback"], |_| {});

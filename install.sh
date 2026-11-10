@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="raythurman2386/raven"
-BINARY="raven"
+REPO="raythurman2386/huginn"
+BINARY="huginn"
 DEFAULT_INSTALL_DIR="$HOME/.cargo/bin"
 # Base URL for release artifacts. Overridable so the installer can be tested
 # against a local mirror (e.g. `python3 -m http.server`) without hitting GitHub.
 DEFAULT_RELEASE_BASE_URL="https://github.com/$REPO/releases/download"
-RELEASE_BASE_URL="${RAVEN_RELEASE_BASE_URL:-$DEFAULT_RELEASE_BASE_URL}"
+RELEASE_BASE_URL="${HUGINN_RELEASE_BASE_URL:-$DEFAULT_RELEASE_BASE_URL}"
 VERSION=""
 INSTALL_DIR=""
 FORCE=false
@@ -23,7 +23,7 @@ usage() {
     cat <<EOF
 Usage: $0 [OPTIONS]
 
-Install raven from a prebuilt GitHub Release binary.
+Install huginn from a prebuilt GitHub Release binary.
 
 Options:
   --version VERSION  Install a specific version (default: latest)
@@ -33,7 +33,7 @@ Options:
   -h, --help         Show this help message
 
 Environment:
-  RAVEN_RELEASE_BASE_URL  Override the release artifact base URL (same as --url)
+  HUGINN_RELEASE_BASE_URL  Override the release artifact base URL (same as --url)
 
 Examples:
   curl -fsSL https://raw.githubusercontent.com/$REPO/master/install.sh | sh
@@ -196,7 +196,7 @@ main() {
 
     # Fail closed on authenticity: the checksums.txt signature is required and
     # must verify against the pinned Ed25519 public key. This proves the
-    # checksums (and therefore the binary) were produced by the raven
+    # checksums (and therefore the binary) were produced by the huginn
     # maintainers, not tampered with in transit or on the release host.
     if ! fetch "$signature_url" "$tmp_dir/checksums.txt.sig" 2>/dev/null; then
         echo "Error: failed to download checksums.txt.sig from $signature_url" >&2
@@ -210,7 +210,7 @@ main() {
     fi
 
     local pubkey_file
-    pubkey_file="$tmp_dir/raven-signing-key.pub"
+    pubkey_file="$tmp_dir/huginn-signing-key.pub"
     printf '%s\n' "$SIGNING_PUBLIC_KEY" > "$pubkey_file"
 
     if ! openssl pkeyutl -verify -rawin -in "$tmp_dir/checksums.txt" \

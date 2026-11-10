@@ -23,7 +23,7 @@ jobs:
             os: ubuntu-latest
             use-cross: true
           # Windows and macOS builds are intentionally omitted to save action
-          # minutes. Raven targets Linux and Raspberry Pi (aarch64).
+          # minutes. Huginn targets Linux and Raspberry Pi (aarch64).
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -51,8 +51,8 @@ jobs:
         run: |
           VERSION="${{ github.ref_name }}"
           VERSION="${VERSION#v}"
-          BIN_NAME="raven-${VERSION}-${{ matrix.target }}"
-          cp "target/${{ matrix.target }}/release/raven" "${BIN_NAME}"
+          BIN_NAME="huginn-${VERSION}-${{ matrix.target }}"
+          cp "target/${{ matrix.target }}/release/huginn" "${BIN_NAME}"
           echo "bin_name=${BIN_NAME}" >> $GITHUB_OUTPUT
 
       - name: Upload artifact
